@@ -1,0 +1,705 @@
+//! Renderização por software em um buffer BGRA pré-multiplicado (formato que o
+//! `UpdateLayeredWindow` espera). Tudo com anti-aliasing via SDF.
+
+use crate::config::{Palette, Style};
+
+pub type Rgb = [f32; 3];
+
+/// Imagem BGRA pré-multiplicada (capa do álbum, ícone do app).
+pub struct Image {
+    pub w: usize,
+    pub h: usize,
+    pub px: Vec<u32>,
+    /// Cor média (0..1).
+    pub avg: Rgb,
+    /// Cor mais "viva" da imagem (para tingir cards e botões com a cor da capa).
+    pub vibrant: Rgb,
+    /// Versões reduzidas pela metade, criadas na primeira vez que a imagem é
+    /// desenhada bem menor: reduzir direto com bilinear serrilha (aliasing).
+    pub mips: std::sync::OnceLock<Vec<Image>>,
+}
+
+fn rgb_to_hsv(c: Rgb) -> (f32, f32, f32) {
+    let max = c[0].max(c[1]).max(c[2]);
+    let min = c[0].min(c[1]).min(c[2]);
+    let d = max - min;
+    let h = if d <= 1e-6 {
+        0.0
+    } else if max == c[0] {
+        60.0 * (((c[1] - c[2]) / d).rem_euclid(6.0))
+    } else if max == c[1] {
+        60.0 * ((c[2] - c[0]) / d + 2.0)
+    } else {
+        60.0 * ((c[0] - c[1]) / d + 4.0)
+    };
+    let s = if max <= 1e-6 { 0.0 } else { d / max };
+    (h, s, max)
+}
+
+impl Image {
+    pub fn new(w: usize, h: usize, px: Vec<u32>) -> Self {
+        let (mut r, mut g, mut b, mut a) = (0f64, 0f64, 0f64, 0f64);
+        // 18 faixas de matiz, pesadas por saturação² × brilho.
+        let mut bins = [[0f64; 4]; 18];
+        for p in &px {
+            let pa = ((p >> 24) & 0xff) as f64;
+            let pr = ((p >> 16) & 0xff) as f64;
+            let pg = ((p >> 8) & 0xff) as f64;
+            let pb = (p & 0xff) as f64;
+            r += pr;
+            g += pg;
+            b += pb;
+            a += pa;
+            if pa < 128.0 {
+                continue;
+            }
+            let c = [(pr / pa) as f32, (pg / pa) as f32, (pb / pa) as f32];
+            let (hh, s, v) = rgb_to_hsv(c);
+            if s > 0.25 && v > 0.22 {
+                let wgt = (s * s * v) as f64;
+                let bin = &mut bins[((hh / 20.0) as usize).min(17)];
+                bin[0] += c[0] as f64 * wgt;
+                bin[1] += c[1] as f64 * wgt;
+                bin[2] += c[2] as f64 * wgt;
+                bin[3] += wgt;
+            }
+        }
+        let avg = if a > 0.0 { [(r / a) as f32, (g / a) as f32, (b / a) as f32] } else { [0.5; 3] };
+        let best = bins.iter().max_by(|x, y| x[3].total_cmp(&y[3])).unwrap();
+        let vibrant = if best[3] > (w * h) as f64 * 0.004 {
+            [(best[0] / best[3]) as f32, (best[1] / best[3]) as f32, (best[2] / best[3]) as f32]
+        } else {
+            avg
+        };
+        Self { w, h, px, avg, vibrant, mips: Default::default() }
+    }
+
+    /// Imagem já pré-multiplicada, sem análise de cor.
+    pub fn plain(w: usize, h: usize, px: Vec<u32>) -> Self {
+        Self { w, h, px, avg: [0.0; 3], vibrant: [0.0; 3], mips: Default::default() }
+    }
+
+    /// Nível `level` da pirâmide (1 = metade, 2 = um quarto...), limitado ao menor disponível.
+    pub fn mip(&self, level: usize) -> &Image {
+        if level == 0 {
+            return self;
+        }
+        let mips = self.mips.get_or_init(|| {
+            let mut out: Vec<Image> = Vec::new();
+            let (mut w, mut h) = (self.w, self.h);
+            while w >= 8 && h >= 8 {
+                let src = out.last().map(|m| &m.px).unwrap_or(&self.px);
+                let (nw, nh) = (w / 2, h / 2);
+                let mut px = vec![0u32; nw * nh];
+                for y in 0..nh {
+                    for x in 0..nw {
+                        let mut acc = [0u32; 4];
+                        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                            let p = src[(2 * y + dy) * w + 2 * x + dx];
+                            for (k, a) in acc.iter_mut().enumerate() {
+                                *a += (p >> (8 * k)) & 0xff;
+                            }
+                        }
+                        px[y * nw + x] = acc.iter().enumerate().fold(0u32, |o, (k, a)| o | (((a + 2) / 4) << (8 * k)));
+                    }
+                }
+                out.push(Image::plain(nw, nh, px));
+                (w, h) = (nw, nh);
+            }
+            out
+        });
+        mips.get(level - 1).or(mips.last()).unwrap_or(self)
+    }
+
+    /// Desfoque gaussiano aproximado (3 passadas de box blur separável).
+    pub fn blurred(&self, radius: usize) -> Image {
+        let (w, h) = (self.w, self.h);
+        let mut ch: Vec<[f32; 4]> = self.px.iter().map(|&p| unpack(p)).collect();
+        let mut tmp = ch.clone();
+        let r = radius.max(1) as isize;
+        let norm = 1.0 / (2 * r + 1) as f32;
+        for _ in 0..3 {
+            for y in 0..h {
+                for x in 0..w {
+                    let mut acc = [0f32; 4];
+                    for k in -r..=r {
+                        let xx = (x as isize + k).clamp(0, w as isize - 1) as usize;
+                        let p = ch[y * w + xx];
+                        for i in 0..4 {
+                            acc[i] += p[i];
+                        }
+                    }
+                    tmp[y * w + x] = acc.map(|v| v * norm);
+                }
+            }
+            for y in 0..h {
+                for x in 0..w {
+                    let mut acc = [0f32; 4];
+                    for k in -r..=r {
+                        let yy = (y as isize + k).clamp(0, h as isize - 1) as usize;
+                        let p = tmp[yy * w + x];
+                        for i in 0..4 {
+                            acc[i] += p[i];
+                        }
+                    }
+                    ch[y * w + x] = acc.map(|v| v * norm);
+                }
+            }
+        }
+        let px = ch
+            .iter()
+            .map(|c| {
+                ((c[3].min(255.0) as u32) << 24) | ((c[0].min(255.0) as u32) << 16) | ((c[1].min(255.0) as u32) << 8) | (c[2].min(255.0) as u32)
+            })
+            .collect();
+        Image { w, h, px, avg: self.avg, vibrant: self.vibrant, mips: Default::default() }
+    }
+}
+
+/// Máscara de cobertura 8 bits (texto e ícones de fonte já rasterizados).
+pub struct Mask {
+    pub w: usize,
+    pub h: usize,
+    pub cov: Vec<u8>,
+}
+
+impl Mask {
+    /// Largura realmente ocupada (para alinhar à direita / centralizar / rolar).
+    pub fn used_width(&self) -> f32 {
+        (0..self.w).rev().find(|&x| (0..self.h).any(|y| self.cov[y * self.w + x] > 8)).map(|x| x + 1).unwrap_or(0) as f32
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RectF {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl RectF {
+    pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
+    }
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
+    }
+    pub fn right(&self) -> f32 {
+        self.x + self.w
+    }
+    pub fn bottom(&self) -> f32 {
+        self.y + self.h
+    }
+    pub fn cx(&self) -> f32 {
+        self.x + self.w * 0.5
+    }
+    pub fn cy(&self) -> f32 {
+        self.y + self.h * 0.5
+    }
+    pub fn inset(&self, d: f32) -> RectF {
+        RectF::new(self.x + d, self.y + d, self.w - 2.0 * d, self.h - 2.0 * d)
+    }
+    pub fn offset(&self, dx: f32, dy: f32) -> RectF {
+        RectF::new(self.x + dx, self.y + dy, self.w, self.h)
+    }
+}
+
+#[derive(Clone)]
+pub struct Colors {
+    pub palette: Palette,
+    pub accent: Rgb,
+    pub accent_light: Rgb,
+    pub light_taskbar: bool,
+    /// Cor viva da capa atual (para a paleta "Cor do álbum").
+    pub album: Option<Rgb>,
+}
+
+impl Colors {
+    /// `tx`: posição horizontal 0..1, `ty`: altura 0 (base) .. 1 (topo).
+    #[inline]
+    pub fn at(&self, tx: f32, ty: f32) -> Rgb {
+        match self.palette {
+            Palette::Accent => lerp3(self.accent, self.accent_light, ty.clamp(0.0, 1.0)),
+            Palette::Album => {
+                let base = self.album.map(|c| readable(c, !self.light_taskbar)).unwrap_or(self.accent);
+                lerp3(base, if self.light_taskbar { [0.0; 3] } else { [1.0; 3] }, ty.clamp(0.0, 1.0) * 0.35)
+            }
+            Palette::Rainbow => {
+                let base = hsv(tx * 300.0, 0.72, 1.0);
+                lerp3(base, [1.0, 1.0, 1.0], ty * 0.25)
+            }
+            Palette::Neon => {
+                let c = lerp3([0.0, 0.90, 1.0], [1.0, 0.0, 0.67], tx);
+                lerp3(c, [1.0, 1.0, 1.0], ty * 0.2)
+            }
+            Palette::Mono => self.foreground(),
+        }
+    }
+
+    /// Cor do texto/ícones: branco em barra escura, quase preto em barra clara.
+    pub fn foreground(&self) -> Rgb {
+        if self.light_taskbar { [0.10, 0.10, 0.10] } else { [1.0, 1.0, 1.0] }
+    }
+}
+
+pub fn luma(c: Rgb) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+/// Preto ou branco, o que contrastar mais com `c`.
+pub fn on_color(c: Rgb) -> Rgb {
+    if luma(c) > 0.55 { [0.0, 0.0, 0.0] } else { [1.0, 1.0, 1.0] }
+}
+
+/// Ajusta o brilho de uma cor para ficar legível sobre fundo escuro (`on_dark`) ou claro.
+pub fn readable(c: Rgb, on_dark: bool) -> Rgb {
+    let (h, s, v) = rgb_to_hsv(c);
+    if on_dark {
+        let s2 = s.min(0.85);
+        let v2 = v.max(0.85);
+        let out = hsv(h, s2, v2);
+        if luma(out) < 0.45 { lerp3(out, [1.0; 3], 0.35) } else { out }
+    } else {
+        let out = hsv(h, s.max(0.5), v.min(0.62));
+        if luma(out) > 0.45 { lerp3(out, [0.0; 3], 0.3) } else { out }
+    }
+}
+
+#[inline]
+pub fn lerp3(a: Rgb, b: Rgb, t: f32) -> Rgb {
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+}
+
+pub fn hsv(h: f32, s: f32, v: f32) -> Rgb {
+    let h = h.rem_euclid(360.0) / 60.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r + m, g + m, b + m]
+}
+
+#[inline]
+fn unpack(p: u32) -> [f32; 4] {
+    [((p >> 16) & 0xff) as f32, ((p >> 8) & 0xff) as f32, (p & 0xff) as f32, ((p >> 24) & 0xff) as f32]
+}
+
+#[inline]
+fn rrect_cov(qx: f32, qy: f32, r: f32) -> f32 {
+    (0.5 - rrect_sd(qx, qy, r)).clamp(0.0, 1.0)
+}
+
+#[inline]
+fn rrect_sd(qx: f32, qy: f32, r: f32) -> f32 {
+    let ox = qx.max(0.0);
+    let oy = qy.max(0.0);
+    (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
+}
+
+pub struct Canvas<'a> {
+    pub w: usize,
+    pub h: usize,
+    px: &'a mut [u32],
+    /// Recorte ativo: x0, y0, x1, y1 (exclusivo).
+    clip: (usize, usize, usize, usize),
+}
+
+impl<'a> Canvas<'a> {
+    pub fn new(w: usize, h: usize, px: &'a mut [u32]) -> Self {
+        Self { w, h, px, clip: (0, 0, w, h) }
+    }
+
+    pub fn set_clip(&mut self, r: RectF) {
+        let x0 = r.x.max(0.0) as usize;
+        let y0 = r.y.max(0.0) as usize;
+        let x1 = (r.right().max(0.0) as usize).min(self.w);
+        let y1 = (r.bottom().max(0.0) as usize).min(self.h);
+        self.clip = (x0.min(x1), y0.min(y1), x1, y1);
+    }
+
+    pub fn clip_rect(&self) -> RectF {
+        let (x0, y0, x1, y1) = self.clip;
+        RectF::new(x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32)
+    }
+
+    /// Preenche só a área de recorte com um valor cru.
+    pub fn fill_clip(&mut self, v: u32) {
+        let (x0, y0, x1, y1) = self.clip;
+        for y in y0..y1 {
+            self.px[y * self.w + x0..y * self.w + x1].fill(v);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.px.fill(0);
+    }
+
+    /// Preenche tudo com um valor cru (ex.: alfa 1/255 para a janela receber cliques).
+    pub fn fill_raw(&mut self, v: u32) {
+        self.px.fill(v);
+    }
+
+    #[inline]
+    fn inside(&self, x: usize, y: usize) -> bool {
+        x >= self.clip.0 && y >= self.clip.1 && x < self.clip.2 && y < self.clip.3
+    }
+
+    /// Composição "source over" em pré-multiplicado, cor sólida.
+    #[inline]
+    pub fn blend(&mut self, x: usize, y: usize, c: Rgb, a: f32) {
+        if a <= 0.0 {
+            return;
+        }
+        let a = a.min(1.0);
+        self.blend_premul(x, y, [255.0 * c[0] * a, 255.0 * c[1] * a, 255.0 * c[2] * a, 255.0 * a]);
+    }
+
+    /// `s` = [r, g, b, a] pré-multiplicado em 0..255.
+    #[inline]
+    fn blend_premul(&mut self, x: usize, y: usize, s: [f32; 4]) {
+        if !self.inside(x, y) {
+            return;
+        }
+        let i = y * self.w + x;
+        let d = unpack(self.px[i]);
+        let k = 1.0 - s[3] / 255.0;
+        let o = [s[0] + d[0] * k, s[1] + d[1] * k, s[2] + d[2] * k, s[3] + d[3] * k];
+        self.px[i] = ((o[3].min(255.0) as u32) << 24) | ((o[0].min(255.0) as u32) << 16) | ((o[1].min(255.0) as u32) << 8) | (o[2].min(255.0) as u32);
+    }
+
+    fn bounds(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> (usize, usize, usize, usize) {
+        let px0 = (x0.floor().max(0.0) as usize).max(self.clip.0);
+        let py0 = (y0.floor().max(0.0) as usize).max(self.clip.1);
+        let px1 = (x1.ceil().max(0.0) as usize).min(self.clip.2);
+        let py1 = (y1.ceil().max(0.0) as usize).min(self.clip.3);
+        (px0, py0, px1, py1)
+    }
+
+    /// Retângulo arredondado com anti-aliasing; cor e alfa por pixel.
+    pub fn fill_rrect_ca(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32, f: impl Fn(f32, f32) -> (Rgb, f32)) {
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let hx = (x1 - x0) * 0.5;
+        let hy = (y1 - y0) * 0.5;
+        let mx = x0 + hx;
+        let my = y0 + hy;
+        let r = radius.min(hx).min(hy).max(0.0);
+        let (px0, py0, px1, py1) = self.bounds(x0, y0, x1, y1);
+        for py in py0..py1 {
+            let cy = py as f32 + 0.5;
+            let qy = (cy - my).abs() - (hy - r);
+            for px in px0..px1 {
+                let cx = px as f32 + 0.5;
+                let qx = (cx - mx).abs() - (hx - r);
+                let cov = rrect_cov(qx, qy, r);
+                if cov > 0.0 {
+                    let (c, a) = f(cx, cy);
+                    self.blend(px, py, c, cov * a);
+                }
+            }
+        }
+    }
+
+    /// Retângulo arredondado com anti-aliasing (distância com sinal por pixel).
+    pub fn fill_rrect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32, alpha: f32, color: impl Fn(f32, f32) -> Rgb) {
+        if alpha <= 0.0 {
+            return;
+        }
+        self.fill_rrect_ca(x0, y0, x1, y1, radius, |x, y| (color(x, y), alpha));
+    }
+
+    pub fn fill_round(&mut self, r: RectF, radius: f32, c: Rgb, alpha: f32) {
+        self.fill_rrect(r.x, r.y, r.right(), r.bottom(), radius, alpha, |_, _| c);
+    }
+
+    pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, c: Rgb, alpha: f32) {
+        self.fill_rrect(cx - radius, cy - radius, cx + radius, cy + radius, radius, alpha, |_, _| c);
+    }
+
+    /// Contorno de retângulo arredondado (espessura `width`), com anti-aliasing.
+    pub fn stroke_round(&mut self, r: RectF, radius: f32, width: f32, c: Rgb, alpha: f32) {
+        let hx = r.w * 0.5;
+        let hy = r.h * 0.5;
+        let rad = radius.min(hx).min(hy).max(0.0);
+        let (px0, py0, px1, py1) = self.bounds(r.x, r.y, r.right(), r.bottom());
+        // Nas linhas do meio só as laterais têm contorno: pula o interior.
+        let edge = rad.max(width) + 2.0;
+        let (ix0, ix1) = ((r.x + edge).floor().max(0.0) as usize, (r.right() - edge).ceil().max(0.0) as usize);
+        for py in py0..py1 {
+            let cy = py as f32 + 0.5;
+            let qy = (cy - r.cy()).abs() - (hy - rad);
+            let middle = cy > r.y + edge && cy < r.bottom() - edge;
+            for px in px0..px1 {
+                if middle && px > ix0 && px < ix1 {
+                    continue;
+                }
+                let cx = px as f32 + 0.5;
+                let qx = (cx - r.cx()).abs() - (hx - rad);
+                let d = rrect_sd(qx, qy, rad);
+                let cov = (0.5 - d).clamp(0.0, 1.0) * (0.5 + d + width).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.blend(px, py, c, cov * alpha);
+                }
+            }
+        }
+    }
+
+    /// Sombra suave de elevação (Fluent "shadow 16/28") ao redor de um retângulo arredondado.
+    pub fn drop_shadow(&mut self, r: RectF, radius: f32, blur: f32, dy: f32, alpha: f32) {
+        let r = r.offset(0.0, dy);
+        let hx = r.w * 0.5;
+        let hy = r.h * 0.5;
+        let rad = radius.min(hx).min(hy);
+        let (px0, py0, px1, py1) = self.bounds(r.x - blur, r.y - blur, r.right() + blur, r.bottom() + blur);
+        for py in py0..py1 {
+            let cy = py as f32 + 0.5;
+            let qy = (cy - r.cy()).abs() - (hy - rad);
+            for px in px0..px1 {
+                let cx = px as f32 + 0.5;
+                let qx = (cx - r.cx()).abs() - (hx - rad);
+                let d = rrect_sd(qx, qy, rad) + blur * 0.35;
+                let t = (d / blur).clamp(0.0, 1.0);
+                let a = alpha * (1.0 - t) * (1.0 - t);
+                if a > 0.002 {
+                    self.blend(px, py, [0.0; 3], a);
+                }
+            }
+        }
+    }
+
+    /// Desenha uma máscara (texto/ícone) com a cor dada, canto superior esquerdo em (x, y).
+    pub fn blit_mask(&mut self, x: i32, y: i32, m: &Mask, c: Rgb, alpha: f32) {
+        for my in 0..m.h {
+            let py = y + my as i32;
+            if py < 0 || py >= self.h as i32 {
+                continue;
+            }
+            for mx in 0..m.w {
+                let px = x + mx as i32;
+                if px < 0 || px >= self.w as i32 {
+                    continue;
+                }
+                let cov = m.cov[my * m.w + mx];
+                if cov != 0 {
+                    self.blend(px as usize, py as usize, c, cov as f32 / 255.0 * alpha);
+                }
+            }
+        }
+    }
+
+    /// Máscara recortada em `clip` com bordas laterais esmaecidas de `fade` px (letreiro).
+    pub fn blit_mask_faded(&mut self, x: f32, y: i32, m: &Mask, c: Rgb, alpha: f32, clip: RectF, fade_l: f32, fade_r: f32) {
+        let xi = x.floor() as i32;
+        for my in 0..m.h {
+            let py = y + my as i32;
+            if py < 0 || py >= self.h as i32 || (py as f32) < clip.y || (py as f32) >= clip.bottom() {
+                continue;
+            }
+            for mx in 0..m.w {
+                let px = xi + mx as i32;
+                let fx = px as f32 + 0.5;
+                if px < 0 || px >= self.w as i32 || fx < clip.x || fx >= clip.right() {
+                    continue;
+                }
+                let cov = m.cov[my * m.w + mx];
+                if cov == 0 {
+                    continue;
+                }
+                let mut k = 1.0;
+                if fade_l > 0.0 {
+                    k *= ((fx - clip.x) / fade_l).clamp(0.0, 1.0);
+                }
+                if fade_r > 0.0 {
+                    k *= ((clip.right() - fx) / fade_r).clamp(0.0, 1.0);
+                }
+                self.blend(px as usize, py as usize, c, cov as f32 / 255.0 * alpha * k);
+            }
+        }
+    }
+
+    /// Copia linhas de outro buffer do mesmo formato (sem mistura), recortando.
+    pub fn copy_from(&mut self, dx: i32, dy: i32, src: &[u32], sw: usize, sh: usize, sy0: i32) {
+        for row in 0..self.h as i32 {
+            let y = row;
+            let syy = y - dy + sy0;
+            if y < self.clip.1 as i32 || y >= self.clip.3 as i32 || syy < 0 || syy >= sh as i32 {
+                continue;
+            }
+            let x0 = dx.max(self.clip.0 as i32);
+            let x1 = (dx + sw as i32).min(self.clip.2 as i32);
+            if x1 <= x0 {
+                continue;
+            }
+            let (a, b) = ((x0 - dx) as usize, (x1 - dx) as usize);
+            let srow = &src[syy as usize * sw..syy as usize * sw + sw];
+            let drow = y as usize * self.w;
+            self.px[drow + x0 as usize..drow + x1 as usize].copy_from_slice(&srow[a..b]);
+        }
+    }
+
+    /// Desenha uma imagem escalada (bilinear) com cantos arredondados.
+    pub fn draw_image(&mut self, dst: RectF, img: &Image, radius: f32, alpha: f32) {
+        self.draw_image_src(dst, img, RectF::new(0.0, 0.0, img.w as f32, img.h as f32), radius, alpha);
+    }
+
+    /// Como `draw_image`, mas preenchendo `dst` com recorte central ("cover").
+    pub fn draw_image_cover(&mut self, dst: RectF, img: &Image, radius: f32, alpha: f32) {
+        let (iw, ih) = (img.w as f32, img.h as f32);
+        let k = (dst.w / iw).max(dst.h / ih);
+        let (sw, sh) = (dst.w / k, dst.h / k);
+        self.draw_image_src(dst, img, RectF::new((iw - sw) / 2.0, (ih - sh) / 2.0, sw, sh), radius, alpha);
+    }
+
+    pub fn draw_image_src(&mut self, dst: RectF, img: &Image, src: RectF, radius: f32, alpha: f32) {
+        if img.w == 0 || img.h == 0 || dst.w <= 0.0 || dst.h <= 0.0 {
+            return;
+        }
+        // Redução maior que 2x: usa o nível da pirâmide mais próximo (sem serrilhado).
+        let k = (src.w / dst.w).max(src.h / dst.h);
+        if k >= 2.0 {
+            let m = img.mip(k.log2().floor() as usize);
+            let f = m.w as f32 / img.w as f32;
+            let s2 = RectF::new(src.x * f, src.y * f, src.w * f, src.h * f);
+            return self.draw_image_level(dst, m, s2, radius, alpha);
+        }
+        self.draw_image_level(dst, img, src, radius, alpha)
+    }
+
+    fn draw_image_level(&mut self, dst: RectF, img: &Image, src: RectF, radius: f32, alpha: f32) {
+        let hx = dst.w * 0.5;
+        let hy = dst.h * 0.5;
+        let r = radius.min(hx).min(hy);
+        let (px0, py0, px1, py1) = self.bounds(dst.x, dst.y, dst.right(), dst.bottom());
+        let sx = src.w / dst.w;
+        let sy = src.h / dst.h;
+        for py in py0..py1 {
+            let cy = py as f32 + 0.5;
+            let qy = (cy - dst.cy()).abs() - (hy - r);
+            let v = (src.y + (cy - dst.y) * sy - 0.5).clamp(0.0, (img.h - 1) as f32);
+            let y0 = v.floor() as usize;
+            let y1 = (y0 + 1).min(img.h - 1);
+            let fy = v - y0 as f32;
+            for px in px0..px1 {
+                let cx = px as f32 + 0.5;
+                let qx = (cx - dst.cx()).abs() - (hx - r);
+                let cov = rrect_cov(qx, qy, r) * alpha;
+                if cov <= 0.0 {
+                    continue;
+                }
+                let u = (src.x + (cx - dst.x) * sx - 0.5).clamp(0.0, (img.w - 1) as f32);
+                let x0 = u.floor() as usize;
+                let x1 = (x0 + 1).min(img.w - 1);
+                let fx = u - x0 as f32;
+                let a = unpack(img.px[y0 * img.w + x0]);
+                let b = unpack(img.px[y0 * img.w + x1]);
+                let c = unpack(img.px[y1 * img.w + x0]);
+                let d = unpack(img.px[y1 * img.w + x1]);
+                let mut s = [0.0f32; 4];
+                for k in 0..4 {
+                    let top = a[k] + (b[k] - a[k]) * fx;
+                    let bot = c[k] + (d[k] - c[k]) * fx;
+                    s[k] = (top + (bot - top) * fy) * cov;
+                }
+                self.blend_premul(px, py, s);
+            }
+        }
+    }
+}
+
+pub struct Frame<'a> {
+    pub style: Style,
+    pub values: &'a [f32],
+    pub peaks: &'a [f32],
+    pub show_peaks: bool,
+    pub colors: &'a Colors,
+    pub scale: f32,
+}
+
+/// Desenha o visualizador dentro de `area` (sem limpar o resto do canvas).
+pub fn draw(cv: &mut Canvas, area: RectF, f: &Frame) {
+    match f.style {
+        Style::Bars => bars(cv, area, f, false),
+        Style::Mirror => bars(cv, area, f, true),
+        Style::Wave => wave(cv, area, f),
+    }
+}
+
+fn bars(cv: &mut Canvas, a: RectF, f: &Frame, mirror: bool) {
+    let n = f.values.len().max(1);
+    let (w, h) = (a.w, a.h);
+    let slot = w / n as f32;
+    let bw = (slot * 0.62).max(1.0);
+    let radius = bw * 0.5;
+    let min_h = bw.min(3.0 * f.scale).max(1.0);
+    let span = (h - min_h).max(1.0);
+    let colors = f.colors;
+    let bottom = a.y + h;
+
+    for (i, &v) in f.values.iter().enumerate() {
+        let tx = (i as f32 + 0.5) / n as f32;
+        let x0 = a.x + i as f32 * slot + (slot - bw) * 0.5;
+        let bh = min_h + v * span;
+        if mirror {
+            let c = a.cy();
+            cv.fill_rrect(x0, c - bh * 0.5, x0 + bw, c + bh * 0.5, radius, 1.0, |_, y| colors.at(tx, (y - c).abs() / (h * 0.5)));
+        } else {
+            cv.fill_rrect(x0, bottom - bh, x0 + bw, bottom, radius, 1.0, |_, y| colors.at(tx, (bottom - y) / h));
+            if f.show_peaks {
+                let p = f.peaks.get(i).copied().unwrap_or(0.0);
+                if p > v + 0.03 {
+                    let ph = (1.6 * f.scale).max(1.0);
+                    let top = (bottom - (min_h + p * span) - ph).max(a.y);
+                    cv.fill_rrect(x0, top, x0 + bw, top + ph, ph * 0.5, 0.85, |_, _| colors.at(tx, 1.0));
+                }
+            }
+        }
+    }
+}
+
+fn wave(cv: &mut Canvas, a: RectF, f: &Frame) {
+    let n = f.values.len();
+    if n < 2 {
+        return;
+    }
+    let c = a.cy();
+    let max_amp = a.h * 0.5 - 0.5;
+    let slot = a.w / n as f32;
+    let min_amp = 0.6 * f.scale;
+    let get = |i: isize| f.values[i.clamp(0, n as isize - 1) as usize];
+
+    let px0 = a.x.floor().max(0.0) as usize;
+    let px1 = (a.right().ceil() as usize).min(cv.w);
+    for px in px0..px1 {
+        let x = px as f32 + 0.5 - a.x;
+        // Catmull-Rom entre os centros das bandas.
+        let fi = (x / slot - 0.5).max(0.0);
+        let i = fi.floor() as isize;
+        let t = fi - i as f32;
+        let (p0, p1, p2, p3) = (get(i - 1), get(i), get(i + 1), get(i + 2));
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let v = 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+        let amp = (min_amp + v.clamp(0.0, 1.0) * (max_amp - min_amp)).min(max_amp);
+        let tx = x / a.w;
+        let y0 = (c - amp - 1.0).floor().max(0.0) as usize;
+        let y1 = ((c + amp + 1.0).ceil() as usize).min(cv.h);
+        for py in y0..y1 {
+            let dist = (py as f32 + 0.5 - c).abs();
+            let cov = (amp - dist + 0.5).clamp(0.0, 1.0);
+            if cov > 0.0 {
+                let rel = dist / amp.max(1.0);
+                let alpha = cov * (0.35 + 0.65 * rel * rel);
+                cv.blend(px, py, f.colors.at(tx, rel), alpha);
+            }
+        }
+    }
+}
