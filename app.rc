@@ -1,0 +1,28 @@
+// Recursos do Taskbeat: ícone do app e informações de versão.
+#pragma code_page(65001)
+
+1 ICON "assets/taskbeat.ico"
+
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041604B0"
+        BEGIN
+            VALUE "FileDescription", "Taskbeat"
+            VALUE "ProductName", "Taskbeat"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "ProductVersion", "1.0.0"
+            VALUE "InternalName", "taskbeat"
+            VALUE "OriginalFilename", "taskbeat.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x416, 1200
+    END
+END

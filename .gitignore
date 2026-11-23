@@ -1,0 +1,17 @@
+# Build
+/target
+/dist
+
+# Local / editor / assistant settings
+.claude/
+.vscode/
+.idea/
+*.local.json
+
+# Secrets and certificates (never commit)
+.env
+.env.*
+*.pfx
+*.p12
+*.pem
+*.key
