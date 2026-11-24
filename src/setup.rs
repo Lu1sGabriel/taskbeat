@@ -637,7 +637,7 @@ impl St {
             let x = b.right() - 36.0 * s - (bars - i) as f32 * 14.0 * s;
             let ph = t * (1.3 + i as f32 * 0.17) + i as f32 * 1.7;
             let hgt = (0.35 + 0.35 * (0.5 + 0.5 * ph.sin())) * 70.0 * s;
-            cv.fill_rrect(x, b.bottom() - 28.0 * s - hgt, x + 7.0 * s, b.bottom() - 28.0 * s, 3.5 * s, 0.16, |_, _| [1.0; 3]);
+            cv.fill_rrect(x, b.bottom() - 28.0 * s - hgt, x + 7.0 * s, b.bottom() - 28.0 * s, 3.5 * s, 0.16, [1.0; 3]);
         }
         crate::settings::draw_logo(cv, RectF::new(b.x + 28.0 * s, b.cy() - 34.0 * s, 68.0 * s, 68.0 * s));
         ui::text(cv, &mut self.text, "Taskbeat", Font::Heading, b.x + 114.0 * s, b.cy() - 34.0 * s, 300.0 * s, 40.0 * s, [1.0; 3], 1.0);
@@ -683,8 +683,8 @@ impl St {
                 let p = (start.elapsed().as_secs_f32() / 0.9).min(if self.result.is_some() { 1.0 } else { 0.85 });
                 let p = ui::ease_out_cubic(p);
                 let (tx0, tx1, ty) = (x0, x0 + body_w, 244.0 * s);
-                cv.fill_rrect(tx0, ty, tx1, ty + 6.0 * s, 3.0 * s, if self.dark { 0.18 } else { 0.12 }, |_, _| fg);
-                cv.fill_rrect(tx0, ty, tx0 + (tx1 - tx0) * p.max(0.03), ty + 6.0 * s, 3.0 * s, 1.0, |_, _| self.accent);
+                cv.fill_rrect(tx0, ty, tx1, ty + 6.0 * s, 3.0 * s, if self.dark { 0.18 } else { 0.12 }, fg);
+                cv.fill_rrect(tx0, ty, tx0 + (tx1 - tx0) * p.max(0.03), ty + 6.0 * s, 3.0 * s, 1.0, self.accent);
             }
             (Phase::Done, mode) => {
                 let c = RectF::new(x0, 190.0 * s, 44.0 * s, 44.0 * s);

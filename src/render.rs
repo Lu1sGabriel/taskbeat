@@ -218,6 +218,22 @@ impl Mask {
     pub fn used_width(&self) -> f32 {
         (0..self.w).rev().find(|&x| (0..self.h).any(|y| self.cov[y * self.w + x] > 8)).map(|x| x + 1).unwrap_or(0) as f32
     }
+
+    /// Corta as colunas vazias da direita (a caixa costuma ser bem maior que o
+    /// texto): menos memória no cache e menos pixels a percorrer ao desenhar.
+    pub fn crop_right(&mut self) {
+        let used = (0..self.w).rev().find(|&x| (0..self.h).any(|y| self.cov[y * self.w + x] != 0)).map(|x| x + 1).unwrap_or(0);
+        if used + 4 >= self.w {
+            return;
+        }
+        let nw = used.max(1);
+        let mut cov = Vec::with_capacity(nw * self.h);
+        for y in 0..self.h {
+            cov.extend_from_slice(&self.cov[y * self.w..y * self.w + nw]);
+        }
+        self.w = nw;
+        self.cov = cov;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -252,6 +268,22 @@ impl RectF {
     }
     pub fn offset(&self, dx: f32, dy: f32) -> RectF {
         RectF::new(self.x + dx, self.y + dy, self.w, self.h)
+    }
+    /// Interseção (vazia = largura/altura 0).
+    pub fn intersect(&self, o: RectF) -> RectF {
+        let x0 = self.x.max(o.x);
+        let y0 = self.y.max(o.y);
+        let x1 = self.right().min(o.right());
+        let y1 = self.bottom().min(o.bottom());
+        RectF::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+    }
+    pub fn is_empty(&self) -> bool {
+        self.w <= 0.0 || self.h <= 0.0
+    }
+    /// Interpolação entre dois retângulos.
+    pub fn lerp(&self, o: RectF, t: f32) -> RectF {
+        let l = |a: f32, b: f32| a + (b - a) * t;
+        RectF::new(l(self.x, o.x), l(self.y, o.y), l(self.w, o.w), l(self.h, o.h))
     }
 }
 
@@ -345,6 +377,77 @@ fn unpack(p: u32) -> [f32; 4] {
 #[inline]
 fn rrect_cov(qx: f32, qy: f32, r: f32) -> f32 {
     (0.5 - rrect_sd(qx, qy, r)).clamp(0.0, 1.0)
+}
+
+/// Meia largura (a partir do centro) da faixa da linha em que a distância com
+/// sinal do retângulo arredondado é <= `-k`. `qy`: |cy - centro| - (meia altura - r).
+/// `None`: a linha não tem essa faixa. Serve para achar o "miolo" (cobertura 1,
+/// k = 0,5) e pular o cálculo de borda pixel a pixel.
+#[inline]
+fn inner_half(hx: f32, r: f32, qy: f32, k: f32) -> Option<f32> {
+    let rk = r - k;
+    let q = if qy <= 0.0 {
+        if qy > rk {
+            return None;
+        }
+        rk
+    } else {
+        if rk < qy {
+            return None;
+        }
+        (rk * rk - qy * qy).sqrt()
+    };
+    Some(hx - r + q)
+}
+
+/// Faixa de pixels [a, b) cujo centro fica a no máximo `half` de `mx`.
+#[inline]
+fn span(mx: f32, half: f32, lo: usize, hi: usize) -> (usize, usize) {
+    let a = ((mx - half - 0.5).ceil().max(lo as f32) as usize).min(hi);
+    let b = (((mx + half - 0.5).floor() + 1.0).max(0.0) as usize).min(hi);
+    (a, b.max(a))
+}
+
+/// Cor sólida com alfa como pixel BGRA pré-multiplicado.
+#[inline]
+pub fn premul(c: Rgb, a: f32) -> u32 {
+    let k = 255.0 * a.clamp(0.0, 1.0);
+    let ch = |v: f32| (v.clamp(0.0, 1.0) * k + 0.5) as u32;
+    (((k + 0.5) as u32) << 24) | (ch(c[0]) << 16) | (ch(c[1]) << 8) | ch(c[2])
+}
+
+/// Os quatro canais de `d` multiplicados por `k`/255 (arredondado), em inteiros.
+#[inline]
+pub fn scale_px(d: u32, k: u32) -> u32 {
+    let mut rb = (d & 0x00ff_00ff) * k + 0x0080_0080;
+    rb = ((rb + ((rb >> 8) & 0x00ff_00ff)) >> 8) & 0x00ff_00ff;
+    let mut ag = ((d >> 8) & 0x00ff_00ff) * k + 0x0080_0080;
+    ag = (ag + ((ag >> 8) & 0x00ff_00ff)) & 0xff00_ff00;
+    rb | ag
+}
+
+/// Mistura `a` e `b` (k/255 de `b`), canal a canal, em inteiros.
+#[inline]
+pub fn lerp_px(a: u32, b: u32, k: u32) -> u32 {
+    let ik = 255 - k;
+    let mut rb = (a & 0x00ff_00ff) * ik + (b & 0x00ff_00ff) * k + 0x0080_0080;
+    rb = ((rb + ((rb >> 8) & 0x00ff_00ff)) >> 8) & 0x00ff_00ff;
+    let mut ag = ((a >> 8) & 0x00ff_00ff) * ik + ((b >> 8) & 0x00ff_00ff) * k + 0x0080_0080;
+    ag = (ag + ((ag >> 8) & 0x00ff_00ff)) & 0xff00_ff00;
+    rb | ag
+}
+
+/// "Source over" pré-multiplicado em inteiros.
+#[inline]
+pub fn over(d: u32, s: u32) -> u32 {
+    let sa = s >> 24;
+    if sa >= 255 {
+        s
+    } else if sa == 0 {
+        d
+    } else {
+        s + scale_px(d, 255 - sa)
+    }
 }
 
 #[inline]
@@ -447,8 +550,15 @@ impl<'a> Canvas<'a> {
         for py in py0..py1 {
             let cy = py as f32 + 0.5;
             let qy = (cy - my).abs() - (hy - r);
+            // Miolo (cobertura 1): sem cálculo de borda.
+            let (ia, ib) = inner_half(hx, r, qy, 0.5).map(|h| span(mx, h, px0, px1)).unwrap_or((px1, px1));
             for px in px0..px1 {
                 let cx = px as f32 + 0.5;
+                if px >= ia && px < ib {
+                    let (c, a) = f(cx, cy);
+                    self.blend(px, py, c, a);
+                    continue;
+                }
                 let qx = (cx - mx).abs() - (hx - r);
                 let cov = rrect_cov(qx, qy, r);
                 if cov > 0.0 {
@@ -459,20 +569,67 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Retângulo arredondado com anti-aliasing (distância com sinal por pixel).
-    pub fn fill_rrect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32, alpha: f32, color: impl Fn(f32, f32) -> Rgb) {
-        if alpha <= 0.0 {
+    /// Retângulo arredondado de cor sólida com anti-aliasing. Caminho rápido em
+    /// inteiros: o miolo é uma composição constante; só as bordas calculam cobertura.
+    pub fn fill_rrect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32, alpha: f32, color: Rgb) {
+        if alpha <= 0.0 || x1 <= x0 || y1 <= y0 {
             return;
         }
-        self.fill_rrect_ca(x0, y0, x1, y1, radius, |x, y| (color(x, y), alpha));
+        let src = premul(color, alpha);
+        let hx = (x1 - x0) * 0.5;
+        let hy = (y1 - y0) * 0.5;
+        let mx = x0 + hx;
+        let my = y0 + hy;
+        let r = radius.min(hx).min(hy).max(0.0);
+        let (px0, py0, px1, py1) = self.bounds(x0, y0, x1, y1);
+        for py in py0..py1 {
+            let cy = py as f32 + 0.5;
+            let qy = (cy - my).abs() - (hy - r);
+            let (ia, ib) = inner_half(hx, r, qy, 0.5).map(|h| span(mx, h, px0, px1)).unwrap_or((px1, px1));
+            let row = py * self.w;
+            if ib > ia {
+                for d in &mut self.px[row + ia..row + ib] {
+                    *d = over(*d, src);
+                }
+            }
+            for px in (px0..ia).chain(ib.max(ia)..px1) {
+                let qx = (px as f32 + 0.5 - mx).abs() - (hx - r);
+                let cov = rrect_cov(qx, qy, r);
+                if cov > 0.0 {
+                    let i = row + px;
+                    self.px[i] = over(self.px[i], scale_px(src, (cov * 255.0 + 0.5) as u32));
+                }
+            }
+        }
     }
 
     pub fn fill_round(&mut self, r: RectF, radius: f32, c: Rgb, alpha: f32) {
-        self.fill_rrect(r.x, r.y, r.right(), r.bottom(), radius, alpha, |_, _| c);
+        self.fill_rrect(r.x, r.y, r.right(), r.bottom(), radius, alpha, c);
     }
 
     pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, c: Rgb, alpha: f32) {
-        self.fill_rrect(cx - radius, cy - radius, cx + radius, cy + radius, radius, alpha, |_, _| c);
+        self.fill_rrect(cx - radius, cy - radius, cx + radius, cy + radius, radius, alpha, c);
+    }
+
+    /// Apaga (deixa transparente) um retângulo arredondado, com anti-aliasing:
+    /// "recorte" que mostra o que está atrás (ex.: o vão em volta do selo da capa).
+    pub fn erase_round(&mut self, rect: RectF, radius: f32) {
+        let hx = rect.w * 0.5;
+        let hy = rect.h * 0.5;
+        let (mx, my) = (rect.cx(), rect.cy());
+        let r = radius.min(hx).min(hy).max(0.0);
+        let (px0, py0, px1, py1) = self.bounds(rect.x, rect.y, rect.right(), rect.bottom());
+        for py in py0..py1 {
+            let qy = (py as f32 + 0.5 - my).abs() - (hy - r);
+            for px in px0..px1 {
+                let qx = (px as f32 + 0.5 - mx).abs() - (hx - r);
+                let cov = rrect_cov(qx, qy, r);
+                if cov > 0.0 {
+                    let i = py * self.w + px;
+                    self.px[i] = scale_px(self.px[i], ((1.0 - cov) * 255.0 + 0.5) as u32);
+                }
+            }
+        }
     }
 
     /// Contorno de retângulo arredondado (espessura `width`), com anti-aliasing.
@@ -515,12 +672,22 @@ impl<'a> Canvas<'a> {
         let hy = r.h * 0.5;
         let rad = radius.min(hx).min(hy);
         let (px0, py0, px1, py1) = self.bounds(r.x - blur, r.y - blur, r.right() + blur, r.bottom() + blur);
+        let full = premul(color, alpha);
+        let (mx, my) = (r.cx(), r.cy());
         for py in py0..py1 {
             let cy = py as f32 + 0.5;
-            let qy = (cy - r.cy()).abs() - (hy - rad);
-            for px in px0..px1 {
+            let qy = (cy - my).abs() - (hy - rad);
+            // Miolo da sombra (alfa constante): composição direta.
+            let (ia, ib) = inner_half(hx, rad, qy, blur * 0.35).map(|h| span(mx, h, px0, px1)).unwrap_or((px1, px1));
+            let row = py * self.w;
+            if ib > ia {
+                for d in &mut self.px[row + ia..row + ib] {
+                    *d = over(*d, full);
+                }
+            }
+            for px in (px0..ia).chain(ib.max(ia)..px1) {
                 let cx = px as f32 + 0.5;
-                let qx = (cx - r.cx()).abs() - (hx - rad);
+                let qx = (cx - mx).abs() - (hx - rad);
                 let d = rrect_sd(qx, qy, rad) + blur * 0.35;
                 let t = (d / blur).clamp(0.0, 1.0);
                 let a = alpha * (1.0 - t) * (1.0 - t);
@@ -546,20 +713,55 @@ impl<'a> Canvas<'a> {
 
     /// Desenha uma máscara (texto/ícone) com a cor dada, canto superior esquerdo em (x, y).
     pub fn blit_mask(&mut self, x: i32, y: i32, m: &Mask, c: Rgb, alpha: f32) {
-        for my in 0..m.h {
-            let py = y + my as i32;
-            if py < 0 || py >= self.h as i32 {
-                continue;
+        if alpha <= 0.0 {
+            return;
+        }
+        let src = premul(c, alpha);
+        let (cx0, cy0, cx1, cy1) = (self.clip.0 as i32, self.clip.1 as i32, self.clip.2 as i32, self.clip.3 as i32);
+        let (mx0, mx1) = ((cx0 - x).max(0), (cx1 - x).min(m.w as i32));
+        let (my0, my1) = ((cy0 - y).max(0), (cy1 - y).min(m.h as i32));
+        if mx1 <= mx0 || my1 <= my0 {
+            return;
+        }
+        for my in my0 as usize..my1 as usize {
+            let row = (y + my as i32) as usize * self.w;
+            let mrow = &m.cov[my * m.w..my * m.w + m.w];
+            for mx in mx0 as usize..mx1 as usize {
+                let cov = mrow[mx] as u32;
+                if cov != 0 {
+                    let i = row + (x + mx as i32) as usize;
+                    self.px[i] = over(self.px[i], if cov == 255 { src } else { scale_px(src, cov) });
+                }
             }
-            for mx in 0..m.w {
-                let px = x + mx as i32;
-                if px < 0 || px >= self.w as i32 {
+        }
+    }
+
+    /// Compõe (source over) um buffer pré-multiplicado do mesmo formato em
+    /// (dx, dy), sem reamostrar. `alpha`: opacidade extra (0..1).
+    pub fn composite(&mut self, dx: i32, dy: i32, src: &[u32], sw: usize, sh: usize, alpha: f32) {
+        let k = (alpha.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+        if k == 0 {
+            return;
+        }
+        let (cx0, cy0, cx1, cy1) = (self.clip.0 as i32, self.clip.1 as i32, self.clip.2 as i32, self.clip.3 as i32);
+        let (x0, x1) = (dx.max(cx0), (dx + sw as i32).min(cx1));
+        let (y0, y1) = (dy.max(cy0), (dy + sh as i32).min(cy1));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        for y in y0..y1 {
+            let srow = &src[(y - dy) as usize * sw..];
+            let drow = y as usize * self.w;
+            for x in x0..x1 {
+                let mut s = srow[(x - dx) as usize];
+                if s == 0 {
                     continue;
                 }
-                let cov = m.cov[my * m.w + mx];
-                if cov != 0 {
-                    self.blend(px as usize, py as usize, c, cov as f32 / 255.0 * alpha);
+                if k < 255 {
+                    s = scale_px(s, k);
                 }
+                let i = drow + x as usize;
+                self.px[i] = over(self.px[i], s);
             }
         }
     }
@@ -718,15 +920,15 @@ fn bars(cv: &mut Canvas, a: RectF, f: &Frame, mirror: bool) {
         let bh = min_h + v * span;
         if mirror {
             let c = a.cy();
-            cv.fill_rrect(x0, c - bh * 0.5, x0 + bw, c + bh * 0.5, radius, 1.0, |_, y| colors.at(tx, (y - c).abs() / (h * 0.5)));
+            cv.fill_rrect_ca(x0, c - bh * 0.5, x0 + bw, c + bh * 0.5, radius, |_, y| (colors.at(tx, (y - c).abs() / (h * 0.5)), 1.0));
         } else {
-            cv.fill_rrect(x0, bottom - bh, x0 + bw, bottom, radius, 1.0, |_, y| colors.at(tx, (bottom - y) / h));
+            cv.fill_rrect_ca(x0, bottom - bh, x0 + bw, bottom, radius, |_, y| (colors.at(tx, (bottom - y) / h), 1.0));
             if f.show_peaks {
                 let p = f.peaks.get(i).copied().unwrap_or(0.0);
                 if p > v + 0.03 {
                     let ph = (1.6 * f.scale).max(1.0);
                     let top = (bottom - (min_h + p * span) - ph).max(a.y);
-                    cv.fill_rrect(x0, top, x0 + bw, top + ph, ph * 0.5, 0.85, |_, _| colors.at(tx, 1.0));
+                    cv.fill_rrect(x0, top, x0 + bw, top + ph, ph * 0.5, 0.85, colors.at(tx, 1.0));
                 }
             }
         }

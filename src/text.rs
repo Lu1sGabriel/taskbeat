@@ -48,6 +48,13 @@ pub enum Font {
     IconXl,
     /// Ícone do aviso de teclas no tamanho "Grande".
     IconHero,
+    /// Título/segunda linha do widget nos tamanhos "Pequeno" e "Grande".
+    TitleSm,
+    TitleLg,
+    SubtitleSm,
+    SubtitleLg,
+    /// Legenda em semibold (selos, cabeçalho do menu).
+    CaptionStrong,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -102,10 +109,15 @@ fn spec(f: Font) -> (f32, i32, Face) {
         Font::Hero => (24.0, 600, Face::Display),
         Font::IconXl => (40.0, 400, Face::Icon),
         Font::IconHero => (22.0, 400, Face::Icon),
+        Font::TitleSm => (11.5, 600, Face::Text),
+        Font::TitleLg => (14.0, 600, Face::Text),
+        Font::SubtitleSm => (10.5, 400, Face::Text),
+        Font::SubtitleLg => (12.5, 400, Face::Text),
+        Font::CaptionStrong => (12.0, 600, Face::Text),
     }
 }
 
-const ALL_FONTS: [Font; 18] = [
+const ALL_FONTS: [Font; 23] = [
     Font::Title,
     Font::Subtitle,
     Font::Icon,
@@ -124,6 +136,11 @@ const ALL_FONTS: [Font; 18] = [
     Font::Hero,
     Font::IconXl,
     Font::IconHero,
+    Font::TitleSm,
+    Font::TitleLg,
+    Font::SubtitleSm,
+    Font::SubtitleLg,
+    Font::CaptionStrong,
 ];
 
 type Key = (String, Font, i32, i32, Align);
@@ -325,7 +342,9 @@ impl TextRenderer {
             let cut = ticks[ticks.len() / 2];
             self.cache.retain(|_, (_, t)| *t > cut);
         }
-        let m = Rc::new(self.rasterize(text, font, w.max(1), h.max(1), align));
+        let mut m = self.rasterize(text, font, w.max(1), h.max(1), align);
+        m.crop_right();
+        let m = Rc::new(m);
         self.cache.insert(key, (m.clone(), self.tick));
         m
     }
