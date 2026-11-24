@@ -10,7 +10,7 @@ No Mac, o mesmo app vive no **notch do MacBook** ([veja a seção do Mac](#mac-m
 
 **[⬇ Baixar o Taskbeat 1.2.0 (Windows 10/11)](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.2.0/Taskbeat-Setup-1.2.0.exe)** · [notas da versão](https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.2.0) · [todas as versões](https://github.com/Lu1sGabriel/taskbeat/releases)
 
-**[⬇ Baixar o Taskbeat 1.3.0 beta 2 para Mac (macOS 12 ou mais novo)](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0-beta.2/Taskbeat-1.3.0-beta.2.dmg)** · versão de teste · [notas da versão](https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.3.0-beta.2)
+**[⬇ Baixar o Taskbeat 1.3.0 beta 3 para Mac (macOS 12 ou mais novo)](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0-beta.3/Taskbeat-1.3.0-beta.3.dmg)** · versão de teste · [notas da versão](https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.3.0-beta.3)
 
 <p align="center">
   <img src="docs/screenshots/demo.gif" width="720" alt="Animação do Taskbeat: clica na música da barra de tarefas, o card abre, pausa, volta a tocar, pula a música; depois aparecem o cartão A seguir e o aviso de Caps Lock">
