@@ -39,7 +39,7 @@ pub enum CardStyle {
     Artwork,
     /// Cor extraída da capa.
     AlbumColor,
-    /// Vidro neutro (claro/escuro), como o Fluent.
+    /// Acrílico do Fluent: desfoca o que está atrás, com tinta clara/escura.
     Glass,
 }
 
@@ -125,6 +125,70 @@ impl OsdSize {
     }
 }
 
+/// Cantos do fundo do widget da barra.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WidgetShape {
+    Rounded,
+    /// Totalmente arredondado nas pontas.
+    Pill,
+    Square,
+}
+
+/// Botão play no widget da barra.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskbarPlay {
+    /// Círculo na cor de destaque.
+    Filled,
+    /// Só o ícone, como os outros botões.
+    Icon,
+}
+
+/// Aleatório e repetir: sempre (apagados quando o player não deixa) ou só quando dá.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShuffleRepeat {
+    Always,
+    WhenSupported,
+}
+
+/// Fundo do aviso de Caps/Num Lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsdMaterial {
+    /// Cartão sólido claro/escuro.
+    Solid,
+    /// Vidro fosco: desfoca o que está atrás, com tinta do tema e granulado.
+    Acrylic,
+    /// Preenchido com a cor de destaque.
+    Accent,
+}
+
+/// Símbolo do aviso de Caps/Num Lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsdIcon {
+    /// "A" para Caps Lock, "1" para Num Lock.
+    Letter,
+    /// Cadeado fechado (ligado) / aberto (desligado).
+    Lock,
+    /// Teclado (Caps) / teclado numérico (Num).
+    Keyboard,
+}
+
+/// Animação de entrada e saída do aviso.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsdAnim {
+    /// Desliza alguns pixels enquanto aparece.
+    Slide,
+    /// Cresce a partir do centro.
+    Zoom,
+    /// Só esmaece.
+    Fade,
+}
+
 /// Idioma da interface. `Auto` segue o idioma de exibição do Windows (outros = inglês).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -153,6 +217,8 @@ pub struct Config {
     // ---- barra de tarefas
     /// Capa + título/artista na barra de tarefas.
     pub show_media: bool,
+    /// Widget sempre na barra, mesmo sem nada tocando ("Nada tocando").
+    pub always_show_widget: bool,
     /// Botões ⏮ ▶ ⏭ também na barra (por padrão só no card).
     pub taskbar_controls: bool,
     pub cover_shape: Shape,
@@ -163,8 +229,16 @@ pub struct Config {
     pub playing_indicator: bool,
     /// Linha fina de progresso sob o widget.
     pub taskbar_progress: bool,
-    /// Fundo em "pílula" sempre visível atrás do widget.
+    /// Fundo em "pílula" sempre visível atrás do widget (envolve capa, texto e botões).
     pub widget_pill: bool,
+    /// Cantos do fundo do widget.
+    pub widget_shape: WidgetShape,
+    /// Linha fina separando a música dos botões.
+    pub widget_divider: bool,
+    /// Aleatório e repetir também na barra (com os botões de controle ligados).
+    pub taskbar_shuffle_repeat: bool,
+    /// Botão play da barra: preenchido com a cor de destaque ou só o ícone.
+    pub taskbar_play: TaskbarPlay,
     /// Largura da área do título, em pixels lógicos.
     pub title_width: i32,
     pub anchor: Anchor,
@@ -183,6 +257,8 @@ pub struct Config {
     pub show_source: bool,
     /// Volume no card expandido (slider + mudo).
     pub show_volume: bool,
+    /// Quando mostrar aleatório e repetir no card.
+    pub card_shuffle_repeat: ShuffleRepeat,
     /// Segundos sem o mouse em cima até o card fechar sozinho.
     pub card_autoclose: i32,
 
@@ -209,6 +285,14 @@ pub struct Config {
     pub osd_show_off: bool,
     /// Interruptor animado no lado direito do aviso.
     pub osd_switch: bool,
+    pub osd_material: OsdMaterial,
+    /// Quanto o fundo cobre o que está atrás (%): opacidade do cartão sólido /
+    /// colorido, ou da tinta sobre o desfoque no acrílico.
+    pub osd_opacity: i32,
+    /// Intensidade do desfoque do fundo acrílico (%).
+    pub osd_blur: i32,
+    pub osd_icon: OsdIcon,
+    pub osd_anim: OsdAnim,
 
     // ---- visualizador
     /// Barras/onda reagindo ao som. Desligado por padrão.
@@ -240,6 +324,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             show_media: true,
+            always_show_widget: true,
             taskbar_controls: false,
             cover_shape: Shape::Rounded,
             show_artist: true,
@@ -247,6 +332,10 @@ impl Default for Config {
             playing_indicator: false,
             taskbar_progress: false,
             widget_pill: true,
+            widget_shape: WidgetShape::Rounded,
+            widget_divider: true,
+            taskbar_shuffle_repeat: true,
+            taskbar_play: TaskbarPlay::Filled,
             title_width: 150,
             anchor: Anchor::BeforeTray,
             offset: 0,
@@ -260,6 +349,7 @@ impl Default for Config {
             card_seek: true,
             show_source: false,
             show_volume: true,
+            card_shuffle_repeat: ShuffleRepeat::Always,
             card_autoclose: 6,
 
             next_track_popup: true,
@@ -276,6 +366,11 @@ impl Default for Config {
             osd_duration: 18,
             osd_show_off: true,
             osd_switch: true,
+            osd_material: OsdMaterial::Solid,
+            osd_opacity: 96,
+            osd_blur: 60,
+            osd_icon: OsdIcon::Letter,
+            osd_anim: OsdAnim::Slide,
 
             show_visualizer: false,
             style: Style::Mirror,
@@ -362,5 +457,7 @@ impl Config {
         self.osd_duration = self.osd_duration.clamp(8, 50);
         self.osd_offset_x = self.osd_offset_x.clamp(-2000, 2000);
         self.osd_offset_y = self.osd_offset_y.clamp(-1200, 1200);
+        self.osd_opacity = self.osd_opacity.clamp(20, 100);
+        self.osd_blur = self.osd_blur.clamp(0, 100);
     }
 }
