@@ -10,10 +10,14 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
 **[⬇ Baixar o instalador (Windows 10/11)](https://github.com/Lu1sGabriel/taskbeat/releases/latest)**
 
 <p align="center">
-  <img src="docs/screenshots/taskbar-card.png" width="820" alt="Taskbeat na barra de tarefas, com o card de controles aberto">
+  <img src="docs/screenshots/demo.gif" width="720" alt="Animação do Taskbeat: clica na música da barra de tarefas, o card abre, pausa, volta a tocar, pula a música; depois aparecem o cartão A seguir e o aviso de Caps Lock">
 </p>
 
 ## Capturas de tela
+
+<p align="center">
+  <img src="docs/screenshots/taskbar-card.png" width="820" alt="Taskbeat na barra de tarefas, com o card de controles aberto">
+</p>
 
 **Card expandido** em três estilos: capa desfocada, cor do álbum e vidro.
 
@@ -154,12 +158,31 @@ código, com a música de exemplo):
 $env:TASKBEAT_LANG="pt"; cargo test --release shots -- --ignored
 ```
 
+E o GIF animado (`docs/screenshots/demo.gif`, com codificador GIF próprio):
+
+```powershell
+$env:TASKBEAT_LANG="pt"; cargo test --release demo_gif -- --ignored
+```
+
 `$env:TV_DEMO_MEDIA=1` faz as prévias da tela de configurações usarem a música de exemplo.
 
 ## Limitações
 
 - Só a barra do monitor principal.
 - A tela de configurações ainda não tem navegação por teclado.
+
+## Licença
+
+O Taskbeat é distribuído sob a [licença MIT](LICENSE): pode usar, copiar, modificar
+e distribuir, mantendo o aviso de copyright.
+
+As bibliotecas de terceiros usadas (todas com licenças permissivas: MIT, Apache-2.0 e
+Unicode-3.0) estão listadas, com seus avisos de copyright, em
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Para atualizar a lista:
+`python tools/third_party_notices.py`.
+
+As fontes Segoe UI Variable e Segoe Fluent Icons são do próprio Windows e não são
+distribuídas com o app.
 
 ## Créditos
 
