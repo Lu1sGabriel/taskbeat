@@ -7,7 +7,7 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
 
 > Projeto desenvolvido com o auxílio do [Claude Code](https://claude.com/claude-code).
 
-**[⬇ Baixar o instalador (Windows 10/11)](https://github.com/Lu1sGabriel/taskbeat/releases/latest)**
+**[⬇ Baixar o Taskbeat 1.0.1 (Windows 10/11)](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.0.1/Taskbeat-Setup-1.0.1.exe)** · [notas da versão](https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.0.1) · [todas as versões](https://github.com/Lu1sGabriel/taskbeat/releases)
 
 <p align="center">
   <img src="docs/screenshots/demo.gif" width="720" alt="Animação do Taskbeat: clica na música da barra de tarefas, o card abre, pausa, volta a tocar, pula a música; depois aparecem o cartão A seguir e o aviso de Caps Lock">
