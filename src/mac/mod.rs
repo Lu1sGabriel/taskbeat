@@ -9,9 +9,11 @@
 //! quadro vira um `CGImage` que a camada da janela mostra.
 
 pub mod audio;
+mod compat;
 mod gfx;
 pub mod media;
 mod notch;
+mod osd;
 mod settings;
 mod statusbar;
 pub mod system;
@@ -106,6 +108,7 @@ define_class!(
         fn did_finish_launching(&self, _n: &NSNotification) {
             let mtm = self.mtm();
             notch::start(mtm);
+            osd::start(mtm);
             statusbar::install(mtm);
             if std::env::var_os("TV_DEMO_SETTINGS").is_some() {
                 settings::open(mtm);
@@ -216,6 +219,18 @@ define_class!(
         #[unsafe(method(button:))]
         fn button(&self, sender: Option<&AnyObject>) {
             settings::button(sender);
+        }
+
+        /// Quadro do vblank do aviso de Caps Lock.
+        #[unsafe(method(osdFrame:))]
+        fn osd_frame(&self, _link: &AnyObject) {
+            osd::frame();
+        }
+
+        /// Leitura do Caps Lock.
+        #[unsafe(method(osdTick:))]
+        fn osd_tick(&self, _timer: &AnyObject) {
+            osd::tick();
         }
 
         /// Temporizador lento da ilha (sem animação: estado do mouse, sessão).

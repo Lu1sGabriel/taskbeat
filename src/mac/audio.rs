@@ -70,7 +70,9 @@ impl Capture {
             desc.setMuteBehavior(CATapMuteBehavior::Unmuted);
         }
         let mut tap: AudioObjectID = 0;
-        let st = unsafe { AudioHardwareCreateProcessTap(Some(&desc), &mut tap) };
+        // Procurada na hora: no macOS 12/13 a função não existe.
+        let create = super::compat::create_process_tap()?;
+        let st = unsafe { create(objc2::rc::Retained::as_ptr(&desc).cast(), &mut tap) };
         if st != 0 || tap == 0 {
             log::warn(&format!("áudio: tap não criado ({st})"));
             return None;
@@ -103,7 +105,7 @@ impl Capture {
         let st = unsafe { AudioHardwareCreateAggregateDevice(dict.as_ref(), NonNull::from(&mut agg)) };
         if st != 0 || agg == 0 {
             log::warn(&format!("áudio: dispositivo agregado não criado ({st})"));
-            unsafe { AudioHardwareDestroyProcessTap(tap) };
+            super::compat::destroy_process_tap(tap);
             return None;
         }
 
@@ -153,8 +155,8 @@ impl Capture {
             log::warn(&format!("áudio: IOProc não criado ({st})"));
             unsafe {
                 AudioHardwareDestroyAggregateDevice(agg);
-                AudioHardwareDestroyProcessTap(tap);
             }
+            super::compat::destroy_process_tap(tap);
             return None;
         }
         let st = unsafe { AudioDeviceStart(agg, proc_id) };
@@ -172,7 +174,7 @@ impl Drop for Capture {
             AudioDeviceStop(self.agg, self.proc_id);
             AudioDeviceDestroyIOProcID(self.agg, self.proc_id);
             AudioHardwareDestroyAggregateDevice(self.agg);
-            AudioHardwareDestroyProcessTap(self.tap);
+            super::compat::destroy_process_tap(self.tap);
         }
     }
 }

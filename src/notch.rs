@@ -10,6 +10,9 @@
 //! A janela (`mac/notch.rs`) só anima `open`/`peek` e mostra o quadro; as
 //! prévias das configurações e as capturas usam as mesmas funções.
 
+// No Windows o módulo só é usado pelas capturas e pelos GIFs.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use crate::config::{AccentSource, Config, NotchBg, ShuffleRepeat};
 use crate::render::*;
 use crate::shared::MediaInfo;
@@ -542,6 +545,13 @@ fn draw_peek(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame
 /// Prévia da ilha sobre uma tela de mentira (papel de parede, barra de menus e
 /// notch de hardware): usada na tela de configurações e nas capturas.
 pub fn preview(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, colors: &Colors, media: &MediaInfo, open: f32, peek: f32, time: f32) -> (usize, usize, Vec<u32>) {
+    preview_sized(tr, s, g, cfg, colors, media, open, peek, time, None)
+}
+
+/// Como `preview`, numa imagem de tamanho fixo (`size` em pixels) com a ilha
+/// centralizada no topo: as prévias das configurações aparecem 1:1, sem
+/// reamostrar (nítidas em telas Retina).
+pub fn preview_sized(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, colors: &Colors, media: &MediaInfo, open: f32, peek: f32, time: f32, size: Option<(usize, usize)>) -> (usize, usize, Vec<u32>) {
     let l = NLayout::build(s, g, cfg, true);
     let viz_v: Vec<f32> = (0..cfg.bars).map(|i| 0.35 + 0.6 * ((i as f32 * 1.7 + time * 3.0).sin() * 0.5 + 0.5)).collect();
     let peaks: Vec<f32> = viz_v.iter().map(|v| (v + 0.12).min(1.0)).collect();
@@ -566,7 +576,7 @@ pub fn preview(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, colors: &Co
     let mut layer = vec![0u32; sw * sh];
     draw(&mut Canvas::new(sw, sh, &mut layer), tr, &l, &f);
 
-    let (iw, ih) = ((sw as f32 + 120.0 * s) as usize, sh + (24.0 * s) as usize);
+    let (iw, ih) = size.unwrap_or(((sw as f32 + 120.0 * s) as usize, sh + (24.0 * s) as usize));
     let mut px = vec![0u32; iw * ih];
     {
         let mut cv = Canvas::new(iw, ih, &mut px);

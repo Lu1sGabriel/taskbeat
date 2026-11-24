@@ -9,6 +9,7 @@ use crate::config::*;
 use crate::i18n::tr;
 use crate::notch::{self as nd, Geom};
 use crate::text::TextRenderer;
+use crate::ui;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -24,7 +25,7 @@ use std::cell::RefCell;
 /// Largura e altura de cada página (pontos).
 const W: f64 = 620.0;
 const H: f64 = 640.0;
-const PREVIEW_H: f64 = 210.0;
+const PREVIEW_H: f64 = 250.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Key {
@@ -52,6 +53,22 @@ enum Key {
     MenuIcon,
     Language,
     Fullscreen,
+    CapsOsd,
+    OsdShowOff,
+    OsdTest,
+    OsdPos,
+    OsdOffX,
+    OsdOffY,
+    OsdMaterial,
+    OsdOpacity,
+    OsdIcon,
+    OsdShape,
+    OsdSize,
+    OsdTheme,
+    OsdSwitch,
+    OsdAnim,
+    OsdDuration,
+    OsdPrivacy,
     Reset,
     Permissions,
     Licenses,
@@ -78,6 +95,7 @@ enum Preview {
     Open,
     Peek,
     Closed,
+    Osd,
     None,
 }
 
@@ -98,6 +116,13 @@ const VIZ_STYLES: &[&str] = &["Barras", "Espelhado", "Onda"];
 const PALETTES: &[&str] = &["Cor da capa", "Cor de destaque do sistema", "Arco-íris", "Neon", "Monocromático"];
 const LANGS: &[&str] = &["Automático (idioma do sistema)", "Português (Brasil)", "English", "Español", "Deutsch"];
 const BAR_NAMES: &[&str] = &["6", "8", "10", "12", "16", "24", "32"];
+const OSD_POSITIONS: &[&str] = &["Embaixo", "Centro", "Topo", "Abaixo do notch"];
+const OSD_MATERIALS: &[&str] = &["Sólido", "Acrílico", "Cor de destaque"];
+const OSD_ICONS: &[&str] = &["Letra", "Cadeado", "Teclado"];
+const OSD_SHAPES: &[&str] = &["Iguais ao card", "Pílula", "Retos"];
+const OSD_SIZES: &[&str] = &["Compacto", "Normal", "Grande"];
+const THEMES: &[&str] = &["Automático", "Escuro", "Claro"];
+const OSD_ANIMS: &[&str] = &["Deslizar", "Zoom", "Esmaecer"];
 
 const BG_V: &[NotchBg] = &[NotchBg::Black, NotchBg::Album, NotchBg::Artwork];
 const ACCENT_V: &[AccentSource] = &[AccentSource::Album, AccentSource::Windows];
@@ -107,6 +132,13 @@ const VIZ_V: &[Style] = &[Style::Bars, Style::Mirror, Style::Wave];
 const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbow, Palette::Neon, Palette::Mono];
 const LANG_V: &[Language] = &[Language::Auto, Language::Pt, Language::En, Language::Es, Language::De];
 const BARS: &[usize] = &[6, 8, 10, 12, 16, 24, 32];
+const OSD_POS_V: &[OsdPosition] = &[OsdPosition::Bottom, OsdPosition::Center, OsdPosition::Top, OsdPosition::AbovePlayer];
+const OSD_MATERIAL_V: &[OsdMaterial] = &[OsdMaterial::Solid, OsdMaterial::Acrylic, OsdMaterial::Accent];
+const OSD_ICON_V: &[OsdIcon] = &[OsdIcon::Letter, OsdIcon::Lock, OsdIcon::Keyboard];
+const OSD_SHAPE_V: &[OsdShape] = &[OsdShape::Rounded, OsdShape::Pill, OsdShape::Square];
+const OSD_SIZE_V: &[OsdSize] = &[OsdSize::Compact, OsdSize::Normal, OsdSize::Large];
+const THEME_V: &[ThemeMode] = &[ThemeMode::Auto, ThemeMode::Dark, ThemeMode::Light];
+const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
 
 const PAGES: &[Page] = &[
     Page {
@@ -152,6 +184,34 @@ const PAGES: &[Page] = &[
             Row { title: "Sensibilidade", desc: "Ganho extra aplicado ao espectro", key: Key::Sens, kind: Kind::Slider { min: -12, max: 18, step: 1, unit: "dB" } },
             Row { title: "Picos", desc: "Marcadores que caem devagar", key: Key::Peaks, kind: Kind::Toggle },
             Row { title: "Só quando um player estiver tocando", desc: "Ignora chamadas, avisos e sons do sistema", key: Key::OnlyMedia, kind: Kind::Toggle },
+        ],
+    },
+    Page {
+        name: "Caps Lock",
+        symbol: "capslock.fill",
+        preview: Preview::Osd,
+        items: &[
+            Section("Aviso"),
+            Row { title: "Caps Lock", desc: "Mostra quando as maiúsculas forem ativadas ou desativadas", key: Key::CapsOsd, kind: Kind::Toggle },
+            Row { title: "Avisar também ao desligar", desc: "Desligado: só aparece quando a tecla é ativada", key: Key::OsdShowOff, kind: Kind::Toggle },
+            Row { title: "Testar", desc: "Mostra o aviso agora, na posição escolhida", key: Key::OsdTest, kind: Kind::Button("Mostrar agora") },
+            Section("Posição"),
+            Row { title: "Onde aparece", desc: "Predefinições rápidas; ajuste fino logo abaixo", key: Key::OsdPos, kind: Kind::Segmented(OSD_POSITIONS) },
+            Row { title: "Ajuste horizontal", desc: "Move o aviso para a esquerda ou para a direita", key: Key::OsdOffX, kind: Kind::Slider { min: -800, max: 800, step: 10, unit: "pt" } },
+            Row { title: "Ajuste vertical", desc: "Move o aviso para cima ou para baixo", key: Key::OsdOffY, kind: Kind::Slider { min: -600, max: 600, step: 10, unit: "pt" } },
+            Section("Fundo"),
+            Row { title: "Material", desc: "Sólido, acrílico (desfoque do macOS) ou na cor de destaque", key: Key::OsdMaterial, kind: Kind::Segmented(OSD_MATERIALS) },
+            Row { title: "Opacidade", desc: "Quanto o fundo cobre o que está atrás", key: Key::OsdOpacity, kind: Kind::Slider { min: 20, max: 100, step: 2, unit: "%" } },
+            Section("Aparência"),
+            Row { title: "Ícone", desc: "Letra A, cadeado que abre e fecha, ou teclado", key: Key::OsdIcon, kind: Kind::Segmented(OSD_ICONS) },
+            Row { title: "Cantos", desc: "Formato do aviso e do ícone", key: Key::OsdShape, kind: Kind::Segmented(OSD_SHAPES) },
+            Row { title: "Tamanho", desc: "Tamanho do aviso e do texto", key: Key::OsdSize, kind: Kind::Segmented(OSD_SIZES) },
+            Row { title: "Tema", desc: "Segue o macOS ou fixa claro/escuro", key: Key::OsdTheme, kind: Kind::Segmented(THEMES) },
+            Row { title: "Interruptor", desc: "Chave animada no lado direito", key: Key::OsdSwitch, kind: Kind::Toggle },
+            Row { title: "Animação", desc: "Como o aviso entra e sai da tela", key: Key::OsdAnim, kind: Kind::Segmented(OSD_ANIMS) },
+            Row { title: "Duração", desc: "Quanto tempo o aviso fica na tela", key: Key::OsdDuration, kind: Kind::Slider { min: 8, max: 50, step: 1, unit: "s" } },
+            Section("Privacidade"),
+            Row { title: "Privacidade", desc: "Só o estado do Caps Lock é observado; nada do que você digita é lido ou guardado", key: Key::OsdPrivacy, kind: Kind::Info },
         ],
     },
     Page {
@@ -208,7 +268,21 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::MenuIcon => c.menu_bar_icon as i32,
         Key::Language => idx(LANG_V, c.language),
         Key::Fullscreen => c.hide_on_fullscreen as i32,
-        Key::Reset | Key::Permissions | Key::Licenses | Key::About => 0,
+        Key::CapsOsd => c.caps_lock_osd as i32,
+        Key::OsdShowOff => c.osd_show_off as i32,
+        Key::OsdPos => idx(OSD_POS_V, c.osd_position),
+        Key::OsdOffX => c.osd_offset_x,
+        Key::OsdOffY => c.osd_offset_y,
+        Key::OsdMaterial => idx(OSD_MATERIAL_V, c.osd_material),
+        Key::OsdOpacity => c.osd_opacity,
+        Key::OsdIcon => idx(OSD_ICON_V, c.osd_icon),
+        Key::OsdShape => idx(OSD_SHAPE_V, c.osd_shape),
+        Key::OsdSize => idx(OSD_SIZE_V, c.osd_size),
+        Key::OsdTheme => idx(THEME_V, c.osd_theme),
+        Key::OsdSwitch => c.osd_switch as i32,
+        Key::OsdAnim => idx(OSD_ANIM_V, c.osd_anim),
+        Key::OsdDuration => c.osd_duration,
+        Key::Reset | Key::Permissions | Key::Licenses | Key::About | Key::OsdTest | Key::OsdPrivacy => 0,
     }
 }
 
@@ -240,7 +314,21 @@ fn set(c: &mut Config, key: Key, v: i32) {
             crate::i18n::apply(c.language);
         }
         Key::Fullscreen => c.hide_on_fullscreen = v != 0,
-        Key::Autostart | Key::Reset | Key::Permissions | Key::Licenses | Key::About => {}
+        Key::CapsOsd => c.caps_lock_osd = v != 0,
+        Key::OsdShowOff => c.osd_show_off = v != 0,
+        Key::OsdPos => c.osd_position = pick(OSD_POS_V, v),
+        Key::OsdOffX => c.osd_offset_x = v,
+        Key::OsdOffY => c.osd_offset_y = v,
+        Key::OsdMaterial => c.osd_material = pick(OSD_MATERIAL_V, v),
+        Key::OsdOpacity => c.osd_opacity = v,
+        Key::OsdIcon => c.osd_icon = pick(OSD_ICON_V, v),
+        Key::OsdShape => c.osd_shape = pick(OSD_SHAPE_V, v),
+        Key::OsdSize => c.osd_size = pick(OSD_SIZE_V, v),
+        Key::OsdTheme => c.osd_theme = pick(THEME_V, v),
+        Key::OsdSwitch => c.osd_switch = v != 0,
+        Key::OsdAnim => c.osd_anim = pick(OSD_ANIM_V, v),
+        Key::OsdDuration => c.osd_duration = v,
+        Key::Autostart | Key::Reset | Key::Permissions | Key::Licenses | Key::About | Key::OsdTest | Key::OsdPrivacy => {}
     }
 }
 
@@ -251,6 +339,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         AlwaysShow | NotchHover | Indicator | TrackAnim if !c.show_media => Some("Ligue \"Mostrar música no notch\" para usar esta opção"),
         PopupSecs if !c.next_track_popup => Some("Ligue \"Mostrar A seguir\" para usar esta opção"),
         Style | Palette | Bars | Sens | Peaks | OnlyMedia if !c.show_visualizer => Some("Ligue \"Mostrar barras dinâmicas\" para usar esta opção"),
+        OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdMaterial | OsdOpacity | OsdIcon | OsdShape | OsdSize | OsdTheme | OsdSwitch | OsdAnim | OsdDuration if !c.caps_lock_osd => Some("Ligue o aviso de Caps Lock para usar esta opção"),
         _ => None,
     }
 }
@@ -258,7 +347,9 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
 fn value_label(kind: Kind, key: Key, v: i32) -> String {
     let Kind::Slider { unit, .. } = kind else { return String::new() };
     match key {
-        Key::Sens => format!("{v:+} {unit}"),
+        Key::Sens | Key::OsdOffX | Key::OsdOffY => format!("{v:+} {unit}"),
+        _ if unit == "%" => format!("{v}%"),
+        Key::OsdDuration => format!("{},{} {unit}", v / 10, v % 10),
         _ => format!("{v} {unit}"),
     }
 }
@@ -293,15 +384,14 @@ fn ns(s: &str) -> Retained<NSString> {
 }
 
 pub fn open(mtm: MainThreadMarker) {
-    let app = NSApplication::sharedApplication(mtm);
     if with(|s| s.window.makeKeyAndOrderFront(None)).is_some() {
-        app.activate();
+        super::compat::activate(mtm);
         return;
     }
     let s = build(mtm);
     s.window.center();
     s.window.makeKeyAndOrderFront(None);
-    app.activate();
+    super::compat::activate(mtm);
     SET.with(|c| *c.borrow_mut() = Some(s));
     refresh();
 }
@@ -383,7 +473,7 @@ fn page_view(mtm: MainThreadMarker, page: &Page, rows: &mut Vec<RowView>, previe
     if page.preview != Preview::None {
         let iv = NSImageView::new(mtm);
         iv.setFrame(rect(24.0, y, W - 48.0, PREVIEW_H));
-        iv.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+        iv.setImageScaling(NSImageScaling::ScaleNone);
         doc.addSubview(&iv);
         previews.push((page.preview, iv));
         y += PREVIEW_H + 16.0;
@@ -405,7 +495,7 @@ fn page_view(mtm: MainThreadMarker, page: &Page, rows: &mut Vec<RowView>, previe
         group.setTitlePosition(NSTitlePosition::NoTitle);
         group.setCornerRadius(10.0);
         group.setBorderWidth(0.0);
-        group.setFillColor(&NSColor::quaternarySystemFillColor());
+        group.setFillColor(&super::compat::group_fill());
         doc.addSubview(&group);
         let top = y;
         i += 1;
@@ -553,31 +643,71 @@ fn render_previews(s: &mut Settings, cfg: &Config) {
     let real = sh.media.lock().unwrap().clone();
     let media = if real.present() && std::env::var_os("TV_DEMO_MEDIA").is_none() { real } else { crate::ui::sample_media() };
     let colors = system::colors(mtm, cfg.palette);
-    let sc = 2.0f32;
-    let g = Geom { notch_w: 196.0 * sc, notch_h: 32.0 * sc };
+    // Prévias em 2x e no tamanho exato da vista: aparecem 1:1 na tela Retina.
+    let (pw, ph) = (((W - 48.0) * 2.0) as usize, (PREVIEW_H * 2.0) as usize);
     for (kind, iv) in &s.previews {
-        let (open, peek) = match kind {
-            Preview::Open => (1.0, 0.0),
-            Preview::Peek => (0.0, 1.0),
-            _ => (0.0, 0.0),
-        };
-        let (w, h, px) = nd::preview(&mut s.tr, sc, g, cfg, &colors, &media, open, peek, 1.3);
-        // Fechada: recorta em volta da ilha (fica pequena na tela inteira).
-        let (w, h, px) = if *kind == Preview::Closed {
-            let (x0, x1, y1) = (w / 4, w * 3 / 4, ((g.notch_h * 3.2) as usize).min(h));
-            let mut out = Vec::with_capacity((x1 - x0) * y1);
-            for y in 0..y1 {
-                out.extend_from_slice(&px[y * w + x0..y * w + x1]);
+        let px = match kind {
+            Preview::Open | Preview::Peek => {
+                let (open, peek) = if *kind == Preview::Open { (1.0, 0.0) } else { (0.0, 1.0) };
+                s.tr.set_scale(2.0);
+                let g = Geom { notch_w: 196.0 * 2.0, notch_h: 32.0 * 2.0 };
+                nd::preview_sized(&mut s.tr, 2.0, g, cfg, &colors, &media, open, peek, 1.3, Some((pw, ph))).2
             }
-            (x1 - x0, y1, out)
-        } else {
-            (w, h, px)
+            // Ilha fechada é pequena: desenhada em 4x (o dobro do tamanho real), nítida.
+            Preview::Closed => {
+                s.tr.set_scale(4.0);
+                let g = Geom { notch_w: 196.0 * 4.0, notch_h: 32.0 * 4.0 };
+                let px = nd::preview_sized(&mut s.tr, 4.0, g, cfg, &colors, &media, 0.0, 0.0, 1.3, Some((pw, ph))).2;
+                s.tr.set_scale(2.0);
+                px
+            }
+            Preview::Osd => osd_preview(&mut s.tr, cfg, &colors, pw, ph),
+            Preview::None => continue,
         };
-        if let Some(cg) = gfx::to_cgimage(&px, w, h) {
-            let img = NSImage::initWithCGImage_size(NSImage::alloc(), &cg, CGSize::new(w as f64 / sc as f64, h as f64 / sc as f64));
+        if let Some(cg) = gfx::to_cgimage(&px, pw, ph) {
+            let img = NSImage::initWithCGImage_size(NSImage::alloc(), &cg, CGSize::new(pw as f64 / 2.0, ph as f64 / 2.0));
             iv.setImage(Some(&img));
         }
     }
+}
+
+/// Prévia do aviso de Caps Lock sobre um papel de parede (com o acrílico de verdade).
+fn osd_preview(tr: &mut TextRenderer, cfg: &Config, colors: &crate::render::Colors, pw: usize, ph: usize) -> Vec<u32> {
+    use crate::render::{Canvas, RectF, acrylic_backdrop, lerp3};
+    let sc = 2.0f32;
+    tr.set_scale(sc);
+    let mut bg = vec![0u32; pw * ph];
+    {
+        let mut cv = Canvas::new(pw, ph, &mut bg);
+        let (fw, fh) = (pw as f32, ph as f32);
+        cv.fill_rrect_ca(0.0, 0.0, fw, fh, 0.0, |x, y| {
+            let (u, v) = (x / fw, y / fh);
+            let base = lerp3([0.16, 0.36, 0.78], [0.62, 0.30, 0.62], (u * 0.6 + v * 0.4).clamp(0.0, 1.0));
+            (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.4) * 1.4).clamp(0.0, 1.0) * 0.6), 1.0)
+        });
+        // "Janelas" coloridas para o acrílico ter o que desfocar.
+        for (u, v, w, h, c) in [(0.10, 0.18, 0.26, 0.60, [0.98, 0.45, 0.55]), (0.42, 0.10, 0.18, 0.50, [1.0, 0.78, 0.35]), (0.66, 0.40, 0.24, 0.48, [0.30, 0.80, 0.95])] {
+            cv.fill_round(RectF::new(fw * u, fh * v, fw * w, fh * h), 14.0 * sc, c, 0.75);
+        }
+    }
+    let (ow, oh) = ui::osd_size(sc, cfg);
+    let (x, y) = (((pw as f32 - ow) / 2.0).round(), ((ph as f32 - oh) / 2.0).round());
+    let m = ui::SHADOW_MARGIN * sc;
+    let (cw, ch) = ui::osd_card(sc, cfg);
+    let backdrop = ui::osd_wants_backdrop(cfg).then(|| acrylic_backdrop(&bg, pw, ph, RectF::new(x + m, y + m, cw, ch), ui::osd_blur_px(cfg, sc)));
+    let (ow_, oh_) = (ow.ceil() as usize, oh.ceil() as usize);
+    let mut layer = vec![0u32; ow_ * oh_];
+    {
+        let th = ui::osd_theme(cfg, colors);
+        ui::draw_osd(&mut Canvas::new(ow_, oh_, &mut layer), tr, cfg, colors, &th, sc, tr_caps(), false, true, 1.0, backdrop.as_ref());
+    }
+    let mut cv = Canvas::new(pw, ph, &mut bg);
+    cv.composite(x as i32, y as i32, &layer, ow_, oh_, 1.0);
+    bg
+}
+
+fn tr_caps() -> &'static str {
+    tr("Caps Lock")
 }
 
 /// Um interruptor, lista, controle segmentado ou slider mudou.
@@ -639,6 +769,7 @@ pub fn button(sender: Option<&AnyObject>) {
             }
         }
         Key::Licenses => crate::licenses::open(),
+        Key::OsdTest => super::osd::test(),
         _ => {}
     }
 }

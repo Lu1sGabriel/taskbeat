@@ -10,6 +10,7 @@
 //! vblank (CADisplayLink) e param quando terminam.
 
 use super::volume::Volume;
+use super::compat::Ticker;
 use super::{gfx, shared, statusbar, system, target};
 use crate::config::Config;
 use crate::dsp::{Analyzer, FFT_SIZE};
@@ -26,8 +27,8 @@ use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSPanel, NSResponder, NSScreen, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_core_foundation::{CGPoint, CGSize};
-use objc2_foundation::{NSObject, NSRect, NSRunLoop, NSRunLoopCommonModes, NSTimer};
-use objc2_quartz_core::{CADisplayLink, CAFrameRateRange, CALayer, CATransaction};
+use objc2_foundation::{NSObject, NSRect, NSTimer};
+use objc2_quartz_core::{CALayer, CATransaction};
 use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
@@ -90,8 +91,7 @@ struct Notch {
     window: Retained<NSPanel>,
     view: Retained<NotchView>,
     content: Retained<CALayer>,
-    link: Option<Retained<CADisplayLink>>,
-    link_rate: u32,
+    ticker: Option<Ticker>,
     _timer: Option<Retained<NSTimer>>,
     _monitor: Option<Retained<AnyObject>>,
     tr: TextRenderer,
@@ -229,8 +229,7 @@ pub fn start(mtm: MainThreadMarker) {
         window,
         view,
         content,
-        link: None,
-        link_rate: 0,
+        ticker: None,
         _timer: Some(timer),
         _monitor: monitor,
         tr,
@@ -338,6 +337,11 @@ pub fn screens_changed() {
             n.schedule();
         }
     });
+}
+
+/// Altura da faixa do notch, em pontos (o aviso de Caps Lock fica abaixo dela).
+pub fn band_points() -> Option<f64> {
+    with(|n| (n.layout.band / n.s) as f64)
 }
 
 /// Quadro do vblank.
@@ -559,24 +563,8 @@ impl Notch {
         } else {
             0
         };
-        if rate == self.link_rate {
-            return;
-        }
-        self.link_rate = rate;
-        if self.link.is_none() && rate > 0 {
-            let link = unsafe { self.view.displayLinkWithTarget_selector(&target(), sel!(frame:)) };
-            unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
-            self.link = Some(link);
-        }
-        if let Some(link) = &self.link {
-            if rate == 0 {
-                link.setPaused(true);
-            } else {
-                let r = rate as f32;
-                link.setPreferredFrameRateRange(CAFrameRateRange { minimum: (r / 2.0).min(30.0), maximum: r, preferred: r });
-                link.setPaused(false);
-            }
-        }
+        let view = self.view.clone();
+        self.ticker.get_or_insert_with(|| Ticker::new(&view, sel!(frame:))).set_rate(rate);
     }
 
     // ------------------------------------------------------------ quadro

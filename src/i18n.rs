@@ -441,4 +441,11 @@ static T: &[[&str; 4]] = &[
     ["Anterior", "Previous", "Anterior", "Zurück"],
     ["Este player não deixa mudar isso pelo macOS", "This player doesn't allow changing this through macOS", "Este reproductor no permite cambiar esto desde macOS", "Dieser Player lässt das nicht über macOS ändern"],
     ["Ligue \"Mostrar música no notch\" para usar esta opção", "Turn on \"Show music in the notch\" to use this option", "Activa \"Mostrar la música en el notch\" para usar esta opción", "Aktiviere „Musik in der Notch anzeigen“, um diese Option zu nutzen"],
+    ["Abaixo do notch", "Below the notch", "Debajo del notch", "Unter der Notch"],
+    ["Aviso", "Alert", "Aviso", "Hinweis"],
+    ["Sólido, acrílico (desfoque do macOS) ou na cor de destaque", "Solid, acrylic (macOS blur) or in the accent color", "Sólido, acrílico (desenfoque de macOS) o en el color de énfasis", "Einfarbig, Acryl (macOS-Unschärfe) oder in der Akzentfarbe"],
+    ["Letra A, cadeado que abre e fecha, ou teclado", "Letter A, a lock that opens and closes, or keyboard", "Letra A, candado que se abre y se cierra, o teclado", "Buchstabe A, ein Schloss, das auf- und zugeht, oder Tastatur"],
+    ["Segue o macOS ou fixa claro/escuro", "Follows macOS or stays light/dark", "Sigue a macOS o fija claro/oscuro", "Folgt macOS oder bleibt hell/dunkel"],
+    ["Só o estado do Caps Lock é observado; nada do que você digita é lido ou guardado", "Only the Caps Lock state is watched; nothing you type is read or stored", "Solo se observa el estado de Bloq Mayús; nada de lo que escribes se lee ni se guarda", "Nur der Status der Feststelltaste wird beobachtet; nichts, was du tippst, wird gelesen oder gespeichert"],
+    ["Ligue o aviso de Caps Lock para usar esta opção", "Turn on the Caps Lock alert to use this option", "Activa el aviso de Bloq Mayús para usar esta opción", "Aktiviere den Feststelltasten-Hinweis, um diese Option zu nutzen"],
 ];

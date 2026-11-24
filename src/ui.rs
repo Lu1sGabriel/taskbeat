@@ -1140,7 +1140,11 @@ pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &C
     let base: Rgb = if th.dark { [0.13, 0.13, 0.14] } else { [0.975, 0.975, 0.98] };
     match (cfg.osd_material, backdrop) {
         (OsdMaterial::Accent, _) => cv.fill_round(card, radius, osd_accent_bg(cfg, colors), opacity),
-        (OsdMaterial::Acrylic, Some(b)) => acrylic(cv, card, radius, b, base, opacity * 0.78),
+        (OsdMaterial::Acrylic, Some(b)) => {
+            // Sem a sombra por baixo: no Mac o fundo é translúcido (desfoque do sistema).
+            cv.erase_round(card, radius);
+            acrylic(cv, card, radius, b, base, opacity * 0.78)
+        }
         _ => cv.fill_round(card, radius, base, opacity),
     }
     cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.12 } else { 0.08 });
@@ -1292,8 +1296,8 @@ pub fn sample_media() -> MediaInfo {
 
 /// Capa de exemplo gerada: céu em gradiente com um sol e "montanhas".
 fn sample_art() -> Image {
-    // 256 px com bordas suaves: fica nítida também nas prévias em 2x.
-    const N: usize = 256;
+    // 384 px com bordas suaves: nítida também nas prévias e capturas em 2x.
+    const N: usize = 384;
     let px_size = 1.0 / N as f32;
     let mut px = vec![0u32; N * N];
     for y in 0..N {
