@@ -208,17 +208,39 @@ fn read_sample(frame: &[u8], ch: usize, kind: SampleKind) -> f32 {
     }
 }
 
+/// Registro de diagnóstico: no console em builds de depuração e, em qualquer
+/// build, no arquivo indicado por `TASKBEAT_LOG` (para investigar um problema
+/// no app instalado: `$env:TASKBEAT_LOG="$env:TEMP\taskbeat.log"` antes de abrir).
 pub mod log {
-    pub fn info(msg: &str) {
-        #[cfg(debug_assertions)]
-        eprintln!("[info] {msg}");
-        #[cfg(not(debug_assertions))]
-        let _ = msg;
+    use std::io::Write;
+    use std::sync::OnceLock;
+
+    fn file() -> Option<&'static std::path::PathBuf> {
+        static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+        PATH.get_or_init(|| std::env::var_os("TASKBEAT_LOG").map(Into::into)).as_ref()
     }
-    pub fn warn(msg: &str) {
+
+    /// Registro detalhado (cada leitura do player) ligado?
+    pub fn verbose() -> bool {
+        cfg!(debug_assertions) || file().is_some()
+    }
+
+    fn write(level: &str, msg: &str) {
         #[cfg(debug_assertions)]
-        eprintln!("[warn] {msg}");
-        #[cfg(not(debug_assertions))]
-        let _ = msg;
+        eprintln!("[{level}] {msg}");
+        if let Some(p) = file() {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+                let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                let _ = writeln!(f, "{t:.3} [{level}] {msg}");
+            }
+        }
+    }
+
+    pub fn info(msg: &str) {
+        write("info", msg);
+    }
+
+    pub fn warn(msg: &str) {
+        write("warn", msg);
     }
 }

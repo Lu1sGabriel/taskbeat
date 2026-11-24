@@ -61,6 +61,8 @@ pub struct MediaInfo {
     pub app: String,
     pub title: String,
     pub artist: String,
+    /// Nome do álbum (nem todo player informa).
+    pub album: String,
     pub can_prev: bool,
     pub can_next: bool,
     pub can_toggle: bool,
@@ -75,6 +77,9 @@ pub struct MediaInfo {
     pub icon: Option<Arc<Image>>,
     /// Incrementa a cada troca de faixa *automática* (a anterior terminou).
     pub auto_change_seq: u64,
+    /// A faixa acabou de mudar e a capa ainda é a da faixa anterior (ou nenhuma):
+    /// o player costuma publicar a imagem nova um pouco depois do título.
+    pub art_pending: bool,
     /// Linha do tempo: posição (s) medida em `pos_at`, duração (s; 0 = desconhecida).
     pub pos: f64,
     pub dur: f64,
@@ -115,6 +120,8 @@ impl PartialEq for MediaInfo {
             && self.app == o.app
             && self.title == o.title
             && self.artist == o.artist
+            && self.album == o.album
+            && self.art_pending == o.art_pending
             && self.can_prev == o.can_prev
             && self.can_next == o.can_next
             && self.can_toggle == o.can_toggle
