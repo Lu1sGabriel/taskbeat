@@ -55,7 +55,13 @@ pub fn main() {
         return;
     }
 
-    let cfg = Config::load();
+    let first_run = !Config::exists();
+    let mut cfg = Config::load();
+    // Abrir ao iniciar a sessão vem ligado (também para quem já usava o beta),
+    // só para o app instalado como pacote .app.
+    if system::app_bundle().is_some() && cfg.apply_login_default(first_run, true, system::autostart_enabled, || system::set_autostart(true)) {
+        cfg.save();
+    }
     crate::i18n::apply(cfg.language);
     let shared = Arc::new(Shared::new(cfg));
     SHARED.with(|s| {

@@ -758,7 +758,9 @@ pub fn button(sender: Option<&AnyObject>) {
     match key {
         Key::Reset => {
             let lang = shared().config().language;
-            shared().update_config(|cfg| *cfg = Config { language: lang, ..Config::default() });
+            shared().update_config(|cfg| *cfg = Config { language: lang, login_default_applied: true, ..Config::default() });
+            // O padrão também é abrir ao iniciar a sessão.
+            system::set_autostart(true);
             super::config_changed();
             refresh();
         }

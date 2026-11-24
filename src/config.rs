@@ -377,6 +377,10 @@ pub struct Config {
     /// direito na ilha).
     pub menu_bar_icon: bool,
 
+    /// O padrão "abrir ao iniciar a sessão" (ligado) já foi aplicado uma vez.
+    /// Depois disso vale só a escolha do usuário.
+    pub login_default_applied: bool,
+
     // ---- geral
     pub hide_on_fullscreen: bool,
     pub language: Language,
@@ -460,6 +464,7 @@ impl Default for Config {
             notch_hover: true,
             notch_bg: NotchBg::Album,
             menu_bar_icon: true,
+            login_default_applied: false,
 
             hide_on_fullscreen: true,
             language: Language::Auto,
@@ -491,6 +496,27 @@ impl Config {
     #[cfg(not(windows))]
     fn legacy_path() -> Option<PathBuf> {
         None
+    }
+
+    /// Já existe configuração salva (desta versão ou do nome antigo do app)?
+    pub fn exists() -> bool {
+        Self::path().is_some_and(|p| p.exists()) || Self::legacy_path().is_some_and(|p| p.exists())
+    }
+
+    /// Abrir ao iniciar a sessão vem **ligado** por padrão. Aplicado uma vez:
+    /// na primeira execução (sem configuração salva) ou, com `always`, também
+    /// para quem já usava (o Mac, que ainda não tinha esse padrão). Quem
+    /// desligar depois continua com a escolha. Devolve `true` quando a
+    /// configuração mudou (quem chama grava).
+    pub fn apply_login_default(&mut self, first_run: bool, always: bool, enabled: impl FnOnce() -> bool, enable: impl FnOnce()) -> bool {
+        if self.login_default_applied {
+            return false;
+        }
+        self.login_default_applied = true;
+        if (first_run || always) && !enabled() {
+            enable();
+        }
+        true
     }
 
     pub fn load() -> Self {
@@ -553,5 +579,33 @@ impl Config {
         self.osd_opacity = self.osd_opacity.clamp(20, 100);
         self.osd_blur = self.osd_blur.clamp(0, 100);
         self.widget_opacity = self.widget_opacity.clamp(0, 60);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use std::cell::Cell;
+
+    fn run(cfg: &mut Config, first_run: bool, always: bool, on: bool) -> (bool, bool) {
+        let enabled = Cell::new(false);
+        let changed = cfg.apply_login_default(first_run, always, || on, || enabled.set(true));
+        (changed, enabled.get())
+    }
+
+    #[test]
+    fn iniciar_com_a_sessao_vem_ligado() {
+        // Primeira execução: liga.
+        assert_eq!(run(&mut Config::default(), true, false, false), (true, true));
+        // Já estava ligado: só marca.
+        assert_eq!(run(&mut Config::default(), true, false, true), (true, false));
+        // Windows, quem já usava (pode ter desligado no instalador): respeita.
+        assert_eq!(run(&mut Config::default(), false, false, false), (true, false));
+        // Mac, quem já usava o beta: liga uma vez.
+        assert_eq!(run(&mut Config::default(), false, true, false), (true, true));
+        // Depois de aplicado, vale a escolha do usuário.
+        let mut c = Config::default();
+        run(&mut c, true, true, false);
+        assert_eq!(run(&mut c, true, true, false), (false, false));
     }
 }

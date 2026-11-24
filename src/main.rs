@@ -114,7 +114,13 @@ fn main() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-        let cfg = config::Config::load();
+        let first_run = !config::Config::exists();
+        let mut cfg = config::Config::load();
+        // Iniciar com o Windows vem ligado (o instalador já marca; isto cobre
+        // quem abre o .exe direto). Não vale para builds de desenvolvimento.
+        if !cfg!(debug_assertions) && cfg.apply_login_default(first_run, false, system::autostart_enabled, || system::set_autostart(true)) {
+            cfg.save();
+        }
         i18n::apply(cfg.language);
         let shared = Arc::new(Shared::new(cfg));
         let audio = audio::spawn(shared.clone());

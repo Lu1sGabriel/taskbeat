@@ -2016,8 +2016,11 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                     Action::Menu { ri, names, current: get(&cfg, key), at: RECT { left: tl.x, top: tl.y, right: br.x, bottom: br.y } }
                 }
                 Kind::Button(_) if key == Key::Reset => {
-                    u.shared.update_config(|c| *c = Config::default());
+                    u.shared.update_config(|c| *c = Config { login_default_applied: true, ..Config::default() });
                     crate::i18n::apply(Language::Auto);
+                    // O padrão também é iniciar com o Windows.
+                    system::set_autostart(true);
+                    AUTOSTART.with(|a| a.set(system::autostart_enabled()));
                     u.schedule();
                     Action::Redraw
                 }
