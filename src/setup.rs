@@ -83,10 +83,52 @@ enum Phase {
     Failed(String),
 }
 
+/// O que o instalador encontrou na máquina.
+#[derive(Clone, Debug, PartialEq)]
+enum Found {
+    /// Nada instalado: instalação normal (escolhe pasta e opções).
+    Fresh,
+    /// Versão mais antiga instalada: atualiza no lugar, sem desinstalar.
+    Older(String),
+    /// A mesma versão: reinstala (repara) por cima.
+    Same,
+    /// Uma versão mais nova já está instalada.
+    Newer(String),
+}
+
+/// "1.10.2" → (1, 10, 2). Partes que faltam ou não são números valem 0.
+fn parse_version(v: &str) -> (u32, u32, u32) {
+    let mut it = v.trim().trim_start_matches(['v', 'V']).split(['.', '-', '+']).map(|p| p.parse::<u32>().unwrap_or(0));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// Compara a versão instalada (se houver) com a deste instalador.
+fn classify(installed: Option<&str>, mine: &str) -> Found {
+    let Some(old) = installed.map(str::trim).filter(|v| !v.is_empty()) else { return Found::Fresh };
+    match parse_version(old).cmp(&parse_version(mine)) {
+        std::cmp::Ordering::Less => Found::Older(old.to_string()),
+        std::cmp::Ordering::Equal => Found::Same,
+        std::cmp::Ordering::Greater => Found::Newer(old.to_string()),
+    }
+}
+
+/// Instalação existente: versão registrada, se o executável ainda estiver lá.
+fn installed_version() -> Option<String> {
+    // Depuração: `$env:TASKBEAT_FAKE_INSTALLED="1.0.1"` simula uma instalação.
+    #[cfg(debug_assertions)]
+    if let Ok(v) = std::env::var("TASKBEAT_FAKE_INSTALLED") {
+        return Some(v);
+    }
+    let dir = reg_get_sz(UNINSTALL_KEY, "InstallLocation").filter(|d| !d.is_empty())?;
+    PathBuf::from(dir).join("Taskbeat.exe").exists().then(|| reg_get_sz(UNINSTALL_KEY, "DisplayVersion").unwrap_or_else(|| "0".into()))
+}
+
 struct St {
     hwnd: HWND,
     mode: Mode,
+    /// Já existe uma instalação (atualiza no lugar).
     update: bool,
+    found: Found,
     scale: f32,
     dark: bool,
     mica: bool,
@@ -394,7 +436,11 @@ pub fn run(mode: Mode) {
         let (ww, wh) = (rc.right - rc.left, rc.bottom - rc.top);
         let x = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2;
         let y = ((GetSystemMetrics(SM_CYSCREEN) - wh) / 2).max(0);
-        let title = tr(if mode == Mode::Install { "Instalar o Taskbeat" } else { "Remover o Taskbeat" });
+        let title = tr(match mode {
+            Mode::Install if installed_version().is_some() => "Atualizar o Taskbeat",
+            Mode::Install => "Instalar o Taskbeat",
+            Mode::Uninstall => "Remover o Taskbeat",
+        });
         let Ok(hwnd) = CreateWindowExW(WINDOW_EX_STYLE(0), class, &HSTRING::from(title), STYLE, x, y, ww, wh, None, None, Some(hinst), None) else {
             return;
         };
@@ -404,7 +450,8 @@ pub fn run(mode: Mode) {
         let mut text = TextRenderer::new();
         text.set_capacity(200);
         text.set_scale(scale);
-        let update = reg_get_sz(UNINSTALL_KEY, "InstallLocation").is_some();
+        let found = classify(installed_version().as_deref(), VERSION);
+        let update = found != Found::Fresh;
         let dir = if mode == Mode::Uninstall {
             std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(default_dir)
         } else {
@@ -421,6 +468,7 @@ pub fn run(mode: Mode) {
                 hwnd,
                 mode,
                 update,
+                found,
                 scale,
                 dark,
                 mica,
@@ -457,7 +505,8 @@ struct Lay {
     banner: RectF,
     path: RectF,
     change: RectF,
-    opts: Vec<RectF>,
+    /// (índice da opção, retângulo) das opções visíveis.
+    opts: Vec<(usize, RectF)>,
     cancel: Option<RectF>,
     primary: RectF,
     /// Link "Licença MIT e avisos de terceiros" no rodapé.
@@ -470,8 +519,14 @@ impl St {
         let banner = RectF::new(16.0 * s, 16.0 * s, (W - 32.0) * s, 150.0 * s);
         let path = RectF::new(24.0 * s, 214.0 * s, (W - 48.0 - 128.0) * s, 38.0 * s);
         let change = RectF::new(path.right() + 8.0 * s, path.y, 120.0 * s, 38.0 * s);
-        let first = if self.mode == Mode::Install { 272.0 } else { 268.0 };
-        let opts = (0..self.opts.len()).map(|i| RectF::new(16.0 * s, (first + i as f32 * 40.0) * s, (W - 32.0) * s, 36.0 * s)).collect();
+        // Atualização: pasta, inicialização e atalhos continuam como estão; só
+        // sobra "abrir ao terminar".
+        let (first, visible): (f32, Vec<usize>) = match (self.mode, self.update) {
+            (Mode::Install, false) => (272.0, (0..self.opts.len()).collect()),
+            (Mode::Install, true) => (326.0, vec![2]),
+            (Mode::Uninstall, _) => (268.0, (0..self.opts.len()).collect()),
+        };
+        let opts = visible.into_iter().enumerate().map(|(row, i)| (i, RectF::new(16.0 * s, (first + row as f32 * 40.0) * s, (W - 32.0) * s, 36.0 * s))).collect();
         let by = (H - 58.0) * s;
         let primary_label = self.primary_label();
         let pw = (self.text.mask(tr(primary_label), Font::BodyStrong, (300.0 * s) as i32, (20.0 * s) as i32, Align::Left).used_width() + 48.0 * s).max(120.0 * s);
@@ -484,14 +539,14 @@ impl St {
 
     fn primary_label(&self) -> &'static str {
         match (&self.phase, self.mode) {
-            (Phase::Ready, Mode::Install) => {
-                if self.update {
-                    "Atualizar"
-                } else {
-                    "Instalar"
-                }
-            }
+            (Phase::Ready, Mode::Install) => match self.found {
+                Found::Fresh => "Instalar",
+                Found::Older(_) => "Atualizar",
+                Found::Same => "Reinstalar",
+                Found::Newer(_) => "Instalar mesmo assim",
+            },
             (Phase::Ready, Mode::Uninstall) => "Remover",
+            (Phase::Working(_), Mode::Install) if self.update => "Atualizando…",
             (Phase::Working(_), Mode::Install) => "Instalando…",
             (Phase::Working(_), Mode::Uninstall) => "Removendo…",
             (Phase::Done, Mode::Install) => "Concluir",
@@ -510,13 +565,13 @@ impl St {
         if l.cancel.is_some_and(|c| c.contains(x, y)) {
             return Some(Hit::Cancel);
         }
-        if self.mode == Mode::Install && l.change.contains(x, y) {
+        if self.mode == Mode::Install && !self.update && l.change.contains(x, y) {
             return Some(Hit::Change);
         }
         if self.mode == Mode::Install && l.licenses.contains(x, y) {
             return Some(Hit::Licenses);
         }
-        l.opts.iter().position(|r| r.contains(x, y)).map(Hit::Opt)
+        l.opts.iter().find(|(_, r)| r.contains(x, y)).map(|(i, _)| Hit::Opt(*i))
     }
 
     fn fg(&self) -> Rgb {
@@ -594,6 +649,9 @@ impl St {
         let x0 = 24.0 * s;
         let body_w = (W - 48.0) * s;
         match (&self.phase, self.mode) {
+            (Phase::Ready, Mode::Install) if self.update => {
+                self.paint_update(cv, &l);
+            }
             (Phase::Ready, Mode::Install) => {
                 ui::text(cv, &mut self.text, tr("Pasta de instalação"), Font::BodyStrong, x0, 184.0 * s, body_w, 24.0 * s, fg, 1.0);
                 self.draw_box(cv, l.path, false);
@@ -620,7 +678,7 @@ impl St {
                 self.draw_options(cv, &l);
             }
             (Phase::Working(start), _) => {
-                let label = tr(if self.mode == Mode::Install { "Instalando…" } else { "Removendo…" });
+                let label = tr(self.primary_label());
                 ui::text(cv, &mut self.text, label, Font::Display, x0, 196.0 * s, body_w, 28.0 * s, fg, 1.0);
                 let p = (start.elapsed().as_secs_f32() / 0.9).min(if self.result.is_some() { 1.0 } else { 0.85 });
                 let p = ui::ease_out_cubic(p);
@@ -634,7 +692,11 @@ impl St {
                 ui::glyph(cv, &mut self.text, c, "\u{E73E}", Font::IconLg, crate::render::on_color(self.accent), 1.0);
                 let tx = x0 + 60.0 * s;
                 let tw = body_w - 60.0 * s;
-                if mode == Mode::Install {
+                if mode == Mode::Install && self.update {
+                    ui::text(cv, &mut self.text, tr("Pronto! O Taskbeat foi atualizado."), Font::Display, tx, 192.0 * s, tw, 28.0 * s, fg, 1.0);
+                    let line = format!("{} v{VERSION}. {}", tr("Agora na versão"), tr("Suas configurações foram mantidas."));
+                    self.paragraph(cv, &line, Font::Body, tx, 226.0 * s, tw, 22.0 * s, fg, 0.78);
+                } else if mode == Mode::Install {
                     ui::text(cv, &mut self.text, tr("Pronto! O Taskbeat foi instalado."), Font::Display, tx, 192.0 * s, tw, 28.0 * s, fg, 1.0);
                     let y = self.paragraph(cv, tr("A música aparece na barra de tarefas, ao lado do relógio, sempre que algo estiver tocando."), Font::Body, tx, 226.0 * s, tw, 22.0 * s, fg, 0.78);
                     self.paragraph(cv, tr("As configurações ficam no ícone do Taskbeat perto do relógio e no Menu Iniciar."), Font::Body, tx, y + 8.0 * s, tw, 22.0 * s, fg, 0.78);
@@ -676,6 +738,64 @@ impl St {
         ui::text_center(cv, &mut self.text, label, Font::BodyStrong, l.primary.offset(0.0, -1.0 * s), on, 1.0);
     }
 
+    /// Já instalado: compara as versões e atualiza no lugar (sem desinstalar).
+    fn paint_update(&mut self, cv: &mut Canvas, l: &Lay) {
+        let s = self.scale;
+        let fg = self.fg();
+        let x0 = 24.0 * s;
+        let body_w = (W - 48.0) * s;
+        let (title, from, desc) = match self.found.clone() {
+            Found::Older(v) => (
+                "Atualização disponível",
+                Some(v),
+                "O Taskbeat instalado será atualizado no mesmo lugar. Configurações, atalhos e inicialização com o Windows continuam como estão; não precisa desinstalar.",
+            ),
+            Found::Same => ("Esta versão já está instalada", None, "Dá para reinstalar por cima, se algo não estiver funcionando. Suas configurações são mantidas."),
+            Found::Newer(v) => ("Uma versão mais nova já está instalada", Some(v), "Este instalador é mais antigo que o Taskbeat instalado. Instalar volta para a versão dele."),
+            Found::Fresh => ("", None, ""),
+        };
+        ui::text(cv, &mut self.text, tr(title), Font::Display, x0, 182.0 * s, body_w, 28.0 * s, fg, 1.0);
+
+        // Versões: instalada → deste instalador.
+        let y = 220.0 * s;
+        let h = 30.0 * s;
+        let pill = |st: &mut St, cv: &mut Canvas, x: f32, label: &str, caption: &str, strong: bool| -> f32 {
+            let tw = st.text.mask(label, Font::BodyStrong, (200.0 * s) as i32, h as i32, Align::Left).used_width();
+            let r = RectF::new(x, y, tw + 28.0 * s, h);
+            if strong {
+                cv.fill_round(r, h / 2.0, st.accent, 1.0);
+                ui::text_center(cv, &mut st.text, label, Font::BodyStrong, r, crate::render::on_color(st.accent), 1.0);
+            } else {
+                st.draw_box(cv, r, false);
+                ui::text_center(cv, &mut st.text, label, Font::BodyStrong, r, fg, 0.9);
+            }
+            ui::text(cv, &mut st.text, caption, Font::Small, r.x + 2.0 * s, r.bottom() + 2.0 * s, 160.0 * s, 16.0 * s, fg, 0.55);
+            r.right()
+        };
+        let mine = format!("v{VERSION}");
+        match from {
+            Some(old) => {
+                let old = format!("v{}", old.trim_start_matches(['v', 'V']));
+                let newer = matches!(self.found, Found::Older(_));
+                let x = pill(self, cv, x0, &old, tr("instalada"), !newer);
+                let arrow = RectF::new(x + 6.0 * s, y, 28.0 * s, h);
+                ui::glyph(cv, &mut self.text, arrow, "\u{E72A}", Font::IconSmall, fg, 0.7);
+                pill(self, cv, arrow.right() + 6.0 * s, &mine, tr("este instalador"), newer);
+            }
+            None => {
+                pill(self, cv, x0, &mine, tr("instalada"), true);
+            }
+        }
+        self.paragraph(cv, tr(desc), Font::Body, x0, 274.0 * s, body_w, 21.0 * s, fg, 0.72);
+        self.draw_options(cv, l);
+        let note_w = (l.cancel.map(|c| c.x).unwrap_or(l.primary.x) - x0 - 12.0 * s).max(10.0);
+        let place = format!("{} {}", tr("Pasta:"), self.dir.display());
+        ui::text(cv, &mut self.text, &place, Font::Caption, x0, l.primary.y + 1.0 * s, note_w, 18.0 * s, fg, 0.55);
+        let hot = self.hover == Some(Hit::Licenses);
+        let lr = l.licenses;
+        ui::text(cv, &mut self.text, tr("Licença MIT e avisos de terceiros"), Font::Caption, lr.x, lr.y, note_w, lr.h, self.accent, if hot { 1.0 } else { 0.9 });
+    }
+
     fn draw_box(&self, cv: &mut Canvas, r: RectF, hot: bool) {
         let s = self.scale;
         let a = if self.dark { if hot { 0.09 } else { 0.06 } } else if hot { 0.5 } else { 0.75 };
@@ -688,7 +808,8 @@ impl St {
         let s = self.scale;
         let fg = self.fg();
         let labels = opt_labels(self.mode);
-        for (i, r) in l.opts.iter().enumerate() {
+        for &(i, r) in &l.opts {
+            let r = &r;
             let on = self.opts[i];
             let hot = self.hover == Some(Hit::Opt(i));
             if hot {
@@ -751,8 +872,14 @@ fn primary(st: &mut St) -> bool {
         Phase::Working(_) => false,
         Phase::Done => {
             if st.mode == Mode::Install && st.opts[2] {
+                // Atualização: só volta a abrir o app (ele já estava configurado);
+                // instalação nova: abre as configurações para mostrar que está rodando.
                 let exe = st.dir.join("Taskbeat.exe");
-                let _ = Command::new(&exe).arg("--settings").current_dir(&st.dir).spawn();
+                let mut cmd = Command::new(&exe);
+                if !st.update {
+                    cmd.arg("--settings");
+                }
+                let _ = cmd.current_dir(&st.dir).spawn();
             }
             if st.mode == Mode::Uninstall {
                 schedule_self_delete(&st.dir);
@@ -949,5 +1076,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compara_versoes() {
+        assert_eq!(classify(None, "1.1.0"), Found::Fresh);
+        assert_eq!(classify(Some(""), "1.1.0"), Found::Fresh);
+        assert_eq!(classify(Some("1.0.1"), "1.1.0"), Found::Older("1.0.1".into()));
+        assert_eq!(classify(Some("1.1.0"), "1.1.0"), Found::Same);
+        assert_eq!(classify(Some("1.10.0"), "1.9.3"), Found::Newer("1.10.0".into()));
+        assert_eq!(classify(Some("v1.0"), "1.0.0"), Found::Same);
+        assert_eq!(parse_version("2.3.4-beta"), (2, 3, 4));
     }
 }
