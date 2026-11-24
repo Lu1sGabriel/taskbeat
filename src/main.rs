@@ -20,6 +20,8 @@ mod settings;
 mod setup;
 mod shared;
 #[cfg(test)]
+mod demo_gif;
+#[cfg(test)]
 mod shots;
 mod system;
 mod taskbar;
