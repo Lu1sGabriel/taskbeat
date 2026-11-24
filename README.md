@@ -2,6 +2,7 @@
 
 Widget de música para a barra de tarefas do Windows 10/11, feito em Rust, no estilo
 Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playing" do Dribbble).
+No Mac, o mesmo app vive no **notch do MacBook** ([veja a seção do Mac](#mac-macbook)).
 
 <img src="assets/taskbeat-256.png" width="96" alt="Ícone do Taskbeat">
 
@@ -224,18 +225,96 @@ antes de abrir o app grava cada leitura do player e cada troca de faixa
 - Só a barra do monitor principal.
 - A tela de configurações ainda não tem navegação por teclado.
 
+## Mac (MacBook)
+
+No Mac não existe barra de tarefas: o Taskbeat vive no **notch** do MacBook.
+Fechado, ele vira uma "ilha" preta emendada no notch, com a capa de um lado e as
+barras de áudio (ou o indicador "tocando agora") do outro. Passando o mouse (ou
+clicando), a ilha cresce para baixo no card: capa grande, título, artista · álbum,
+progresso arrastável, aleatório / anterior / play / próximo / repetir e volume
+(dá para rolar sobre o card para mudar o volume). Quando o player troca de música
+sozinho, a ilha abre pela metade com o **"A seguir"** e fecha sozinha. Em Macs
+sem notch (ou monitor externo) a ilha fica no topo, no meio da barra de menus,
+com o título no centro.
+
+<p align="center">
+  <img src="docs/screenshots/mac-notch-open.png" width="560" alt="Ilha do Taskbeat aberta no notch do MacBook, com capa, título, progresso, botões e volume">
+</p>
+<p align="center">
+  <img src="docs/screenshots/mac-notch-closed.png" width="49%" alt="Ilha fechada: capa à esquerda do notch e barras de áudio à direita">
+  <img src="docs/screenshots/mac-notch-peek.png" width="49%" alt="Ilha aberta pela metade com a próxima música (A seguir)">
+</p>
+
+- **Visual do macOS**: mesmos layouts e opções do Windows, com SF Pro, ícones SF
+  Symbols e animações no ritmo da tela (com um quique leve ao abrir).
+- **Configurações nativas** (ícone ♪ na barra de menus > Configurações…, ou ⌘,):
+  janela do próprio AppKit, no estilo dos Ajustes do Sistema, com prévia da ilha.
+  Fundo do card aberto (preto como o notch, cor do álbum ou capa desfocada),
+  abrir ao passar o mouse ou só no clique, ícone na barra de menus (desligado, o
+  menu abre com o botão direito no notch), abrir ao iniciar a sessão, idioma.
+- **Música**: o "Tocando Agora" do macOS, de qualquer player (Spotify, Música,
+  YouTube no navegador, Podcasts…), pelo [mediaremote-adapter](https://github.com/ungive/mediaremote-adapter)
+  (desde o macOS 15.4 só apps da Apple leem o Tocando Agora diretamente). Sem ele,
+  Spotify e Música são lidos por AppleScript.
+- **Barras de áudio**: captura do som do sistema com Core Audio taps, só enquanto
+  um player toca.
+
+Requer **macOS 14.2 ou mais novo** (Apple Silicon ou Intel).
+
+### Instalar
+
+Baixe o `Taskbeat-<versão>.dmg` e arraste o Taskbeat para Aplicativos. O app não
+é notarizado pela Apple (não tem conta paga de desenvolvedor), então na primeira
+vez o macOS bloqueia: abra **Ajustes do Sistema > Privacidade e Segurança** e clique
+em **Abrir Mesmo Assim** (ou, no Terminal, `xattr -dr com.apple.quarantine /Applications/Taskbeat.app`).
+
+Permissões que o macOS pede:
+
+- **Gravação de áudio do sistema** (barras de áudio). Enquanto as barras captam o
+  som, o macOS mostra um ponto roxo na barra de menus; com as barras desligadas
+  (Configurações > Visualizador) nada é captado. Nada é gravado nem guardado.
+- **Automação** (só na reserva por AppleScript): para ler e controlar o Spotify e
+  o Música.
+
+Como o app só tem assinatura ad-hoc, cada versão nova é um app "diferente" para o
+macOS e as permissões podem ser pedidas de novo depois de atualizar.
+
+### Compilar
+
+Num Mac com as Command Line Tools do Xcode, Rust e CMake:
+
+```bash
+./build-macos.sh
+```
+
+Gera `dist/Taskbeat.app` (universal: Apple Silicon + Intel) e
+`dist/Taskbeat-<versão>.dmg`. O adaptador do Tocando Agora é baixado numa versão
+fixa e compilado junto. Para testar sem esperar: `TV_DEMO_MEDIA=1`,
+`TV_DEMO_FLYOUT=1`, `TV_DEMO_POPUP=1`, `TV_DEMO_SETTINGS=1` e, para simular um
+notch numa tela sem notch, `TASKBEAT_FAKE_NOTCH=196x32`.
+
+O GitHub Actions ([macos.yml](.github/workflows/macos.yml)) compila, roda os
+testes, gera o `.dmg` e abre o app num macOS de verdade: tira prints da ilha e
+testa de ponta a ponta com um player de teste publicando no Tocando Agora
+([ci-nowplaying.swift](macos/ci-nowplaying.swift)). Configurações no Mac ficam em
+`~/Library/Application Support/Taskbeat/config.toml`.
+
+Limitações no Mac: ainda não há aviso de Caps Lock (o macOS já tem o dele), nem
+selo do app de origem na ilha; os prints do CI são de um Mac virtual sem notch
+físico (o notch é simulado).
+
 ## Licença
 
 O Taskbeat é distribuído sob a [licença MIT](LICENSE): pode usar, copiar, modificar
 e distribuir, mantendo o aviso de copyright.
 
-As bibliotecas de terceiros usadas (todas com licenças permissivas: MIT, Apache-2.0 e
-Unicode-3.0) estão listadas, com seus avisos de copyright, em
+As bibliotecas de terceiros usadas (todas com licenças permissivas: MIT, Apache-2.0,
+Zlib, BSD-3-Clause e Unicode-3.0) estão listadas, com seus avisos de copyright, em
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Para atualizar a lista:
 `python tools/third_party_notices.py`.
 
-As fontes Segoe UI Variable e Segoe Fluent Icons são do próprio Windows e não são
-distribuídas com o app.
+As fontes Segoe UI Variable e Segoe Fluent Icons são do próprio Windows, e a SF Pro
+e os SF Symbols são do próprio macOS; nenhuma delas é distribuída com o app.
 
 ## Créditos
 
