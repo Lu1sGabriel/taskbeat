@@ -59,12 +59,18 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
 - **Na barra de tarefas** (compacto): capa + título/artista, indicador animado
   "tocando agora" e letreiro para títulos longos, tudo dentro de um único fundo.
   Fica sempre na barra (com "Nada tocando" quando não há música; dá para desligar).
-  Os botões ficam no card por padrão; ligados na barra, entram no mesmo fundo
-  (⏮ ▶ ⏭, mais aleatório e repetir opcionais), com separador, play preenchido ou
-  só ícone e formato do fundo (arredondado, pílula, reto).
+  Os botões de mídia entram no mesmo fundo (⏮ ▶ ⏭, mais aleatório e repetir
+  opcionais), com separador, play preenchido ou só ícone e formato do fundo
+  (arredondado, pílula, reto); dá para deixá-los só no card. Dá para escolher a
+  segunda linha (artista, artista · álbum, álbum ou tempo), o tamanho da capa e
+  do texto, a cor do fundo (neutra, da capa ou de destaque), a opacidade e o
+  contorno. Ao trocar de música, o título novo desliza e a capa nova aparece
+  suavemente (opcional).
 - **Card expandido** (clique na música): capa grande, aleatório / anterior / play /
   próximo / repetir, barra de progresso arrastável e volume. O app de origem
-  (Spotify, Brave…) fica escondido por padrão (opção "Mostrar app de origem").
+  (Spotify, Brave…) fica escondido por padrão; com a opção "Mostrar app de
+  origem", aparece como selo (ícone + nome) no card e no "A seguir", e como um
+  selo recortado no canto da capa na barra.
   Fundo **capa desfocada**, **cor do álbum** ou **acrílico** (vidro fosco que
   desfoca o que está atrás); layout horizontal ou vertical; tema; cor de destaque
   (capa ou Windows); cantos; formato do play. Mostra também o álbum, quando o
@@ -81,11 +87,18 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   desfoque), ícone (letra, cadeado ou teclado), animação (deslizar, zoom ou
   esmaecer), cantos, tamanho, tema, duração e botão "Mostrar agora". Só essas duas
   teclas são observadas; nada do que você digita é lido.
-- **Barras de áudio dinâmicas** (desligadas por padrão): mini visualizador.
+- **Barras de áudio dinâmicas**: mini visualizador ao lado da música, nas cores
+  da capa (dá para desligar; com a música pausada, ficam em repouso).
 - **Configurações** (clique no ícone da bandeja): janela Fluent com fundo Mica,
   abre maximizada (redimensionável), pré-visualização ao vivo de cada componente
-  sempre à vista (fica fixa no topo enquanto as opções rolam),
-  controles segmentados e rolagem suave a 60 fps.
+  sempre à vista (fica fixa no topo enquanto as opções rolam), rolagem suave no
+  ritmo do monitor, interruptores e seletores animados, e transição entre
+  páginas. Opções que dependem de outra (ex.: aleatório/repetir na barra sem os
+  botões da barra) ficam apagadas e desligadas, com uma dica explicando o que
+  ligar antes.
+- **Menu da bandeja** (botão direito no ícone): no mesmo visual (acrílico,
+  cantos arredondados), com a música atual, botões de mídia e interruptores.
+  As listas das configurações usam o mesmo menu.
 
 Funciona com qualquer player que publique no painel de mídia do Windows (SMTC):
 Spotify, YouTube / YouTube Music no navegador, Apple Music, Deezer, TIDAL, VLC,
@@ -99,9 +112,9 @@ Pensado para PCs modestos (medido no build release, i5-10400F):
 
 | Situação | CPU | RAM (working set) |
 |---|---|---|
-| Música pausada, padrão | ~0,1% de 1 núcleo | ~11 MB (≈3 MB após assentar) |
-| Configurações abertas, paradas | ~0,5% de 1 núcleo | ~50 MB (volta a ~2 MB ao fechar) |
-| Configurações rolando | ~4% de 1 núcleo | — |
+| Música pausada, padrão | ~0,2% de 1 núcleo | ~5 MB após assentar |
+| Configurações abertas, paradas | ~0,2–2% de 1 núcleo (conforme a prévia; pausada, ~0,2%) | ~30 MB (volta a ~8 MB ao fechar) |
+| Configurações rolando (60 fps) | ~10% de 1 núcleo | — |
 | Barras dinâmicas ligadas | ~0,2–0,5% de 1 núcleo | ~12 MB |
 | Versão anterior | ~1% de 1 núcleo | ~35 MB |
 
@@ -109,11 +122,15 @@ Como:
 - Captura de áudio (WASAPI) **só com o visualizador ligado**.
 - Mídia **orientada a eventos** do Windows (troca de sessão/música/play-pause), com checagem de segurança a cada 2 s.
 - Threads de segundo plano em **EcoQoS** + prioridade abaixo do normal (Windows 11 usa núcleos/frequências econômicos).
-- O widget **não redesenha quando nada muda**; repouso a 4 fps; 30 fps só para o indicador/letreiro; 60 fps apenas durante interação/animação.
+- O widget **não redesenha quando nada muda**; repouso a 4 fps; 30 fps só para o indicador/letreiro; animações no **ritmo do monitor** (vblank, sem engasgos), e só enquanto animam.
 - Cópias de dados e consultas só quando algo muda (versão da mídia, tema por mensagem do sistema, volume só com o card aberto).
 - Memória de inicialização e da tela de configurações devolvida ao Windows.
 - Configurações: a coluna de opções é desenhada uma vez e só copiada ao rolar;
-  a prévia animada redesenha apenas a própria área; timer parado quando nada anima.
+  passar o mouse, clicar ou arrastar redesenha só a linha afetada; a prévia só
+  refaz o componente que mexe e só quando o quadro muda; textos das outras
+  páginas são preparados aos poucos em segundo plano; nada roda quando nada anima.
+- Desenho por software com caminhos rápidos em inteiros (preenchimento, texto e
+  composição), em vez de ponto flutuante pixel a pixel.
 - Build: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`, `strip` (Rust Performance Book).
 
 ## Como funciona
@@ -133,6 +150,8 @@ Como:
 | Posição | `Shell_TrayWnd` + `TrayNotifyWnd`, DPI por monitor, oculta em tela cheia | `src/taskbar.rs` |
 | Configurações | Janela desenhada pelo app, Mica (`DWMWA_SYSTEMBACKDROP_TYPE`) | `src/settings.rs` |
 | Bandeja | `Shell_NotifyIconW` | `src/tray.rs` |
+| Menu (bandeja e listas) | Janela *layered* própria, acrílico, loop modal | `src/menu.rs` |
+| Ritmo das animações | Thread que espera o vblank (DXGI `WaitForVBlank`; sem DXGI, `DwmFlush`) | `src/vsync.rs` |
 | Ícone e versão do .exe | `app.rc` compilado pelo `rc.exe` do Windows SDK (`build.rs`) | `assets/` |
 
 ## Idiomas
