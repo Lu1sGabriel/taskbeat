@@ -29,7 +29,13 @@ run live-open TV_DEMO_MEDIA=1 TASKBEAT_FAKE_NOTCH=196x32 TV_DEMO_FLYOUT=1
 run live-peek TV_DEMO_MEDIA=1 TASKBEAT_FAKE_NOTCH=196x32 TV_DEMO_POPUP=1
 run live-settings TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1
 run live-settings-viz TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1 TV_DEMO_SETTINGS_PAGE=2
-run live-settings-general TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1 TV_DEMO_SETTINGS_PAGE=3
+run live-settings-caps TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1 TV_DEMO_SETTINGS_PAGE=3
+run live-settings-general TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1 TV_DEMO_SETTINGS_PAGE=4
+run live-caps TV_DEMO_MEDIA=1 TV_DEMO_CAPS=1
+# Caminhos dos macOS 12/13 (sem CADisplayLink, sem taps de áudio).
+run legacy-open TV_DEMO_MEDIA=1 TASKBEAT_FAKE_NOTCH=196x32 TV_DEMO_FLYOUT=1 TASKBEAT_FORCE_LEGACY=1
+run legacy-caps TV_DEMO_MEDIA=1 TV_DEMO_CAPS=1 TASKBEAT_FORCE_LEGACY=1
+run legacy-settings TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1 TASKBEAT_FORCE_LEGACY=1
 
 # ---- 2. Player de teste no Tocando Agora
 say -o /tmp/taskbeat-ci.aiff "Taskbeat. Testing the now playing island on the notch of the MacBook." || true

@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 ADAPTER_REPO=https://github.com/ungive/mediaremote-adapter.git
 ADAPTER_REV=2ef957c736256cee7905c9f3f1c7e279087bf195
-export MACOSX_DEPLOYMENT_TARGET=14.2
+export MACOSX_DEPLOYMENT_TARGET=12.0
 
 rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
 cargo build --release --target aarch64-apple-darwin
@@ -25,7 +25,7 @@ if [ ! -d "$AD/.git" ] || [ "$(git -C "$AD" rev-parse HEAD)" != "$ADAPTER_REV" ]
     git -C "$AD" fetch -q --depth 1 origin "$ADAPTER_REV"
     git -C "$AD" checkout -q FETCH_HEAD
 fi
-cmake -S "$AD" -B "$AD/build" -DCMAKE_BUILD_TYPE=Release >/dev/null
+cmake -S "$AD" -B "$AD/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 >/dev/null
 cmake --build "$AD/build" --config Release >/dev/null
 
 APP=dist/Taskbeat.app

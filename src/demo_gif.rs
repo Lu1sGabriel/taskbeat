@@ -262,8 +262,10 @@ fn lzw_encode(data: &[u8]) -> Vec<u8> {
 
 // ---------------------------------------------------------------- cena
 
-const W: f32 = 720.0;
-const H: f32 = 370.0;
+/// Escala do GIF (2x: nítido em telas de alta densidade; o README mostra com metade da largura).
+const K: f32 = 2.0;
+const W: f32 = 720.0 * K;
+const H: f32 = 370.0 * K;
 const FPS: f32 = 20.0;
 const TOTAL: f32 = 10.8;
 
@@ -311,15 +313,6 @@ fn fill_poly(cv: &mut Canvas, pts: &[(f32, f32)], c: Rgb, a: f32) {
     }
 }
 
-fn cursor(cv: &mut Canvas, x: f32, y: f32) {
-    let outer = [(0.0, 0.0), (0.0, 18.0), (4.4, 14.0), (7.6, 21.0), (10.4, 19.8), (7.3, 13.0), (13.0, 13.0)];
-    let inner = [(1.3, 3.0), (1.3, 15.0), (4.8, 11.9), (8.2, 19.2), (9.0, 18.8), (5.6, 11.6), (10.2, 11.6)];
-    let shadow: Vec<(f32, f32)> = outer.iter().map(|&(a, b)| (x + a + 1.0, y + b + 1.5)).collect();
-    fill_poly(cv, &shadow, [0.0; 3], 0.25);
-    fill_poly(cv, &outer.map(|(a, b)| (x + a, y + b)), [0.0; 3], 1.0);
-    fill_poly(cv, &inner.map(|(a, b)| (x + a, y + b)), [1.0; 3], 1.0);
-}
-
 fn wallpaper(cv: &mut Canvas) {
     cv.fill_rrect_ca(0.0, 0.0, W, H, 0.0, |x, y| {
         let (u, v) = (x / W, y / H);
@@ -351,7 +344,7 @@ fn layer(w: f32, h: f32, f: impl FnOnce(&mut Canvas)) -> Image {
 #[test]
 #[ignore]
 fn demo_gif() {
-    let s = 1.0;
+    let s = K;
     let cfg = Config::default();
     let mut tr = TextRenderer::new();
     tr.set_scale(s);
@@ -367,47 +360,47 @@ fn demo_gif() {
     ];
 
     // Fundo fixo: papel de parede + barra de tarefas (sem o widget).
-    let bar = RectF::new(0.0, H - 48.0, W, 48.0);
-    let clock_x = W - 64.0;
+    let bar = RectF::new(0.0, H - 48.0 * s, W, 48.0 * s);
+    let clock_x = W - 64.0 * s;
     let bg = layer(W, H, |cv| {
         wallpaper(cv);
         cv.fill_round(bar, 0.0, [0.11, 0.11, 0.12], 0.96);
-        cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + 1.0, 0.0, 0.10, [1.0; 3]);
+        cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + s, 0.0, 0.10, [1.0; 3]);
         for k in 0..5 {
-            let ix = W * 0.10 + k as f32 * 40.0;
-            cv.fill_round(RectF::new(ix, bar.cy() - 11.0, 22.0, 22.0), 5.0, [0.85; 3], if k == 0 { 0.9 } else { 0.30 });
+            let ix = W * 0.10 + k as f32 * 40.0 * s;
+            cv.fill_round(RectF::new(ix, bar.cy() - 11.0 * s, 22.0 * s, 22.0 * s), 5.0 * s, [0.85; 3], if k == 0 { 0.9 } else { 0.30 });
         }
-        ui::text(cv, &mut tr, "12:34", Font::Caption, clock_x, bar.y + 6.0, 56.0, 18.0, [0.92; 3], 1.0);
-        ui::text(cv, &mut tr, "23/11/2026", Font::Caption, clock_x - 8.0, bar.y + 24.0, 70.0, 18.0, [0.92; 3], 0.8);
+        ui::text(cv, &mut tr, "12:34", Font::Caption, clock_x, bar.y + 6.0 * s, 56.0 * s, 18.0 * s, [0.92; 3], 1.0);
+        ui::text(cv, &mut tr, "23/11/2026", Font::Caption, clock_x - 8.0 * s, bar.y + 24.0 * s, 70.0 * s, 18.0 * s, [0.92; 3], 0.8);
         for (k, g) in ["\u{E995}", "\u{E701}", "\u{E70E}"].iter().enumerate() {
-            ui::glyph(cv, &mut tr, RectF::new(clock_x - (k as f32 + 1.0) * 26.0 - 12.0, bar.y, 24.0, bar.h), g, Font::IconSmall, [0.9; 3], 0.9);
+            ui::glyph(cv, &mut tr, RectF::new(clock_x - (k as f32 + 1.0) * 26.0 * s - 12.0 * s, bar.y, 24.0 * s, bar.h), g, Font::IconSmall, [0.9; 3], 0.9);
         }
     });
 
-    let wl = WLayout::build(s, 40.0, &cfg, true, false);
-    let wx = clock_x - 104.0 - wl.width;
-    let wrect = RectF::new(wx, bar.y + 4.0, wl.width, 40.0);
+    let wl = WLayout::build(s, 40.0 * s, &cfg, true, false);
+    let wx = clock_x - 104.0 * s - wl.width;
+    let wrect = RectF::new(wx, bar.y + 4.0 * s, wl.width, 40.0 * s);
     let cl = CLayout::build(s, &cfg, true);
-    let m = ui::SHADOW_MARGIN;
-    let card_x = (wx + 2.0 - m).min(W - cl.w + m - 16.0).round();
-    let card_y = (bar.y - (cl.h - m) - 10.0).round();
+    let m = ui::SHADOW_MARGIN * s;
+    let card_x = (wx + 2.0 * s - m).min(W - cl.w + m - 16.0 * s).round();
+    let card_y = (bar.y - (cl.h - m) - 10.0 * s).round();
     let abs = |r: RectF| (card_x + r.cx(), card_y + r.cy());
 
     // Caminho do mouse: (tempo, x, y).
-    let (wcx, wcy) = (wrect.cx() - 30.0, wrect.cy());
+    let (wcx, wcy) = (wrect.cx() - 30.0 * s, wrect.cy());
     let (px_, py_) = abs(cl.play);
     let (nx, ny) = abs(cl.next);
     let path = [
-        (0.0, 250.0, 150.0),
-        (0.5, 250.0, 150.0),
+        (0.0, 250.0 * s, 150.0 * s),
+        (0.5, 250.0 * s, 150.0 * s),
         (1.1, wcx, wcy),
         (1.6, wcx, wcy),
         (2.2, px_, py_),
         (3.5, px_, py_),
         (3.9, nx, ny),
         (4.4, nx, ny),
-        (5.0, 170.0, 130.0),
-        (TOTAL, 170.0, 130.0),
+        (5.0, 170.0 * s, 130.0 * s),
+        (TOTAL, 170.0 * s, 130.0 * s),
     ];
     let mouse = |t: f32| {
         let i = path.iter().rposition(|p| p.0 <= t).unwrap_or(0).min(path.len() - 2);
@@ -445,7 +438,7 @@ fn demo_gif() {
         let mut px = bg.px.clone();
         {
             let mut cv = Canvas::new(W as usize, H as usize, &mut px);
-            let widget = layer(wl.width, 40.0, |c| {
+            let widget = layer(wl.width, 40.0 * s, |c| {
                 let it = Interact { hover: on_widget.then_some(Hit::Info), pressed: (on_widget && pressed(t, 1.25)).then_some(Hit::Info), drag: None };
                 let fr = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &colors, &media), colors: &colors, it, pb, time: t, viz: None, flyout_open: open > 0.5, s, change: None };
                 ui::draw_widget(c, &mut tr, &wl, &fr);
@@ -466,7 +459,7 @@ fn demo_gif() {
                     let fr = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: ui::card_theme(&cfg, &colors, &media), it, pb, s, backdrop: None, hint: None };
                     ui::draw_card(c, &mut tr, &cl, &fr);
                 });
-                let slide = ((1.0 - open) * 14.0).round();
+                let slide = ((1.0 - open) * 14.0 * s).round();
                 cv.draw_image(RectF::new(card_x, card_y + slide, cl.w.ceil(), cl.h.ceil()), &card, 0.0, open);
             }
 
@@ -480,8 +473,8 @@ fn demo_gif() {
                     let th = ui::card_theme(&cfg, &colors, &media);
                     ui::draw_upnext(c, &mut tr, &cfg, &colors, &media, &th, s, tp, total, None);
                 });
-                let ux = (wx + 2.0 - m).min(W - uw + m - 16.0).round();
-                let uy = (bar.y - (uh - m) - 10.0 + (1.0 - e) * 18.0).round();
+                let ux = (wx + 2.0 * s - m).min(W - uw + m - 16.0 * s).round();
+                let uy = (bar.y - (uh - m) - 10.0 * s + (1.0 - e) * 18.0 * s).round();
                 cv.draw_image(RectF::new(ux, uy, uw.ceil(), uh.ceil()), &pop, 0.0, e);
             }
 
@@ -496,10 +489,10 @@ fn demo_gif() {
                     ui::draw_osd(c, &mut tr, &cfg, &colors, &th, s, crate::i18n::tr("Caps Lock"), false, true, to, None);
                 });
                 let ox = (W / 2.0 - ow / 2.0).round();
-                let oy = (bar.y - oh + m - 20.0 + (1.0 - e) * 14.0).round();
+                let oy = (bar.y - oh + m - 20.0 * s + (1.0 - e) * 14.0 * s).round();
                 cv.draw_image(RectF::new(ox, oy, ow.ceil(), oh.ceil()), &osd, 0.0, e);
             }
-            cursor(&mut cv, mx.round(), my.round());
+            cursor_scaled(&mut cv, mx.round(), my.round(), s);
         }
         out.push(px);
     }
@@ -513,4 +506,228 @@ fn demo_gif() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs").join("screenshots").join("demo.gif");
     std::fs::write(&path, &bytes).unwrap();
     println!("{} ({} quadros, {:.1} MB)", path.display(), frames, bytes.len() as f64 / 1e6);
+}
+
+// ---------------------------------------------------------------- GIFs do Mac
+
+/// GIFs do README do Mac, em 2x (nítidos em telas Retina): a ilha num MacBook
+/// com notch e num Mac sem notch. Abre com o mouse, pausa, pula a música,
+/// fecha, "A seguir" e aviso de Caps Lock. Desenhados pelo próprio código
+/// (no Mac do CI saem com SF Pro e SF Symbols).
+///
+/// ```bash
+/// TASKBEAT_LANG=pt cargo test --release mac_gifs -- --ignored
+/// ```
+#[test]
+#[ignore]
+fn mac_gifs() {
+    for (name, notch) in [("mac-notch.gif", true), ("mac-sem-notch.gif", false)] {
+        mac_gif(name, notch);
+    }
+}
+
+fn mac_gif(name: &str, has_notch: bool) {
+    use crate::notch::{self as nd, Geom, NLayout, NotchFrame};
+    const S: f32 = 2.0;
+    const MW: f32 = 720.0 * S;
+    const MH: f32 = 340.0 * S;
+    const MFPS: f32 = 20.0;
+    const MTOTAL: f32 = 12.0;
+
+    let cfg = Config::default();
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let a = ui::sample_media();
+    let art = a.art.clone().unwrap();
+    let song = |title: &str, artist: &str, album: &str, art: Arc<Image>, dur: f64| MediaInfo { title: title.into(), artist: artist.into(), album: album.into(), art: Some(art), dur, pos: 0.0, ..ui::sample_media() };
+    let songs = [
+        song("Midnight Drive", "Aurora Lane", "City Lights", art.clone(), 231.0),
+        song("Neon Skyline", "The Lumens", "Afterglow", recolor(&art, [2, 0, 1]), 204.0),
+        song("Golden Hour", "Paper Kites Club", "Summer Tapes", recolor(&art, [1, 0, 2]), 247.0),
+    ];
+    let colors0 = Colors { palette: cfg.palette, accent: [0.0, 0.48, 1.0], accent_light: [0.25, 0.6, 1.0], light_taskbar: false, album: None };
+
+    // Tela: notch de 196×32 pt (MacBook) ou barra de menus de 24 pt sem notch.
+    let g = if has_notch { Geom { notch_w: 196.0 * S, notch_h: 32.0 * S } } else { Geom { notch_w: 0.0, notch_h: 24.0 * S } };
+    let l = NLayout::build(S, g, &cfg, true);
+    let ox = ((MW - l.w) / 2.0).round();
+    let band = l.band;
+
+    // Fundo fixo: papel de parede, barra de menus, Dock genérico e o notch.
+    let dock = RectF::new(MW / 2.0 - 150.0 * S, MH - 58.0 * S, 300.0 * S, 50.0 * S);
+    let bg = layer(MW, MH, |cv| {
+        cv.fill_rrect_ca(0.0, 0.0, MW, MH, 0.0, |x, y| {
+            let (u, v) = (x / MW, y / MH);
+            let base = lerp3([0.16, 0.36, 0.78], [0.62, 0.30, 0.62], (u * 0.6 + v * 0.4).clamp(0.0, 1.0));
+            (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.45) * 1.5).clamp(0.0, 1.0) * 0.6), 1.0)
+        });
+        cv.fill_rrect(0.0, 0.0, MW, band, 0.0, 0.30, [0.0; 3]);
+        let left = if has_notch { "Música   Arquivo   Editar" } else { "Música   Arquivo   Editar   Ver   Janela" };
+        ui::glyph(cv, &mut tr, RectF::new(12.0 * S, 0.0, 22.0 * S, band), G_MUSIC, Font::IconSmall, [1.0; 3], 0.95);
+        ui::text(cv, &mut tr, left, Font::Body, 42.0 * S, 0.0, 260.0 * S, band, [1.0; 3], 0.95);
+        ui::text_right(cv, &mut tr, "Ter 24 nov  12:34", Font::Body, MW - 14.0 * S, 0.0, band, [1.0; 3], 0.95, S);
+        cv.fill_round(dock, 16.0 * S, [1.0; 3], 0.22);
+        cv.stroke_round(dock, 16.0 * S, S, [1.0; 3], 0.25);
+        let cols: [Rgb; 6] = [[0.25, 0.55, 0.98], [0.98, 0.35, 0.40], [0.35, 0.80, 0.45], [0.98, 0.75, 0.25], [0.65, 0.45, 0.95], [0.55, 0.58, 0.62]];
+        for (k, c) in cols.iter().enumerate() {
+            let r = RectF::new(dock.x + 12.0 * S + k as f32 * 47.0 * S, dock.y + 6.0 * S, 38.0 * S, 38.0 * S);
+            cv.fill_round(r, 9.0 * S, *c, 0.95);
+        }
+        if has_notch {
+            let n = l.notch.offset(ox, 0.0);
+            cv.fill_rrect(n.x, -12.0 * S, n.right(), n.bottom(), 10.0 * S, 1.0, [0.0; 3]);
+        }
+    });
+
+    // Pontos de interesse na tela (coordenadas da cena).
+    let at = |r: RectF| (ox + r.cx(), r.cy());
+    let (ix, iy) = (ox + l.c_art.cx() + 40.0 * S, band / 2.0);
+    let (px_, py_) = at(l.play);
+    let (nx, ny) = at(l.next);
+    let path = [
+        (0.0, 470.0 * S, 230.0 * S),
+        (0.4, 470.0 * S, 230.0 * S),
+        (1.0, ix, iy),
+        (1.9, ix, iy + 40.0 * S),
+        (2.4, px_, py_),
+        (3.6, px_, py_),
+        (4.0, nx, ny),
+        (4.7, nx, ny),
+        (5.3, 520.0 * S, 290.0 * S),
+        (MTOTAL, 520.0 * S, 290.0 * S),
+    ];
+    let mouse = |t: f32| {
+        let i = path.iter().rposition(|p| p.0 <= t).unwrap_or(0).min(path.len() - 2);
+        let (t0, x0, y0) = path[i];
+        let (t1, x1, y1) = path[i + 1];
+        let k = ease_io((t - t0) / (t1 - t0).max(1e-3));
+        (x0 + (x1 - x0) * k, y0 + (y1 - y0) * k)
+    };
+    let pressed = |t: f32, at: f32| (t - at).abs() < 0.07;
+
+    // Abre ao passar o mouse (1,15 s), fecha quando ele sai (5,7 s).
+    let open_at = |t: f32| {
+        if t < 1.15 {
+            0.0
+        } else if t < 5.7 {
+            nd::grow((t - 1.15) / 0.48)
+        } else {
+            1.0 - nd::shrink((t - 5.7) / 0.30)
+        }
+    };
+    // "A seguir": a música 2 acabou sozinha às 6,6 s.
+    let (peek_on, peek_off) = (6.6f32, 9.3f32);
+    let peek_at = |t: f32| {
+        if t < peek_on {
+            0.0
+        } else if t < peek_off {
+            nd::grow((t - peek_on) / 0.48)
+        } else {
+            1.0 - nd::shrink((t - peek_off) / 0.30)
+        }
+    };
+
+    let frames = (MTOTAL * MFPS) as usize;
+    let mut out: Vec<Vec<u32>> = Vec::with_capacity(frames);
+    let (sw, sh) = (l.w.ceil() as usize, l.h.ceil() as usize);
+    for f in 0..frames {
+        let t = f as f32 / MFPS;
+        let (mx, my) = mouse(t);
+        let (si, start, pos0) = if t < 4.2 {
+            (0, 0.0, 96.0)
+        } else if t < peek_on {
+            (1, 4.2, 196.0)
+        } else {
+            (2, peek_on, 0.0)
+        };
+        let paused = (2.6..3.3).contains(&t);
+        let mut media = songs[si].clone();
+        let played = if si == 0 { (t.min(2.6) - start) + (t - 3.3).max(0.0) } else { t - start };
+        media.pos = pos0 + played.max(0.0) as f64;
+        media.playing = !paused;
+        let colors = Colors { album: media.art.as_ref().map(|a| a.vibrant), ..colors0 };
+        let open = open_at(t);
+        let peek = peek_at(t);
+        // Barras: espectro de mentira, animado (parado na pausa).
+        let values: Vec<f32> = (0..cfg.bars)
+            .map(|i| if paused { 0.05 } else { (0.30 + 0.62 * ((t * (5.0 + i as f32 * 1.3) + i as f32 * 1.9).sin() * 0.5 + 0.5)) * (1.0 - i as f32 * 0.05) })
+            .collect();
+        let peaks: Vec<f32> = values.iter().map(|v| (v + 0.1).min(1.0)).collect();
+        let lx = mx - ox;
+        let hover = if open > 0.85 { l.hit(lx, my, true) } else { None };
+        let down = pressed(t, 2.6) || pressed(t, 3.3) || pressed(t, 4.2);
+        let change = if (4.2..4.75).contains(&t) {
+            Some((&songs[0], (t - 4.2) / 0.55))
+        } else if (peek_on..peek_on + 0.55).contains(&t) && open < 0.01 {
+            None
+        } else {
+            None
+        };
+        let fr = NotchFrame {
+            cfg: &cfg,
+            colors: &colors,
+            media: &media,
+            theme: nd::theme(&cfg, &colors, &media),
+            it: Interact { hover, pressed: if down { hover } else { None }, drag: None },
+            pb: Playback { playing: !paused, shuffle: media.shuffle, repeat: media.repeat, pos: media.pos, seek_preview: None, volume: 0.62, muted: false },
+            time: t,
+            viz: Some((&values, &peaks)),
+            open,
+            peek,
+            peek_t: (t - peek_on).max(0.0),
+            peek_total: peek_off - peek_on + 0.3,
+            hint: None,
+            change,
+        };
+        let mut island = vec![0u32; sw * sh];
+        nd::draw(&mut Canvas::new(sw, sh, &mut island), &mut tr, &l, &fr);
+        let mut px = bg.px.clone();
+        {
+            let mut cv = Canvas::new(MW as usize, MH as usize, &mut px);
+            cv.composite(ox as i32, 0, &island, sw, sh, 1.0);
+
+            // Aviso de Caps Lock (embaixo, acima do Dock), com zoom.
+            let to = t - 9.8;
+            let secs = cfg.osd_duration as f32 / 10.0;
+            if (0.0..secs).contains(&to) {
+                let (ow, oh) = ui::osd_size(S, &cfg);
+                let e = if to < 0.3 { ui::ease_enter(to / 0.3) } else if to > secs - 0.22 { 1.0 - ui::ease_exit((to - (secs - 0.22)) / 0.22) } else { 1.0 };
+                let osd = layer(ow, oh, |c| {
+                    let th = ui::osd_theme(&cfg, &colors0);
+                    ui::draw_osd(c, &mut tr, &cfg, &colors0, &th, S, crate::i18n::tr("Caps Lock"), false, true, to, None);
+                });
+                let k = 0.88 + 0.12 * e;
+                let (zw, zh) = (ow * k, oh * k);
+                let m = ui::SHADOW_MARGIN * S;
+                let cy = dock.y - 18.0 * S - (oh - 2.0 * m) / 2.0;
+                cv.draw_image(RectF::new((MW / 2.0 - zw / 2.0).round(), (cy - zh / 2.0).round(), zw.round(), zh.round()), &osd, 0.0, e);
+            }
+            cursor_scaled(&mut cv, mx.round(), my.round(), S);
+        }
+        out.push(px);
+    }
+
+    let samples: Vec<&[u32]> = out.iter().step_by(10).map(|v| v.as_slice()).collect();
+    let mut gif = Gif::new(MW as usize, MH as usize, &samples);
+    for f in &out {
+        gif.frame(f, (100.0 / MFPS) as u16);
+    }
+    let bytes = gif.finish();
+    let dir = std::env::var_os("TASKBEAT_SHOTS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs").join("screenshots"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, &bytes).unwrap();
+    println!("{} ({} quadros, {:.1} MB)", path.display(), frames, bytes.len() as f64 / 1e6);
+}
+
+/// Ponteiro do mouse na escala `k` (2 = Retina).
+fn cursor_scaled(cv: &mut Canvas, x: f32, y: f32, k: f32) {
+    let outer = [(0.0, 0.0), (0.0, 18.0), (4.4, 14.0), (7.6, 21.0), (10.4, 19.8), (7.3, 13.0), (13.0, 13.0)];
+    let inner = [(1.3, 3.0), (1.3, 15.0), (4.8, 11.9), (8.2, 19.2), (9.0, 18.8), (5.6, 11.6), (10.2, 11.6)];
+    let shadow: Vec<(f32, f32)> = outer.iter().map(|&(a, b)| (x + (a + 1.0) * k, y + (b + 1.5) * k)).collect();
+    fill_poly(cv, &shadow, [0.0; 3], 0.25);
+    fill_poly(cv, &outer.map(|(a, b)| (x + a * k, y + b * k)), [0.0; 3], 1.0);
+    fill_poly(cv, &inner.map(|(a, b)| (x + a * k, y + b * k)), [1.0; 3], 1.0);
 }
