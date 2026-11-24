@@ -33,7 +33,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 lipo -create -output "$APP/Contents/MacOS/Taskbeat" \
     target/aarch64-apple-darwin/release/taskbeat target/x86_64-apple-darwin/release/taskbeat
-sed "s/__VERSION__/$VERSION/g" macos/Info.plist > "$APP/Contents/Info.plist"
+# O macOS quer só números no Info.plist ("1.3.0-beta.1" → "1.3.0"); a versão
+# completa aparece no nome do .dmg e em Configurações > Geral.
+sed "s/__VERSION__/${VERSION%%-*}/g" macos/Info.plist > "$APP/Contents/Info.plist"
 for l in en pt-BR es de; do
     cp -R "macos/$l.lproj" "$APP/Contents/Resources/"
 done
