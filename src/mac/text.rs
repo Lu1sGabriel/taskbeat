@@ -11,9 +11,11 @@
 
 use crate::render::Mask;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSFont, NSFontWeight, NSFontWeightBold, NSFontWeightMedium, NSFontWeightRegular, NSFontWeightSemibold, NSImage, NSImageSymbolConfiguration};
+use objc2_app_kit::{
+    NSFont, NSFontWeight, NSFontWeightBold, NSFontWeightMedium, NSFontWeightRegular, NSFontWeightSemibold, NSGraphicsContext, NSImage, NSImageSymbolConfiguration,
+};
 use objc2_core_foundation::{CFAttributedString, CFBoolean, CFDictionary, CFRetained, CFString, CFType, CGFloat, CGPoint, CGRect, CGSize};
-use objc2_core_graphics::{CGAffineTransformIdentity, CGBitmapContextCreate, CGContext, CGImageAlphaInfo};
+use objc2_core_graphics::{CGAffineTransformIdentity, CGBitmapContextCreate, CGContext, CGImageAlphaInfo, CGInterpolationQuality};
 use objc2_core_text::{CTFont, CTLine, CTLineTruncationType, kCTFontAttributeName, kCTForegroundColorFromContextAttributeName};
 use objc2_foundation::{NSRect, NSString};
 use std::collections::HashMap;
@@ -246,14 +248,30 @@ impl TextRenderer {
         let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(size, weight(wt));
         let image = image.imageWithSymbolConfiguration(&config)?;
         let sz = image.size();
-        let mut rect = NSRect::new(CGPoint::new(0.0, 0.0), CGSize::new(sz.width, sz.height));
-        let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
         // Tamanho em pontos = pixels aqui (a escala já está no tamanho do símbolo).
         let (iw, ih) = (sz.width, sz.height);
         let x = ((w as f64 - iw) / 2.0).round();
         let y = ((h as f64 - ih) / 2.0).round();
+        let dst = CGRect::new(CGPoint::new(x, y), CGSize::new(iw, ih));
+        // O vetor do símbolo vai direto para a máscara, já no tamanho final.
+        // (Antes virava imagem e era reduzido: em telas Retina o NSImage a
+        // gerava em 2x e a redução serrilhava as bordas dos ícones.)
+        let vector = alpha_bitmap(w, h, |ctx| {
+            let gc = NSGraphicsContext::graphicsContextWithCGContext_flipped(ctx, false);
+            NSGraphicsContext::saveGraphicsState_class();
+            NSGraphicsContext::setCurrentContext(Some(&gc));
+            image.drawInRect(dst);
+            NSGraphicsContext::restoreGraphicsState_class();
+        });
+        if vector.as_ref().is_some_and(|m| m.cov.iter().any(|&c| c != 0)) {
+            return vector;
+        }
+        // Reserva: imagem do símbolo, reduzida com interpolação de qualidade.
+        let mut rect = NSRect::new(CGPoint::new(0.0, 0.0), sz);
+        let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
         alpha_bitmap(w, h, |ctx| {
-            CGContext::draw_image(Some(ctx), CGRect::new(CGPoint::new(x, y), CGSize::new(iw, ih)), Some(&cg));
+            CGContext::set_interpolation_quality(Some(ctx), CGInterpolationQuality::High);
+            CGContext::draw_image(Some(ctx), dst, Some(&cg));
         })
     }
 }

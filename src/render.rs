@@ -17,6 +17,36 @@ pub struct Image {
     /// Versões reduzidas pela metade, criadas na primeira vez que a imagem é
     /// desenhada bem menor: reduzir direto com bilinear serrilha (aliasing).
     pub mips: std::sync::OnceLock<Vec<Image>>,
+    /// Reduções exatas já feitas (recorte + tamanho), as mais recentes primeiro.
+    pub sized: std::sync::Mutex<Vec<(SizedKey, std::sync::Arc<Image>)>>,
+}
+
+/// Recorte da origem (bits dos `f32`) e tamanho de destino de uma redução.
+pub type SizedKey = [u32; 6];
+
+/// Reduções guardadas por imagem (widget, card, notch e prévias usam tamanhos diferentes).
+const SIZED_KEEP: usize = 4;
+
+/// Média de área numa dimensão: para cada pixel de destino, o primeiro pixel
+/// de origem que ele cobre e o peso de cada um a partir dele.
+fn area_weights(start: f32, len: f32, n: usize, max: usize) -> Vec<(usize, Vec<f32>)> {
+    let step = len / n as f32;
+    (0..n)
+        .map(|i| {
+            let a = (start + i as f32 * step).clamp(0.0, max as f32);
+            let b = (a + step).clamp(0.0, max as f32);
+            let first = (a.floor() as usize).min(max - 1);
+            let last = (b.ceil() as usize).clamp(first + 1, max);
+            let mut w: Vec<f32> = (first..last).map(|j| ((j + 1) as f32).min(b) - (j as f32).max(a)).map(|v| v.max(0.0)).collect();
+            let sum: f32 = w.iter().sum();
+            if sum > 0.0 {
+                w.iter_mut().for_each(|v| *v /= sum);
+            } else {
+                w = vec![1.0];
+            }
+            (first, w)
+        })
+        .collect()
 }
 
 fn rgb_to_hsv(c: Rgb) -> (f32, f32, f32) {
@@ -71,12 +101,65 @@ impl Image {
         } else {
             avg
         };
-        Self { w, h, px, avg, vibrant, mips: Default::default() }
+        Self { w, h, px, avg, vibrant, mips: Default::default(), sized: Default::default() }
     }
 
     /// Imagem já pré-multiplicada, sem análise de cor.
     pub fn plain(w: usize, h: usize, px: Vec<u32>) -> Self {
-        Self { w, h, px, avg: [0.0; 3], vibrant: [0.0; 3], mips: Default::default() }
+        Self { w, h, px, avg: [0.0; 3], vibrant: [0.0; 3], mips: Default::default(), sized: Default::default() }
+    }
+
+    /// O recorte `src` reduzido para `tw`×`th` por média de área: cada pixel
+    /// novo é a média exata dos pixels que ele cobre. É a redução mais nítida
+    /// sem serrilhar (melhor que mipmap + bilinear, que borra um pouco).
+    /// Guardada: os quadros seguintes do mesmo tamanho só copiam.
+    pub fn resampled(&self, src: RectF, tw: usize, th: usize) -> std::sync::Arc<Image> {
+        let key: SizedKey = [src.x.to_bits(), src.y.to_bits(), src.w.to_bits(), src.h.to_bits(), tw as u32, th as u32];
+        let mut cache = self.sized.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+            let hit = cache.remove(i);
+            let img = hit.1.clone();
+            cache.insert(0, hit);
+            return img;
+        }
+        let xs = area_weights(src.x, src.w, tw, self.w);
+        let ys = area_weights(src.y, src.h, th, self.h);
+        let y_lo = ys.first().map(|y| y.0).unwrap_or(0);
+        let y_hi = ys.last().map(|(y, w)| y + w.len()).unwrap_or(0).min(self.h);
+        // Horizontal (só as linhas usadas), depois vertical.
+        let mut rows = vec![[0f32; 4]; tw * (y_hi - y_lo)];
+        for y in y_lo..y_hi {
+            let row = &self.px[y * self.w..(y + 1) * self.w];
+            let out = &mut rows[(y - y_lo) * tw..(y - y_lo + 1) * tw];
+            for (o, (x0, wts)) in out.iter_mut().zip(&xs) {
+                let mut acc = [0f32; 4];
+                for (k, wt) in wts.iter().enumerate() {
+                    let p = unpack(row[x0 + k]);
+                    for c in 0..4 {
+                        acc[c] += p[c] * wt;
+                    }
+                }
+                *o = acc;
+            }
+        }
+        let mut px = vec![0u32; tw * th];
+        for (j, (y0, wts)) in ys.iter().enumerate() {
+            for i in 0..tw {
+                let mut acc = [0f32; 4];
+                for (k, wt) in wts.iter().enumerate() {
+                    let p = rows[(y0 + k - y_lo) * tw + i];
+                    for c in 0..4 {
+                        acc[c] += p[c] * wt;
+                    }
+                }
+                let q = |v: f32| (v + 0.5).clamp(0.0, 255.0) as u32;
+                px[j * tw + i] = (q(acc[3]) << 24) | (q(acc[0]) << 16) | (q(acc[1]) << 8) | q(acc[2]);
+            }
+        }
+        let img = std::sync::Arc::new(Image::plain(tw, th, px));
+        cache.insert(0, (key, img.clone()));
+        cache.truncate(SIZED_KEEP);
+        img
     }
 
     /// Nível `level` da pirâmide (1 = metade, 2 = um quarto...), limitado ao menor disponível.
@@ -152,7 +235,7 @@ impl Image {
                 ((c[3].min(255.0) as u32) << 24) | ((c[0].min(255.0) as u32) << 16) | ((c[1].min(255.0) as u32) << 8) | (c[2].min(255.0) as u32)
             })
             .collect();
-        Image { w, h, px, avg: self.avg, vibrant: self.vibrant, mips: Default::default() }
+        Image { w, h, px, avg: self.avg, vibrant: self.vibrant, mips: Default::default(), sized: Default::default() }
     }
 }
 
@@ -833,8 +916,20 @@ impl<'a> Canvas<'a> {
         if img.w == 0 || img.h == 0 || dst.w <= 0.0 || dst.h <= 0.0 {
             return;
         }
-        // Redução maior que 2x: usa o nível da pirâmide mais próximo (sem serrilhado).
         let k = (src.w / dst.w).max(src.h / dst.h);
+        // Redução: média de área direto no tamanho final, encaixada nos pixels
+        // (pixel da imagem = pixel da tela, sem o meio-pixel que borra).
+        let (tw, th) = (dst.w.round() as usize, dst.h.round() as usize);
+        if k > 1.001 && tw >= 1 && th >= 1 && tw * th <= 1 << 20 {
+            // Parte do nível da pirâmide que ainda é maior que o destino (menos conta, mesma nitidez).
+            let level = if k >= 2.0 { k.log2().floor() as usize } else { 0 };
+            let base = img.mip(level);
+            let f = base.w as f32 / img.w as f32;
+            let r = base.resampled(RectF::new(src.x * f, src.y * f, src.w * f, src.h * f), tw, th);
+            let d = RectF::new(dst.x.round(), dst.y.round(), tw as f32, th as f32);
+            return self.draw_image_level(d, &r, RectF::new(0.0, 0.0, tw as f32, th as f32), radius, alpha);
+        }
+        // Redução maior que 2x: usa o nível da pirâmide mais próximo (sem serrilhado).
         if k >= 2.0 {
             let m = img.mip(k.log2().floor() as usize);
             let f = m.w as f32 / img.w as f32;
