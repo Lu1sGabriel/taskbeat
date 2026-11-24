@@ -351,6 +351,8 @@ fn build(mtm: MainThreadMarker) -> Settings {
         let view = page_view(mtm, page, &mut rows, &mut previews);
         let vc = NSViewController::new(mtm);
         vc.setView(&view);
+        // A janela segue o tamanho preferido da página (sem isto ela encolhe).
+        vc.setPreferredContentSize(CGSize::new(W, H));
         vc.setTitle(Some(&ns(tr(page.name))));
         let item = NSTabViewItem::tabViewItemWithViewController(&vc);
         item.setLabel(&ns(tr(page.name)));
@@ -359,8 +361,16 @@ fn build(mtm: MainThreadMarker) -> Settings {
         }
         tabs.addTabViewItem(&item);
     }
+    tabs.setPreferredContentSize(CGSize::new(W, H));
+    // Capturas do CI: abre direto numa página.
+    if let Some(i) = std::env::var("TV_DEMO_SETTINGS_PAGE").ok().and_then(|v| v.parse::<isize>().ok()) {
+        tabs.setSelectedTabViewItemIndex(i);
+    }
     let window = NSWindow::windowWithContentViewController(&tabs);
     unsafe { window.setReleasedWhenClosed(false) };
+    window.setContentSize(CGSize::new(W, H));
+    window.setContentMinSize(CGSize::new(W, 420.0));
+    window.setContentMaxSize(CGSize::new(W, 2000.0));
     window.setTitle(&ns(tr("Taskbeat — Configurações")));
     let mut tr_ = TextRenderer::new();
     tr_.set_scale(2.0);
@@ -489,6 +499,7 @@ fn page_view(mtm: MainThreadMarker, page: &Page, rows: &mut Vec<RowView>, previe
     let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), rect(0.0, 0.0, W, H));
     scroll.setHasVerticalScroller(true);
     scroll.setDrawsBackground(false);
+    scroll.setAutoresizingMask(objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable);
     scroll.setDocumentView(Some(&doc));
     Retained::into_super(scroll)
 }
