@@ -913,20 +913,21 @@ pub fn sample_media() -> MediaInfo {
 
 /// Capa de exemplo gerada: céu em gradiente com um sol e "montanhas".
 fn sample_art() -> Image {
-    const N: usize = 96;
+    // 256 px com bordas suaves: fica nítida também nas prévias em 2x.
+    const N: usize = 256;
+    let px_size = 1.0 / N as f32;
     let mut px = vec![0u32; N * N];
     for y in 0..N {
         for x in 0..N {
-            let (fx, fy) = (x as f32 / N as f32, y as f32 / N as f32);
+            let (fx, fy) = ((x as f32 + 0.5) / N as f32, (y as f32 + 0.5) / N as f32);
             let mut c = lerp3([0.35, 0.18, 0.62], [0.98, 0.45, 0.35], fy);
             let d = ((fx - 0.5).powi(2) + (fy - 0.52).powi(2)).sqrt();
-            if d < 0.2 {
-                c = lerp3(c, [1.0, 0.86, 0.55], ((0.2 - d) / 0.03).clamp(0.0, 1.0));
-            }
+            c = lerp3(c, [1.0, 0.86, 0.55], ((0.2 - d) / 0.03).clamp(0.0, 1.0));
             let ridge = 0.72 + 0.06 * (fx * 9.0).sin() + 0.03 * (fx * 23.0).cos();
-            if fy > ridge {
-                c = lerp3([0.16, 0.08, 0.28], [0.08, 0.04, 0.16], (fy - ridge) * 3.0);
-            }
+            // Cobertura da montanha com 1 px de transição (sem serrilhado).
+            let k = ((fy - ridge) / px_size + 0.5).clamp(0.0, 1.0);
+            let hill = lerp3([0.16, 0.08, 0.28], [0.08, 0.04, 0.16], ((fy - ridge) * 3.0).clamp(0.0, 1.0));
+            c = lerp3(c, hill, k);
             let p = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u32;
             px[y * N + x] = 0xff00_0000 | (p(c[0]) << 16) | (p(c[1]) << 8) | p(c[2]);
         }

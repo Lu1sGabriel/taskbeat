@@ -640,6 +640,10 @@ impl Ui {
     }
 
     fn preview_media(&self) -> MediaInfo {
+        // Capturas de tela/demonstração: sempre a música de exemplo.
+        if std::env::var_os("TV_DEMO_MEDIA").is_some() {
+            return ui::sample_media();
+        }
         let m = self.shared.media.lock().unwrap().clone();
         if m.present() { m } else { ui::sample_media() }
     }
