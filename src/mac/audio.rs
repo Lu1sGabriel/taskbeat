@@ -185,9 +185,16 @@ pub fn spawn(shared: Arc<Shared>) -> std::thread::JoinHandle<()> {
             let mut cap: Option<Capture> = None;
             let mut failures = 0u32;
             let mut wait = 0u32;
+            let mut last_playing: Option<std::time::Instant> = None;
             while shared.is_running() {
                 std::thread::sleep(Duration::from_millis(500));
-                let want = shared.config.lock().unwrap().show_visualizer;
+                // Só capta enquanto um player toca (e um pouco depois da pausa):
+                // o macOS mostra o ponto roxo de gravação enquanto o tap existe.
+                if shared.media.lock().unwrap().playing {
+                    last_playing = Some(std::time::Instant::now());
+                }
+                let playing = last_playing.is_some_and(|t| t.elapsed() < Duration::from_secs(5));
+                let want = shared.config.lock().unwrap().show_visualizer && playing;
                 if !want {
                     cap = None;
                     continue;
