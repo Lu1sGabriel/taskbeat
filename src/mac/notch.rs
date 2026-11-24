@@ -99,6 +99,7 @@ struct Notch {
     geom: Geom,
     /// Origem da janela na tela (pontos, canto de baixo à esquerda do AppKit).
     origin: CGPoint,
+    screen_frame: NSRect,
     layout: NLayout,
     buf: Vec<u32>,
     cfg: Config,
@@ -236,6 +237,7 @@ pub fn start(mtm: MainThreadMarker) {
         s,
         geom,
         origin: CGPoint::new(0.0, 0.0),
+        screen_frame: rect,
         buf: vec![0; (layout.w.ceil() * layout.h.ceil()) as usize],
         layout,
         analyzer: Analyzer::new(cfg.bars, rate),
@@ -379,7 +381,13 @@ fn global_mouse() {
 
 impl Notch {
     fn place(&mut self, screen: &NSScreen) {
-        let f = screen.frame();
+        self.screen_frame = screen.frame();
+        self.reposition();
+    }
+
+    /// Centraliza a janela no topo da tela (o tamanho muda com as opções).
+    fn reposition(&mut self) {
+        let f = self.screen_frame;
         let (w, h) = ((self.layout.w / self.s) as f64, (self.layout.h / self.s) as f64);
         let x = (f.origin.x + (f.size.width - w) / 2.0).round();
         let y = f.origin.y + f.size.height - h;
@@ -437,6 +445,7 @@ impl Notch {
         let rate = sh.sample_rate.load(Ordering::Relaxed);
         self.analyzer.configure(self.cfg.bars, rate);
         self.relayout();
+        self.reposition();
         self.update_visibility();
     }
 
@@ -708,6 +717,14 @@ impl Notch {
         shape.inset(-4.0 * self.s)
     }
 
+    /// Fechada ou no "A seguir", qualquer ponto da ilha abre o card.
+    fn hit(&self, x: f32, y: f32, open: bool) -> Option<Hit> {
+        if !open && self.hot_rect().contains(x, y) {
+            return Some(Hit::Info);
+        }
+        self.layout.hit(x, y, open)
+    }
+
     fn mouse_move(&mut self, x: f32, y: f32) {
         let inside = !self.hidden && self.hot_rect().contains(x, y);
         if inside != !self.ignoring {
@@ -728,7 +745,7 @@ impl Notch {
         }
         self.inside = inside;
         let open = self.open_target && self.open.value(now) > 0.85;
-        let hover = if inside { self.layout.hit(x, y, open) } else { None };
+        let hover = if inside { self.hit(x, y, open) } else { None };
         if self.it.hover != hover {
             self.it.hover = hover;
         }
@@ -741,7 +758,7 @@ impl Notch {
 
     fn mouse_down(&mut self, x: f32, y: f32) {
         let open = self.open_target && self.open.value(Instant::now()) > 0.85;
-        let hit = self.layout.hit(x, y, open);
+        let hit = self.hit(x, y, open);
         self.it.pressed = hit;
         if matches!(hit, Some(Hit::Seek) if self.media.can_seek) || hit == Some(Hit::Vol) {
             self.it.drag = hit;
@@ -769,7 +786,7 @@ impl Notch {
 
     fn mouse_up(&mut self, x: f32, y: f32) {
         let open = self.open_target && self.open.value(Instant::now()) > 0.85;
-        let hit = self.layout.hit(x, y, open);
+        let hit = self.hit(x, y, open);
         let sh = shared();
         if self.it.drag == Some(Hit::Seek) {
             if let Some(p) = self.seek_preview.take() {
