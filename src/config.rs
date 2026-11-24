@@ -145,6 +145,39 @@ pub enum TaskbarPlay {
     Icon,
 }
 
+/// Tamanho de um elemento do widget (texto, capa).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Size3 {
+    Small,
+    Normal,
+    Large,
+}
+
+/// O que vai na segunda linha do widget (embaixo do título).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecondLine {
+    Artist,
+    /// "Artista · Álbum".
+    ArtistAlbum,
+    Album,
+    /// Tempo decorrido e duração ("1:23 / 3:45").
+    Time,
+}
+
+/// Cor do fundo do widget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WidgetTint {
+    /// Branco/preto translúcido, como os botões da barra.
+    Neutral,
+    /// Cor viva da capa.
+    Album,
+    /// Cor de destaque (Windows ou capa, conforme "Cor de destaque").
+    Accent,
+}
+
 /// Aleatório e repetir: sempre (apagados quando o player não deixa) ou só quando dá.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -239,6 +272,20 @@ pub struct Config {
     pub taskbar_shuffle_repeat: bool,
     /// Botão play da barra: preenchido com a cor de destaque ou só o ícone.
     pub taskbar_play: TaskbarPlay,
+    /// O que aparece embaixo do título (com "Mostrar artista" ligado).
+    pub second_line: SecondLine,
+    /// Tamanho do título e da segunda linha.
+    pub text_size: Size3,
+    /// Tamanho da capa na barra.
+    pub cover_size: Size3,
+    /// Cor do fundo do widget.
+    pub widget_tint: WidgetTint,
+    /// Opacidade do fundo do widget (%).
+    pub widget_opacity: i32,
+    /// Contorno fino em volta do fundo.
+    pub widget_border: bool,
+    /// Anima a troca de música no widget (texto desliza, capa esmaece).
+    pub track_anim: bool,
     /// Largura da área do título, em pixels lógicos.
     pub title_width: i32,
     pub anchor: Anchor,
@@ -325,24 +372,31 @@ impl Default for Config {
         Self {
             show_media: true,
             always_show_widget: true,
-            taskbar_controls: false,
+            taskbar_controls: true,
             cover_shape: Shape::Rounded,
             show_artist: true,
             marquee: false,
-            playing_indicator: false,
+            playing_indicator: true,
             taskbar_progress: false,
             widget_pill: true,
             widget_shape: WidgetShape::Rounded,
-            widget_divider: true,
-            taskbar_shuffle_repeat: true,
+            widget_divider: false,
+            taskbar_shuffle_repeat: false,
             taskbar_play: TaskbarPlay::Filled,
-            title_width: 150,
+            second_line: SecondLine::Artist,
+            text_size: Size3::Normal,
+            cover_size: Size3::Normal,
+            widget_tint: WidgetTint::Album,
+            widget_opacity: 6,
+            widget_border: true,
+            track_anim: true,
+            title_width: 120,
             anchor: Anchor::BeforeTray,
             offset: 0,
 
             card_style: CardStyle::Artwork,
             card_layout: CardLayout::Horizontal,
-            theme: ThemeMode::Auto,
+            theme: ThemeMode::Dark,
             accent_source: AccentSource::Windows,
             corners: Corners::Medium,
             play_shape: Shape::Rounded,
@@ -361,25 +415,25 @@ impl Default for Config {
             osd_offset_x: 0,
             osd_offset_y: 0,
             osd_shape: OsdShape::Rounded,
-            osd_size: OsdSize::Normal,
+            osd_size: OsdSize::Compact,
             osd_theme: ThemeMode::Auto,
             osd_duration: 18,
             osd_show_off: true,
             osd_switch: true,
-            osd_material: OsdMaterial::Solid,
+            osd_material: OsdMaterial::Acrylic,
             osd_opacity: 96,
-            osd_blur: 60,
-            osd_icon: OsdIcon::Letter,
-            osd_anim: OsdAnim::Slide,
+            osd_blur: 20,
+            osd_icon: OsdIcon::Lock,
+            osd_anim: OsdAnim::Zoom,
 
-            show_visualizer: false,
-            style: Style::Mirror,
-            palette: Palette::Mono,
+            show_visualizer: true,
+            style: Style::Bars,
+            palette: Palette::Album,
             width: 52,
             bars: 6,
             sensitivity_db: 0.0,
-            only_when_media: true,
-            show_peaks: false,
+            only_when_media: false,
+            show_peaks: true,
 
             hide_on_fullscreen: true,
             language: Language::Auto,
@@ -459,5 +513,6 @@ impl Config {
         self.osd_offset_y = self.osd_offset_y.clamp(-1200, 1200);
         self.osd_opacity = self.osd_opacity.clamp(20, 100);
         self.osd_blur = self.osd_blur.clamp(0, 100);
+        self.widget_opacity = self.widget_opacity.clamp(0, 60);
     }
 }
