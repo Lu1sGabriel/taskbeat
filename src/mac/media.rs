@@ -121,6 +121,7 @@ impl Adapter {
             }
         };
         ADAPTER_PID.store(child.id(), Ordering::Relaxed);
+        log::info(&format!("adaptador do Tocando Agora iniciado (pid {})", child.id()));
         let out = child.stdout.take().unwrap();
         if let Some(err) = child.stderr.take() {
             std::thread::spawn(move || {
@@ -463,6 +464,17 @@ impl State {
         // Posição: republica quando pula (o usuário arrastou o progresso no player).
         let jumped = (m.position_now() - info.position_now()).abs() > 1.5;
         if *m != info || jumped || m.playing != info.playing {
+            log::info(&format!(
+                "mídia: \"{}\" — {} [{} / {}] tocando={} {:.0}/{:.0}s capa={}",
+                info.title,
+                info.artist,
+                info.app,
+                info.aumid,
+                info.playing,
+                info.position_now(),
+                info.dur,
+                info.art.as_ref().map(|a| format!("{}x{}", a.w, a.h)).unwrap_or_else(|| "não".into())
+            ));
             *m = info;
             drop(m);
             self.shared.media_version.fetch_add(1, Ordering::Relaxed);
