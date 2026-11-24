@@ -1,6 +1,8 @@
 [package]
 name = "taskbeat"
 description = "Widget de música para a barra de tarefas do Windows"
+license = "MIT"
+repository = "https://github.com/Lu1sGabriel/taskbeat"
 version = "1.0.0"
 edition = "2024"
 
