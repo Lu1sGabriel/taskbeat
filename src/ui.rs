@@ -143,7 +143,7 @@ thread_local! {
 }
 
 /// Capa desfocada (em cache por imagem).
-fn blurred(img: &Arc<Image>) -> Arc<Image> {
+pub(crate) fn blurred(img: &Arc<Image>) -> Arc<Image> {
     let key = Arc::as_ptr(img) as usize;
     BLUR_CACHE.with(|c| {
         if let Some((k, b)) = c.borrow().as_ref() {
@@ -184,7 +184,7 @@ pub fn text_right(cv: &mut Canvas, tr: &mut TextRenderer, t: &str, font: Font, r
 }
 
 /// Texto que rola quando não cabe (letreiro), com bordas esmaecidas.
-fn marquee(cv: &mut Canvas, tr: &mut TextRenderer, t: &str, font: Font, r: RectF, c: Rgb, a: f32, s: f32, time: f32, enabled: bool) {
+pub(crate) fn marquee(cv: &mut Canvas, tr: &mut TextRenderer, t: &str, font: Font, r: RectF, c: Rgb, a: f32, s: f32, time: f32, enabled: bool) {
     if t.is_empty() {
         return;
     }
@@ -206,7 +206,7 @@ fn marquee(cv: &mut Canvas, tr: &mut TextRenderer, t: &str, font: Font, r: RectF
     }
 }
 
-fn hover_bg(cv: &mut Canvas, r: RectF, radius: f32, th: &Theme, pressed: bool) {
+pub(crate) fn hover_bg(cv: &mut Canvas, r: RectF, radius: f32, th: &Theme, pressed: bool) {
     let a = if pressed { 0.06 } else if th.dark { 0.10 } else { 0.07 };
     cv.fill_round(r, radius, th.fg, a);
 }
@@ -263,7 +263,7 @@ pub fn draw_art_a(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, media: &Medi
 }
 
 /// Mini equalizador animado ("tocando agora").
-fn eq_indicator(cv: &mut Canvas, r: RectF, color: Rgb, playing: bool, time: f32, s: f32, alpha: f32) {
+pub(crate) fn eq_indicator(cv: &mut Canvas, r: RectF, color: Rgb, playing: bool, time: f32, s: f32, alpha: f32) {
     let bw = 2.6 * s;
     let gap = 1.8 * s;
     let total = 3.0 * bw + 2.0 * gap;
@@ -281,7 +281,7 @@ fn eq_indicator(cv: &mut Canvas, r: RectF, color: Rgb, playing: bool, time: f32,
     }
 }
 
-fn play_button(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, size: f32, shape: Shape, th: &Theme, it: &Interact, playing: bool, enabled: bool, s: f32) {
+pub(crate) fn play_button(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, size: f32, shape: Shape, th: &Theme, it: &Interact, playing: bool, enabled: bool, s: f32) {
     let hot = it.hover == Some(Hit::Play);
     let pressed = it.pressed == Some(Hit::Play);
     let k = size * if pressed { 0.94 } else if hot { 1.05 } else { 1.0 };
@@ -300,7 +300,7 @@ fn play_button(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, size: f32, shap
     glyph(cv, tr, b, if playing { G_PAUSE } else { G_PLAY }, font, th.on_accent, en);
 }
 
-fn toggle_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, enabled: bool, th: &Theme, s: f32) {
+pub(crate) fn toggle_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, enabled: bool, th: &Theme, s: f32) {
     let c = if on && enabled { th.accent } else { th.fg };
     let a = if !enabled { 0.3 } else if on { 1.0 } else { 0.8 };
     glyph(cv, tr, r, g, Font::IconSmall, c, a);
@@ -309,7 +309,7 @@ fn toggle_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: b
     }
 }
 
-fn slider(cv: &mut Canvas, x0: f32, x1: f32, cy: f32, t: f32, th: &Theme, hot: bool, thumb: bool, s: f32) {
+pub(crate) fn slider(cv: &mut Canvas, x0: f32, x1: f32, cy: f32, t: f32, th: &Theme, hot: bool, thumb: bool, s: f32) {
     let h = 4.0 * s;
     cv.fill_rrect(x0, cy - h / 2.0, x1, cy + h / 2.0, h / 2.0, if th.dark { 0.24 } else { 0.18 }, th.fg);
     let xv = x0 + (x1 - x0) * t.clamp(0.0, 1.0);
@@ -860,7 +860,7 @@ pub struct CardFrame<'a> {
 }
 
 /// Sombra da capa: brilho na cor dela + sombra curta, como capas "flutuando".
-fn art_shadow(cv: &mut Canvas, r: RectF, radius: f32, art: &Image, th: &Theme, s: f32) {
+pub(crate) fn art_shadow(cv: &mut Canvas, r: RectF, radius: f32, art: &Image, th: &Theme, s: f32) {
     cv.glow(r, radius, 22.0 * s, 7.0 * s, art.vibrant, if th.dark { 0.42 } else { 0.30 });
     cv.drop_shadow(r, radius, 12.0 * s, 4.0 * s, if th.dark { 0.40 } else { 0.22 });
 }

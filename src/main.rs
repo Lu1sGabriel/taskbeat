@@ -1,49 +1,92 @@
-//! Taskbeat — widget de música para a barra de tarefas do Windows.
+//! Taskbeat — widget de música para a barra de tarefas do Windows e o notch do Mac.
 //!
-//! Threads:
+//! Windows — threads:
 //! - principal: ícone da bandeja + menu (tray.rs)
 //! - audio-loopback: captura WASAPI de tudo que toca no PC (audio.rs)
 //! - media-sessions: o que está tocando e em qual app (media.rs)
 //! - overlay: análise FFT + desenho sobre a barra de tarefas (overlay.rs)
+//!
+//! macOS: veja `mac/mod.rs` (widget no notch, AppKit na thread principal).
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod appicon;
-mod audio;
+// Comuns aos dois sistemas: configurações, análise do áudio, traduções e desenho.
 mod config;
 mod dsp;
 mod i18n;
 mod licenses;
-mod media;
-mod overlay;
+mod notch;
+#[cfg(test)]
+mod png;
 mod render;
-mod settings;
-mod setup;
 mod shared;
+mod ui;
+// Mesma interface nos dois sistemas; DirectWrite no Windows, CoreText no Mac.
+#[cfg_attr(target_os = "macos", path = "mac/text.rs")]
+mod text;
+
 #[cfg(test)]
 mod demo_gif;
-#[cfg(test)]
-mod shots;
-mod system;
-mod taskbar;
-mod text;
-mod tray;
-mod ui;
-mod volume;
-mod vsync;
-mod menu;
 
+// Só Windows.
+#[cfg(windows)]
+mod appicon;
+#[cfg(windows)]
+mod audio;
+#[cfg(windows)]
+mod media;
+#[cfg(windows)]
+mod menu;
+#[cfg(windows)]
+mod overlay;
+#[cfg(windows)]
+mod settings;
+#[cfg(windows)]
+mod setup;
+#[cfg(all(windows, test))]
+mod shots;
+#[cfg(windows)]
+mod system;
+#[cfg(windows)]
+mod taskbar;
+#[cfg(windows)]
+mod tray;
+#[cfg(windows)]
+mod volume;
+#[cfg(windows)]
+mod vsync;
+
+// Só macOS.
+#[cfg(target_os = "macos")]
+mod mac;
+
+#[cfg(target_os = "macos")]
+fn main() {
+    mac::main();
+}
+
+#[cfg(windows)]
 use shared::Shared;
+#[cfg(windows)]
 use std::sync::Arc;
+#[cfg(windows)]
 use std::sync::atomic::Ordering;
+#[cfg(windows)]
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+#[cfg(windows)]
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+#[cfg(windows)]
 use windows::Win32::System::Threading::CreateMutexW;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, PostMessageW, WM_LBUTTONUP};
+#[cfg(windows)]
 use windows::Win32::Foundation::{LPARAM, WPARAM};
+#[cfg(windows)]
 use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+#[cfg(windows)]
 use windows::core::w;
 
+#[cfg(windows)]
 fn main() {
     unsafe {
         // Instalador (Taskbeat-Setup.exe / --install) ou desinstalador (--uninstall).

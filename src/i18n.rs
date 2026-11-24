@@ -1,6 +1,6 @@
 //! Traduções: português (Brasil), inglês, espanhol e alemão.
 //!
-//! O idioma segue o da interface do Windows; se não for nenhum desses, usa
+//! O idioma segue o da interface do sistema; se não for nenhum desses, usa
 //! inglês. O texto em português é a chave: `tr("Configurações")` devolve a
 //! versão no idioma atual. (Para testar: variável `TASKBEAT_LANG=en|es|de|pt`.)
 
@@ -8,6 +8,7 @@ use crate::config::Language;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(windows)]
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -52,14 +53,32 @@ pub fn lang() -> Lang {
                 _ => {}
             }
         }
-        // Idioma primário = 10 bits baixos do LANGID.
-        match unsafe { GetUserDefaultUILanguage() } & 0x3ff {
-            0x16 => Lang::Pt,
-            0x0a => Lang::Es,
-            0x07 => Lang::De,
-            _ => Lang::En,
-        }
+        system_lang()
     })
+}
+
+/// Idioma da interface do Windows.
+#[cfg(windows)]
+fn system_lang() -> Lang {
+    // Idioma primário = 10 bits baixos do LANGID.
+    match unsafe { GetUserDefaultUILanguage() } & 0x3ff {
+        0x16 => Lang::Pt,
+        0x0a => Lang::Es,
+        0x07 => Lang::De,
+        _ => Lang::En,
+    }
+}
+
+/// Primeiro idioma da lista de Ajustes do Sistema > Geral > Idioma e Região.
+#[cfg(target_os = "macos")]
+fn system_lang() -> Lang {
+    let first = objc2_foundation::NSLocale::preferredLanguages().firstObject().map(|s| s.to_string()).unwrap_or_default();
+    match first.to_ascii_lowercase().get(..2) {
+        Some("pt") => Lang::Pt,
+        Some("es") => Lang::Es,
+        Some("de") => Lang::De,
+        _ => Lang::En,
+    }
 }
 
 /// Texto no idioma atual (a chave é o texto em português).

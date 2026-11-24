@@ -1,4 +1,5 @@
-//! Configurações persistidas em %APPDATA%\Taskbeat\config.toml
+//! Configurações persistidas em %APPDATA%\Taskbeat\config.toml (Windows) ou
+//! ~/Library/Application Support/Taskbeat/config.toml (Mac).
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -233,6 +234,18 @@ pub enum Language {
     De,
 }
 
+/// Fundo do notch aberto (Mac). O topo fica sempre preto, emendado no notch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotchBg {
+    /// Preto puro, como o notch.
+    Black,
+    /// Preto em cima, cor da capa embaixo.
+    Album,
+    /// Capa desfocada, escurecendo até o preto em cima.
+    Artwork,
+}
+
 impl Corners {
     /// Raio do card em pixels lógicos.
     pub fn radius(self) -> f32 {
@@ -355,6 +368,15 @@ pub struct Config {
     pub only_when_media: bool,
     pub show_peaks: bool,
 
+    // ---- notch (Mac)
+    /// Abre o card ao passar o mouse no notch (desligado: só com clique).
+    pub notch_hover: bool,
+    /// Fundo do notch aberto.
+    pub notch_bg: NotchBg,
+    /// Ícone do Taskbeat na barra de menus (o menu também abre com o botão
+    /// direito na ilha).
+    pub menu_bar_icon: bool,
+
     // ---- geral
     pub hide_on_fullscreen: bool,
     pub language: Language,
@@ -435,6 +457,10 @@ impl Default for Config {
             only_when_media: false,
             show_peaks: true,
 
+            notch_hover: true,
+            notch_bg: NotchBg::Album,
+            menu_bar_icon: true,
+
             hide_on_fullscreen: true,
             language: Language::Auto,
             version: CONFIG_VERSION,
@@ -443,15 +469,28 @@ impl Default for Config {
 }
 
 impl Config {
+    #[cfg(windows)]
     pub fn path() -> Option<PathBuf> {
         let base = std::env::var_os("APPDATA")?;
         Some(PathBuf::from(base).join("Taskbeat").join("config.toml"))
     }
 
+    #[cfg(not(windows))]
+    pub fn path() -> Option<PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        Some(PathBuf::from(home).join("Library").join("Application Support").join("Taskbeat").join("config.toml"))
+    }
+
     /// Pasta do nome antigo do app (lida uma vez para migrar as preferências).
+    #[cfg(windows)]
     fn legacy_path() -> Option<PathBuf> {
         let base = std::env::var_os("APPDATA")?;
         Some(PathBuf::from(base).join("TaskbarVisualizer").join("config.toml"))
+    }
+
+    #[cfg(not(windows))]
+    fn legacy_path() -> Option<PathBuf> {
+        None
     }
 
     pub fn load() -> Self {
