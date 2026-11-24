@@ -1,0 +1,55 @@
+name: macOS
+
+on:
+  push:
+    branches: [macos]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Testes
+        run: cargo test --release
+
+      - name: Capturas desenhadas pelo código (CoreText + SF Symbols)
+        env:
+          TASKBEAT_SHOTS_DIR: ${{ github.workspace }}/shots
+          TASKBEAT_LANG: pt
+        run: cargo test --release notch_shots -- --ignored --nocapture
+
+      - name: App (.app universal + .dmg)
+        run: ./build-macos.sh
+
+      - name: Adaptador do Tocando Agora
+        run: |
+          APP=dist/Taskbeat.app
+          /usr/bin/perl $APP/Contents/Resources/mediaremote-adapter.pl "$PWD/$APP/Contents/Frameworks/MediaRemoteAdapter.framework" get || echo "adaptador falhou: $?"
+          codesign -dv --verbose=2 $APP 2>&1 | head -20
+
+      - name: Prints do app rodando
+        run: macos/ci-shots.sh shots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-shots
+          path: shots/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Taskbeat-macOS
+          path: dist/*.dmg

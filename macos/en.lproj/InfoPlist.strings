@@ -1,0 +1,2 @@
+"NSAudioCaptureUsageDescription" = "Taskbeat listens to the sound your Mac is playing only to animate the audio bars next to the music. Nothing is recorded or saved.";
+"NSAppleEventsUsageDescription" = "Taskbeat reads the current song and sends play, pause and skip to Spotify and Music.";

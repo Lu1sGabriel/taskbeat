@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>Taskbeat</string>
+    <key>CFBundleIconFile</key>
+    <string>Taskbeat</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.lu1sgabriel.taskbeat</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Taskbeat</string>
+    <key>CFBundleDisplayName</key>
+    <string>Taskbeat</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>pt-BR</string>
+        <string>es</string>
+        <string>de</string>
+    </array>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.music</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.2</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Luis Goés · MIT</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Taskbeat listens to the sound your Mac is playing only to animate the audio bars next to the music. Nothing is recorded or saved.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Taskbeat reads the current song and sends play, pause and skip to Spotify and Music.</string>
+</dict>
+</plist>
