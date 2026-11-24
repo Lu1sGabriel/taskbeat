@@ -197,10 +197,12 @@ fn shots() {
     // ---- 2b. Widget da barra: tudo dentro do mesmo fundo, em algumas combinações
     {
         let variants = [
+            // Só a música; o padrão (com os botões); pílula com aleatório e
+            // repetir; reto, neutro, com o play só no ícone.
+            Config { taskbar_controls: false, playing_indicator: false, ..Config::default() },
             Config::default(),
-            Config { taskbar_controls: true, ..Config::default() },
-            Config { taskbar_controls: true, playing_indicator: true, widget_shape: WidgetShape::Pill, ..Config::default() },
-            Config { taskbar_controls: true, taskbar_shuffle_repeat: false, taskbar_play: TaskbarPlay::Icon, widget_shape: WidgetShape::Square, ..Config::default() },
+            Config { taskbar_shuffle_repeat: true, widget_divider: true, widget_shape: WidgetShape::Pill, ..Config::default() },
+            Config { taskbar_play: TaskbarPlay::Icon, widget_shape: WidgetShape::Square, widget_tint: WidgetTint::Neutral, ..Config::default() },
         ];
         let bar_h = 48.0 * S;
         let wh = 40.0 * S;

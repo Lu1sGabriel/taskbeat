@@ -23,7 +23,7 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
 botões (aleatório, anterior, play, próximo, repetir), em formato arredondado, pílula ou reto:
 
 <p align="center">
-  <img src="docs/screenshots/taskbar-widgets.png" width="420" alt="Quatro variações do widget da barra: só a música; com os botões; em pílula com indicador; reto com play só no ícone">
+  <img src="docs/screenshots/taskbar-widgets.png" width="420" alt="Quatro variações do widget da barra: só a música; com os botões (padrão); em pílula com aleatório e repetir; reto e neutro, com o play só no ícone">
 </p>
 
 **Card expandido** em três estilos: capa desfocada, cor do álbum e acrílico (desfoca o que está atrás).
