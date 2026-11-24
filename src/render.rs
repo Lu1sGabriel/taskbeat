@@ -819,6 +819,47 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Máscara com canto superior esquerdo em (x, y) (pode ser fracionário),
+    /// escalada por `scale` e girada `rot` radianos (sentido horário) em volta
+    /// do ponto (`px`, `py`) da própria máscara. Amostragem bilinear da
+    /// cobertura: usada só nos quadros de animação dos ícones.
+    pub fn blit_mask_xform(&mut self, x: f32, y: f32, m: &Mask, px: f32, py: f32, scale: f32, rot: f32, c: Rgb, alpha: f32) {
+        if alpha <= 0.0 || scale <= 0.01 || m.w == 0 || m.h == 0 {
+            return;
+        }
+        let (cx, cy) = (x + px, y + py);
+        let far = [(0.0, 0.0), (m.w as f32, 0.0), (0.0, m.h as f32), (m.w as f32, m.h as f32)]
+            .iter()
+            .map(|(qx, qy)| (qx - px).hypot(qy - py))
+            .fold(0.0f32, f32::max);
+        let ext = far * scale + 1.0;
+        let (x0, y0, x1, y1) = self.bounds(cx - ext, cy - ext, cx + ext, cy + ext);
+        let (sn, cs) = rot.sin_cos();
+        let inv = 1.0 / scale;
+        let at = |ix: i32, iy: i32| -> f32 {
+            if ix < 0 || iy < 0 || ix >= m.w as i32 || iy >= m.h as i32 { 0.0 } else { m.cov[iy as usize * m.w + ix as usize] as f32 }
+        };
+        for oy in y0..y1 {
+            for ox in x0..x1 {
+                let (dx, dy) = (ox as f32 + 0.5 - cx, oy as f32 + 0.5 - cy);
+                // Volta para a máscara: desfaz a rotação e a escala.
+                let u = (dx * cs + dy * sn) * inv + px - 0.5;
+                let v = (-dx * sn + dy * cs) * inv + py - 0.5;
+                if u <= -1.0 || v <= -1.0 || u >= m.w as f32 || v >= m.h as f32 {
+                    continue;
+                }
+                let (iu, iv) = (u.floor() as i32, v.floor() as i32);
+                let (fu, fv) = (u - iu as f32, v - iv as f32);
+                let top = at(iu, iv) * (1.0 - fu) + at(iu + 1, iv) * fu;
+                let bot = at(iu, iv + 1) * (1.0 - fu) + at(iu + 1, iv + 1) * fu;
+                let cov = (top * (1.0 - fv) + bot * fv) / 255.0;
+                if cov > 0.002 {
+                    self.blend(ox, oy, c, cov * alpha);
+                }
+            }
+        }
+    }
+
     /// Compõe (source over) um buffer pré-multiplicado do mesmo formato em
     /// (dx, dy), sem reamostrar. `alpha`: opacidade extra (0..1).
     pub fn composite(&mut self, dx: i32, dy: i32, src: &[u32], sw: usize, sh: usize, alpha: f32) {
@@ -1066,5 +1107,43 @@ fn wave(cv: &mut Canvas, a: RectF, f: &Frame) {
                 cv.blend(px, py, f.colors.at(tx, rel), alpha);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resample_keeps_flat_color() {
+        let img = Image::plain(384, 384, vec![0xff20_4060; 384 * 384]);
+        let r = img.resampled(RectF::new(0.0, 0.0, 384.0, 384.0), 145, 145);
+        assert_eq!((r.w, r.h), (145, 145));
+        assert!(r.px.iter().all(|&p| p == 0xff20_4060));
+    }
+
+    #[test]
+    fn resample_half_is_box_average() {
+        // Xadrez 2x2 preto/branco reduzido pela metade = cinza médio.
+        let px = (0..16).map(|i| if (i % 4 + i / 4) % 2 == 0 { 0xffff_ffff } else { 0xff00_0000 }).collect();
+        let img = Image::plain(4, 4, px);
+        let r = img.resampled(RectF::new(0.0, 0.0, 4.0, 4.0), 2, 2);
+        for p in &r.px {
+            let g = (p >> 8) & 0xff;
+            assert!((127..=128).contains(&g), "{p:08x}");
+        }
+        // Segunda chamada: a mesma redução guardada.
+        let again = img.resampled(RectF::new(0.0, 0.0, 4.0, 4.0), 2, 2);
+        assert!(std::sync::Arc::ptr_eq(&r, &again));
+    }
+
+    #[test]
+    fn xform_identity_matches_blit() {
+        let m = Mask { w: 6, h: 6, cov: (0..36).map(|i| if i % 7 == 0 { 255 } else { 0 }).collect() };
+        let (mut a, mut b) = (vec![0u32; 100], vec![0u32; 100]);
+        Canvas::new(10, 10, &mut a).blit_mask(2, 2, &m, [1.0; 3], 1.0);
+        Canvas::new(10, 10, &mut b).blit_mask_xform(2.0, 2.0, &m, 3.0, 3.0, 1.0, 0.0, [1.0; 3], 1.0);
+        let diff = a.iter().zip(&b).map(|(x, y)| ((x >> 24) as i32 - (y >> 24) as i32).abs()).max().unwrap();
+        assert!(diff <= 2, "{diff}");
     }
 }

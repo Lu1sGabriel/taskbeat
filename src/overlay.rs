@@ -553,6 +553,8 @@ struct Overlay {
     text_change: Option<Instant>,
     art_change: Option<Instant>,
     trimmed: bool,
+    /// Animação dos ícones dos botões (widget e card).
+    icons: ui::IconAnims,
 }
 
 /// Tudo que muda a aparência do widget quando nada está animando.
@@ -654,6 +656,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         text_change: None,
         art_change: None,
         trimmed: false,
+        icons: ui::IconAnims::default(),
         shared,
     };
     ov.set_period(ACTIVE_PERIOD_MS);
@@ -987,6 +990,13 @@ impl Overlay {
             self.flyout_open = false;
         }
         let pb = self.playback();
+        // Ícones: anima o que mudou (clique ou o próprio player).
+        if self.media.present() {
+            self.icons.observe(&pb);
+        } else {
+            self.icons.reset_seen();
+        }
+        let icons_active = self.cfg.icon_anim && self.icons.running();
         let flyout_active = self.update_flyout(now, dt, placement, pb);
         let popup_active = self.update_popup(now, placement);
         let osd_active = self.update_osd(now, placement);
@@ -1001,6 +1011,7 @@ impl Overlay {
             || self.popup_wait.is_some()
             || osd_active
             || had_input
+            || icons_active
             || (self.fade > 0.0 && self.fade < 1.0)
             || now - self.last_input < Duration::from_millis(500);
         let changing = self.change_progress(now).is_some();
@@ -1021,7 +1032,7 @@ impl Overlay {
         };
 
         // Nada animando e nada mudou desde o último quadro: não redesenha.
-        let animating = (viz && sound) || decorative || changing || (self.fade > 0.0 && self.fade < 1.0);
+        let animating = (viz && sound) || decorative || changing || icons_active || (self.fade > 0.0 && self.fade < 1.0);
         let sig = WidgetSig {
             media: self.media_version,
             cfg: self.cfg_version,
@@ -1057,7 +1068,7 @@ impl Overlay {
                 media: &self.media,
                 theme,
                 colors: &self.colors,
-                it: Interact { hover: self.hover_w, pressed, drag: None },
+                it: Interact { hover: self.hover_w, pressed, drag: None, fx: self.icons.fx(self.cfg.icon_anim) },
                 pb,
                 time: (now - self.started).as_secs_f32(),
                 viz: Some((&self.analyzer.values, &self.analyzer.peaks)),
@@ -1330,8 +1341,14 @@ impl Overlay {
                     self.open_flyout(now);
                 }
             }
-            Hit::Prev if m.can_prev => self.shared.send_media(MediaCmd::Previous),
-            Hit::Next if m.can_next => self.shared.send_media(MediaCmd::Next),
+            Hit::Prev if m.can_prev => {
+                self.icons.kick(Hit::Prev);
+                self.shared.send_media(MediaCmd::Previous);
+            }
+            Hit::Next if m.can_next => {
+                self.icons.kick(Hit::Next);
+                self.shared.send_media(MediaCmd::Next);
+            }
             Hit::Play if m.can_toggle => {
                 let playing = self.play_pending.resolve(m.playing);
                 self.play_pending.set(!playing);
@@ -1416,7 +1433,7 @@ impl Overlay {
                 colors: &self.colors,
                 media: &self.media,
                 theme: ui::card_theme(&self.cfg, &self.colors, &self.media),
-                it: Interact { hover: self.hover_f, pressed, drag: self.drag },
+                it: Interact { hover: self.hover_f, pressed, drag: self.drag, fx: self.icons.fx(self.cfg.icon_anim) },
                 pb,
                 s,
                 backdrop: backdrop.as_deref(),

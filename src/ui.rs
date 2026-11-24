@@ -63,6 +63,220 @@ pub struct Interact {
     pub hover: Option<Hit>,
     pub pressed: Option<Hit>,
     pub drag: Option<Hit>,
+    /// Animação dos ícones neste quadro.
+    pub fx: IconFx,
+}
+
+// ---------------------------------------------------------------- ícones animados
+
+/// Botões com ícone animado, na ordem de `IconAnims`/`IconFx`.
+const FX_HITS: [Hit; 6] = [Hit::Shuffle, Hit::Prev, Hit::Play, Hit::Next, Hit::Repeat, Hit::VolBtn];
+
+fn fx_slot(h: Hit) -> Option<usize> {
+    FX_HITS.iter().position(|x| *x == h)
+}
+
+/// Duração da animação de cada ícone (s).
+fn fx_dur(h: Hit) -> f32 {
+    match h {
+        Hit::Play => 0.42,
+        Hit::Prev | Hit::Next => 0.44,
+        Hit::Shuffle => 0.56,
+        Hit::Repeat => 0.62,
+        _ => 0.5,
+    }
+}
+
+/// Quando cada ícone foi acionado (clique ou mudança vinda do player) e o
+/// último estado visto. Fica na janela; o quadro recebe só um `IconFx`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IconAnims {
+    kicks: [Option<std::time::Instant>; 6],
+    /// (tocando, aleatório, repetir, mudo) do quadro anterior.
+    seen: Option<(bool, bool, u8, bool)>,
+}
+
+impl IconAnims {
+    /// Começa a animação do ícone `h` agora.
+    pub fn kick(&mut self, h: Hit) {
+        if let Some(i) = fx_slot(h) {
+            self.kicks[i] = Some(std::time::Instant::now());
+        }
+    }
+
+    /// Anima o que mudou desde o quadro anterior: play↔pausa, aleatório,
+    /// repetir e mudo (pelo clique ou pelo próprio player).
+    pub fn observe(&mut self, pb: &Playback) {
+        let now = (pb.playing, pb.shuffle, pb.repeat, pb.muted);
+        if let Some(old) = self.seen.replace(now) {
+            if old.0 != now.0 {
+                self.kick(Hit::Play);
+            }
+            if old.1 != now.1 {
+                self.kick(Hit::Shuffle);
+            }
+            if old.2 != now.2 {
+                self.kick(Hit::Repeat);
+            }
+            if old.3 != now.3 {
+                self.kick(Hit::VolBtn);
+            }
+        }
+    }
+
+    /// Esquece o estado visto (ex.: a música sumiu): a próxima não anima a chegada.
+    pub fn reset_seen(&mut self) {
+        self.seen = None;
+    }
+
+    /// Alguma animação em andamento (a janela precisa de quadros)?
+    pub fn running(&self) -> bool {
+        FX_HITS.iter().zip(&self.kicks).any(|(h, k)| k.is_some_and(|t| t.elapsed().as_secs_f32() < fx_dur(*h)))
+    }
+
+    /// O que o quadro de agora precisa saber. `on`: opção "Animar ícones".
+    pub fn fx(&self, on: bool) -> IconFx {
+        let mut age = [f32::INFINITY; 6];
+        if on {
+            for (a, k) in age.iter_mut().zip(&self.kicks) {
+                if let Some(t) = k {
+                    *a = t.elapsed().as_secs_f32();
+                }
+            }
+        }
+        IconFx { on, age }
+    }
+}
+
+/// Animação dos ícones num quadro: tempo (s) desde o acionamento de cada um.
+#[derive(Clone, Copy, Debug)]
+pub struct IconFx {
+    pub on: bool,
+    age: [f32; 6],
+}
+
+impl Default for IconFx {
+    fn default() -> Self {
+        Self { on: false, age: [f32::INFINITY; 6] }
+    }
+}
+
+impl IconFx {
+    /// Só o ícone `h`, `age` segundos depois de acionado (capturas).
+    #[cfg(test)]
+    pub fn single(h: Hit, age: f32) -> Self {
+        let mut fx = Self { on: true, ..Self::default() };
+        if let Some(i) = fx_slot(h) {
+            fx.age[i] = age;
+        }
+        fx
+    }
+
+    /// Duração da animação de `h` (s).
+    #[cfg(test)]
+    pub fn duration(h: Hit) -> f32 {
+        fx_dur(h)
+    }
+
+    /// Progresso (0..1) da animação de `h`, se ela estiver rodando.
+    fn progress(&self, h: Hit) -> Option<f32> {
+        let a = self.age[fx_slot(h)?];
+        let d = fx_dur(h);
+        (self.on && a < d).then(|| (a / d).clamp(0.0, 1.0))
+    }
+}
+
+/// Transformação de um ícone em volta do centro: deslocamento, escala,
+/// rotação (radianos, horário) e opacidade.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Pose {
+    dx: f32,
+    scale: f32,
+    rot: f32,
+    alpha: f32,
+}
+
+impl Pose {
+    const REST: Pose = Pose { dx: 0.0, scale: 1.0, rot: 0.0, alpha: 1.0 };
+}
+
+/// Pose do ícone `h` agora: aperto do clique + a animação de cada botão.
+fn pose(it: &Interact, h: Hit, s: f32) -> Pose {
+    let fx = &it.fx;
+    if !fx.on {
+        return Pose::REST;
+    }
+    let mut p = Pose::REST;
+    if let Some(u) = fx.progress(h) {
+        let bump = (std::f32::consts::PI * u).sin();
+        match h {
+            // Pula: o ícone dá um empurrão para o lado da troca e volta.
+            Hit::Prev | Hit::Next => {
+                let dir = if h == Hit::Next { 1.0 } else { -1.0 };
+                let push = (std::f32::consts::PI * ease_out_cubic(u)).sin();
+                p.dx = dir * 6.0 * s * push;
+                p.alpha = 1.0 - 0.45 * push;
+                p.scale = 1.0 - 0.06 * bump;
+            }
+            // Aleatório: cresce e balança (cruza as setas).
+            Hit::Shuffle => {
+                p.scale = 1.0 + 0.2 * bump;
+                p.rot = 0.22 * (std::f32::consts::TAU * 1.5 * u).sin() * (1.0 - u);
+            }
+            // Repetir: uma volta completa, assentando devagar.
+            Hit::Repeat => {
+                p.rot = std::f32::consts::TAU * ease_enter(u);
+                p.scale = 1.0 + 0.1 * bump;
+            }
+            // Volume (mudo): chacoalha um pouco.
+            Hit::VolBtn => {
+                p.scale = 1.0 + 0.16 * bump;
+                p.rot = 0.28 * (std::f32::consts::TAU * 1.5 * u).sin() * (1.0 - u);
+            }
+            _ => {}
+        }
+    }
+    // O play já encolhe o botão inteiro ao ser apertado.
+    if it.pressed == Some(h) && it.hover == Some(h) && h != Hit::Play {
+        p.scale *= 0.86;
+    }
+    p
+}
+
+/// Ícone com pose (parado = desenho normal, alinhado aos pixels).
+pub(crate) fn glyph_pose(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32, p: Pose) {
+    if p == Pose::REST {
+        return glyph(cv, tr, r, g, font, c, a);
+    }
+    let (w, h) = (r.w.round().max(1.0), r.h.round().max(1.0));
+    let m = tr.mask(g, font, w as i32, h as i32, Align::Center);
+    // O símbolo está centrado na caixa: gira e escala em volta do centro dela.
+    cv.blit_mask_xform(r.x.round() + p.dx, r.y.round(), &m, w / 2.0, h / 2.0, p.scale, p.rot, c, a * p.alpha);
+}
+
+/// Ícone de um botão de controle (pular, play só ícone, volume), animado.
+pub(crate) fn ctrl_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32, it: &Interact, h: Hit, s: f32) {
+    glyph_pose(cv, tr, r, g, font, c, a, pose(it, h, s));
+}
+
+/// Play↔pausa animado: o ícone antigo encolhe e some, o novo cresce com um
+/// pequeno salto. Sem animação, desenha só o atual.
+fn play_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, playing: bool, font: Font, c: Rgb, a: f32, it: &Interact, s: f32) {
+    let (now_g, old_g) = if playing { (G_PAUSE, G_PLAY) } else { (G_PLAY, G_PAUSE) };
+    let base = pose(it, Hit::Play, s);
+    match it.fx.progress(Hit::Play) {
+        Some(u) => {
+            let out = (u / 0.4).min(1.0);
+            if out < 1.0 {
+                let po = Pose { scale: base.scale * (1.0 - 0.5 * ease_out_cubic(out)), alpha: 1.0 - out, ..base };
+                glyph_pose(cv, tr, r, old_g, font, c, a, po);
+            }
+            let e = ease_out_back(((u - 0.12) / 0.88).clamp(0.0, 1.0));
+            let pn = Pose { scale: base.scale * (0.45 + 0.55 * e), alpha: ((u - 0.12) / 0.3).clamp(0.0, 1.0), ..base };
+            glyph_pose(cv, tr, r, now_g, font, c, a, pn);
+        }
+        None => glyph_pose(cv, tr, r, now_g, font, c, a, base),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -284,7 +498,11 @@ pub(crate) fn eq_indicator(cv: &mut Canvas, r: RectF, color: Rgb, playing: bool,
 pub(crate) fn play_button(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, size: f32, shape: Shape, th: &Theme, it: &Interact, playing: bool, enabled: bool, s: f32) {
     let hot = it.hover == Some(Hit::Play);
     let pressed = it.pressed == Some(Hit::Play);
-    let k = size * if pressed { 0.94 } else if hot { 1.05 } else { 1.0 };
+    let mut k = size * if pressed { 0.94 } else if hot { 1.05 } else { 1.0 };
+    // Na troca play↔pausa o botão dá um pulsinho junto com o ícone.
+    if let Some(u) = it.fx.progress(Hit::Play) {
+        k *= 1.0 + 0.07 * (std::f32::consts::PI * u).sin();
+    }
     let b = RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k);
     let radius = match shape {
         Shape::Circle => k / 2.0,
@@ -296,14 +514,16 @@ pub(crate) fn play_button(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, size
         cv.drop_shadow(b, radius, 8.0 * s, 2.0 * s, if th.dark { 0.35 } else { 0.18 });
     }
     cv.fill_round(b, radius, th.accent, en);
-    let font = if k > 30.0 * s { Font::Icon } else { Font::IconSmall };
-    glyph(cv, tr, b, if playing { G_PAUSE } else { G_PLAY }, font, th.on_accent, en);
+    // Caixa do ícone no tamanho normal (o mesmo desenho em cache em qualquer quadro).
+    let font = if size > 30.0 * s { Font::Icon } else { Font::IconSmall };
+    let gb = RectF::new(r.cx() - size / 2.0, r.cy() - size / 2.0, size, size);
+    play_glyph(cv, tr, gb, playing, font, th.on_accent, en, it, s);
 }
 
-pub(crate) fn toggle_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, enabled: bool, th: &Theme, s: f32) {
+pub(crate) fn toggle_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, enabled: bool, th: &Theme, s: f32, it: &Interact, h: Hit) {
     let c = if on && enabled { th.accent } else { th.fg };
     let a = if !enabled { 0.3 } else if on { 1.0 } else { 0.8 };
-    glyph(cv, tr, r, g, Font::IconSmall, c, a);
+    ctrl_glyph(cv, tr, r, g, Font::IconSmall, c, a, it, h, s);
     if on && enabled {
         cv.fill_circle(r.cx(), r.bottom() - 5.0 * s, 1.7 * s, th.accent, 1.0);
     }
@@ -637,22 +857,22 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
     // Aleatório/repetir: apagados quando o player não deixa mudar pelo Windows.
     if let Some(r) = l.shuffle {
-        toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s);
+        toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &f.it, Hit::Shuffle);
     }
     if let Some(r) = l.prev {
-        glyph(cv, tr, r, G_PREV, Font::IconSmall, th.fg, dim(m.can_prev));
+        ctrl_glyph(cv, tr, r, G_PREV, Font::IconSmall, th.fg, dim(m.can_prev), &f.it, Hit::Prev, s);
     }
     if let Some(r) = l.play {
         match cfg.taskbar_play {
             TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s),
-            TaskbarPlay::Icon => glyph(cv, tr, r, if f.pb.playing { G_PAUSE } else { G_PLAY }, Font::Icon, th.fg, dim(m.can_toggle)),
+            TaskbarPlay::Icon => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, th.fg, dim(m.can_toggle), &f.it, s),
         }
     }
     if let Some(r) = l.next {
-        glyph(cv, tr, r, G_NEXT, Font::IconSmall, th.fg, dim(m.can_next));
+        ctrl_glyph(cv, tr, r, G_NEXT, Font::IconSmall, th.fg, dim(m.can_next), &f.it, Hit::Next, s);
     }
     if let Some(r) = l.repeat {
-        toggle_glyph(cv, tr, r, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s);
+        toggle_glyph(cv, tr, r, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &f.it, Hit::Repeat);
     }
     if let (Some(r), Some((values, peaks))) = (l.viz, f.viz) {
         draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s });
@@ -938,13 +1158,13 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     }
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
     if m.can_shuffle || always {
-        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s);
+        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &f.it, Hit::Shuffle);
     }
-    glyph(cv, tr, l.prev, G_PREV, Font::Icon, th.fg, dim(m.can_prev));
+    ctrl_glyph(cv, tr, l.prev, G_PREV, Font::Icon, th.fg, dim(m.can_prev), &f.it, Hit::Prev, s);
     play_button(cv, tr, l.play, l.play_size, cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s);
-    glyph(cv, tr, l.next, G_NEXT, Font::Icon, th.fg, dim(m.can_next));
+    ctrl_glyph(cv, tr, l.next, G_NEXT, Font::Icon, th.fg, dim(m.can_next), &f.it, Hit::Next, s);
     if m.can_repeat || always {
-        toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s);
+        toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &f.it, Hit::Repeat);
     }
 
     // Progresso com tempos embaixo.
@@ -973,7 +1193,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         } else {
             G_VOL3
         };
-        glyph(cv, tr, b, g, Font::IconSmall, th.fg, 0.9);
+        ctrl_glyph(cv, tr, b, g, Font::IconSmall, th.fg, 0.9, &f.it, Hit::VolBtn, s);
         let hot = f.it.hover == Some(Hit::Vol) || f.it.drag == Some(Hit::Vol);
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, true, s);
     }
@@ -1322,6 +1542,24 @@ fn sample_art() -> Image {
 mod tests {
     use super::*;
     use crate::config::Config;
+
+    #[test]
+    fn icon_anims_follow_state_changes() {
+        let mut a = IconAnims::default();
+        let pb = Playback { playing: true, ..Default::default() };
+        // Primeiro estado visto: nada anima (a música só apareceu).
+        a.observe(&pb);
+        assert!(!a.running());
+        a.observe(&Playback { playing: false, ..pb });
+        assert!(a.running());
+        let fx = a.fx(true);
+        assert!(fx.progress(Hit::Play).is_some());
+        assert!(fx.progress(Hit::Shuffle).is_none());
+        // Opção desligada: nenhum ícone se mexe.
+        assert!(a.fx(false).progress(Hit::Play).is_none());
+        let it = Interact { fx: a.fx(false), pressed: Some(Hit::Prev), hover: Some(Hit::Prev), ..Default::default() };
+        assert_eq!(pose(&it, Hit::Prev, 1.0), Pose::REST);
+    }
 
     fn stray(px: &[u32], w: usize, h: usize) -> Vec<(usize, usize, u32)> {
         let mut out = Vec::new();

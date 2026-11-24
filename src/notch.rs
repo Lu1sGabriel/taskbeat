@@ -434,13 +434,13 @@ fn draw_open(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame
     }
     if a >= 0.999 {
         if m.can_shuffle || always {
-            ui::toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s);
+            ui::toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &f.it, Hit::Shuffle);
         }
-        ui::glyph(cv, tr, l.prev, G_PREV, Font::IconLg, th.fg, dim(m.can_prev));
+        ui::ctrl_glyph(cv, tr, l.prev, G_PREV, Font::IconLg, th.fg, dim(m.can_prev), &f.it, Hit::Prev, s);
         ui::play_button(cv, tr, l.play, l.play_size, cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s);
-        ui::glyph(cv, tr, l.next, G_NEXT, Font::IconLg, th.fg, dim(m.can_next));
+        ui::ctrl_glyph(cv, tr, l.next, G_NEXT, Font::IconLg, th.fg, dim(m.can_next), &f.it, Hit::Next, s);
         if m.can_repeat || always {
-            ui::toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s);
+            ui::toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &f.it, Hit::Repeat);
         }
     } else {
         // Durante a animação: só os ícones, esmaecendo (sem sombra do play).
@@ -473,7 +473,7 @@ fn draw_open(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame
         } else {
             G_VOL3
         };
-        ui::glyph(cv, tr, b, g, Font::IconSmall, th.fg, 0.85 * a);
+        ui::ctrl_glyph(cv, tr, b, g, Font::IconSmall, th.fg, 0.85 * a, &f.it, Hit::VolBtn, s);
         let hot = f.it.hover == Some(Hit::Vol) || f.it.drag == Some(Hit::Vol);
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, s, a);
     }

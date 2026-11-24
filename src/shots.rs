@@ -292,3 +292,51 @@ fn shots() {
         save_png("caps-lock-styles.png", img.0, img.1, &img.2);
     }
 }
+
+/// Quadros das animações dos ícones do card (folha de contato para conferir
+/// o movimento): uma linha por botão, colunas = instantes da animação.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test --release icon_frames -- --ignored`
+#[test]
+#[ignore]
+fn icon_frames() {
+    use crate::ui::{Hit, IconFx};
+    let cfg = Config::default();
+    let media = ui::sample_media();
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let c = colors(&cfg, &media);
+    let cl = CLayout::build(S, &cfg, true);
+    // Só a faixa dos botões do card.
+    let (bx, by, bw, bh) = (cl.shuffle.x - 8.0 * S, cl.shuffle.y - 6.0 * S, cl.repeat.right() - cl.shuffle.x + 16.0 * S, cl.shuffle.h + 12.0 * S);
+    let cols = 7;
+    let rows: [(Hit, &str, bool); 5] = [(Hit::Play, "play", false), (Hit::Prev, "prev", false), (Hit::Next, "next", false), (Hit::Shuffle, "shuffle", true), (Hit::Repeat, "repeat", true)];
+    let (iw, ih) = (bw * cols as f32, bh * rows.len() as f32);
+    let sw = iw.ceil() as usize;
+    let mut sheet = vec![0u32; sw * ih.ceil() as usize];
+    {
+        for (ri, (h, _, toggled)) in rows.iter().enumerate() {
+            for ci in 0..cols {
+                let age = IconFx::duration(*h) * ci as f32 / (cols - 1) as f32;
+                let mut pb = playback(&media);
+                if *toggled {
+                    pb.shuffle = true;
+                    pb.repeat = 2;
+                }
+                let card = render(cl.w, cl.h, |cv| {
+                    let it = Interact { fx: IconFx::single(*h, age), ..Interact::default() };
+                    let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None };
+                    ui::draw_card(cv, &mut tr, &cl, &f);
+                });
+                let (cw, _, px) = card;
+                let (x0, y0) = (ci as f32 * bw, ri as f32 * bh);
+                for y in 0..bh as usize {
+                    for x in 0..bw as usize {
+                        let (sx, sy) = (bx as usize + x, by as usize + y);
+                        sheet[(y0 as usize + y) * sw + x0 as usize + x] = px[sy * cw + sx];
+                    }
+                }
+            }
+        }
+    }
+    save_png("icon-frames.png", iw.ceil() as usize, ih.ceil() as usize, &sheet);
+}

@@ -439,7 +439,7 @@ fn demo_gif() {
         {
             let mut cv = Canvas::new(W as usize, H as usize, &mut px);
             let widget = layer(wl.width, 40.0 * s, |c| {
-                let it = Interact { hover: on_widget.then_some(Hit::Info), pressed: (on_widget && pressed(t, 1.25)).then_some(Hit::Info), drag: None };
+                let it = Interact { hover: on_widget.then_some(Hit::Info), pressed: (on_widget && pressed(t, 1.25)).then_some(Hit::Info), drag: None, ..Default::default() };
                 let fr = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &colors, &media), colors: &colors, it, pb, time: t, viz: None, flyout_open: open > 0.5, s, change: None };
                 ui::draw_widget(c, &mut tr, &wl, &fr);
             });
@@ -455,7 +455,7 @@ fn demo_gif() {
                         None
                     };
                     let down = pressed(t, 2.5) || pressed(t, 3.2) || pressed(t, 4.0);
-                    let it = Interact { hover, pressed: if down { hover } else { None }, drag: None };
+                    let it = Interact { hover, pressed: if down { hover } else { None }, drag: None, ..Default::default() };
                     let fr = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: ui::card_theme(&cfg, &colors, &media), it, pb, s, backdrop: None, hint: None };
                     ui::draw_card(c, &mut tr, &cl, &fr);
                 });
@@ -668,7 +668,7 @@ fn mac_gif(name: &str, has_notch: bool) {
             colors: &colors,
             media: &media,
             theme: nd::theme(&cfg, &colors, &media),
-            it: Interact { hover, pressed: if down { hover } else { None }, drag: None },
+            it: Interact { hover, pressed: if down { hover } else { None }, drag: None, ..Default::default() },
             pb: Playback { playing: !paused, shuffle: media.shuffle, repeat: media.repeat, pos: media.pos, seek_preview: None, volume: 0.62, muted: false },
             time: t,
             viz: Some((&values, &peaks)),

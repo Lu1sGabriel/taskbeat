@@ -299,6 +299,8 @@ pub struct Config {
     pub widget_border: bool,
     /// Anima a troca de música no widget (texto desliza, capa esmaece).
     pub track_anim: bool,
+    /// Anima os ícones dos botões (play/pausa, pular, aleatório, repetir, volume).
+    pub icon_anim: bool,
     /// Largura da área do título, em pixels lógicos.
     pub title_width: i32,
     pub anchor: Anchor,
@@ -416,6 +418,7 @@ impl Default for Config {
             widget_opacity: 6,
             widget_border: true,
             track_anim: true,
+            icon_anim: true,
             title_width: 120,
             anchor: Anchor::BeforeTray,
             offset: 0,

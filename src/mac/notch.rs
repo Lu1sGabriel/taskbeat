@@ -18,7 +18,7 @@ use crate::notch::{self as nd, Geom, NLayout, NotchFrame};
 use crate::render::{Canvas, Colors, RectF};
 use crate::shared::{MediaCmd, MediaInfo};
 use crate::text::TextRenderer;
-use crate::ui::{Hit, Interact, Playback};
+use crate::ui::{Hit, IconAnims, Interact, Playback};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -116,6 +116,8 @@ struct Notch {
     change: Option<(MediaInfo, Instant)>,
     hint: Option<(&'static str, Instant)>,
     it: Interact,
+    /// Animação dos ícones dos botões.
+    icons: IconAnims,
     seek_preview: Option<f32>,
     hover_since: Option<Instant>,
     leave_since: Option<Instant>,
@@ -254,6 +256,7 @@ pub fn start(mtm: MainThreadMarker) {
         change: None,
         hint: None,
         it: Interact::default(),
+        icons: IconAnims::default(),
         seek_preview: None,
         hover_since: None,
         leave_since: None,
@@ -544,6 +547,7 @@ impl Notch {
             || self.leave_since.is_some()
             || self.peek_pending.is_some()
             || self.it.drag.is_some()
+            || (self.cfg.icon_anim && self.icons.running())
     }
 
     /// Algo muda sozinho com o tempo (barras, indicador, tempo da música)?
@@ -574,6 +578,13 @@ impl Notch {
     fn render(&mut self, force: bool) {
         if self.hidden {
             return;
+        }
+        // Ícones: anima o que mudou (clique ou o próprio player).
+        if self.media.present() {
+            let st = Playback { playing: self.media.playing, shuffle: self.media.shuffle, repeat: self.media.repeat, muted: self.volume.muted, ..Default::default() };
+            self.icons.observe(&st);
+        } else {
+            self.icons.reset_seen();
         }
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
@@ -657,7 +668,7 @@ impl Notch {
             colors: &colors,
             media: &self.media,
             theme,
-            it: self.it,
+            it: Interact { fx: self.icons.fx(self.cfg.icon_anim), ..self.it },
             pb: Playback {
                 playing: self.media.playing,
                 shuffle: self.media.shuffle,
@@ -811,8 +822,14 @@ impl Notch {
                 sh.send_media(MediaCmd::PlayPause);
                 self.media.playing = !self.media.playing;
             }
-            Some(Hit::Prev) if m.can_prev => sh.send_media(MediaCmd::Previous),
-            Some(Hit::Next) if m.can_next => sh.send_media(MediaCmd::Next),
+            Some(Hit::Prev) if m.can_prev => {
+                self.icons.kick(Hit::Prev);
+                sh.send_media(MediaCmd::Previous);
+            }
+            Some(Hit::Next) if m.can_next => {
+                self.icons.kick(Hit::Next);
+                sh.send_media(MediaCmd::Next);
+            }
             Some(Hit::Shuffle) => {
                 if m.can_shuffle {
                     sh.send_media(MediaCmd::Shuffle(!m.shuffle));
