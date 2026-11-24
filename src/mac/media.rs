@@ -10,6 +10,11 @@
 //! Reserva: sem o adaptador (ou se o macOS bloqueá-lo), Spotify e Música são
 //! lidos por AppleScript (pede a permissão "Automação" na primeira vez).
 //!
+//! Aleatório e repetir: o Spotify não os oferece pelo Tocando Agora (só
+//! tocar, pausar, pular e posição). Nele (e no Música, se faltar), esses dois
+//! vão por AppleScript: o estado é lido quando o card abre e depois de cada
+//! clique — nada fica consultando o player em segundo plano.
+//!
 //! Também detecta troca *automática* de faixa (a anterior acabou sozinha) para
 //! o "A seguir", com as mesmas regras do Windows.
 
@@ -22,7 +27,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -51,7 +56,21 @@ enum Ev {
     Cmd(MediaCmd),
     /// Linha do adaptador: (conteúdo, é diferença?).
     Data(Map<String, Value>, bool),
+    /// Aleatório/repetir lidos por AppleScript (app, resultado).
+    Modes(&'static str, script::ModesRead),
     AdapterGone,
+}
+
+/// Apps cujo AppleScript o macOS bloqueou (Automação negada): bit 1 = Spotify, 2 = Música.
+static DENIED: AtomicU8 = AtomicU8::new(0);
+
+fn denied_bit(app: &str) -> u8 {
+    if app == "Spotify" { 1 } else { 2 }
+}
+
+/// O macOS não deixa o Taskbeat controlar este app (Ajustes › Privacidade › Automação)?
+pub fn automation_denied(bundle: &str) -> bool {
+    script::app_for(bundle).is_some_and(|app| DENIED.load(Ordering::Relaxed) & denied_bit(app) != 0)
 }
 
 /// PID do adaptador em execução (para encerrá-lo junto com o app).
@@ -177,7 +196,7 @@ pub fn spawn(shared: Arc<Shared>, notify: fn()) {
             if adapter.is_none() {
                 log::warn("adaptador do Tocando Agora não encontrado: usando AppleScript (Spotify e Música)");
             }
-            let mut st = State::new(shared.clone(), notify);
+            let mut st = State::new(shared.clone(), notify, tx.clone());
             let mut live = adapter.as_ref().is_some_and(|a| a.stream(tx.clone()));
             let mut restarts = 0u32;
             let mut last_script = Instant::now() - SCRIPT_POLL;
@@ -188,6 +207,7 @@ pub fn spawn(shared: Arc<Shared>, notify: fn()) {
                         st.adapter_data(p, diff);
                     }
                     Ok(Ev::Cmd(c)) => st.command(c, if live { adapter.as_ref() } else { None }),
+                    Ok(Ev::Modes(app, r)) => st.modes_read(app, r),
                     Ok(Ev::AdapterGone) => {
                         live = false;
                         // Reinicia algumas vezes (ex.: o perl caiu); depois fica na reserva.
@@ -264,6 +284,12 @@ struct State {
     apps: HashMap<String, (String, Option<Arc<Image>>)>,
     /// Origem da última informação publicada pelo AppleScript (para os comandos).
     script_app: Option<&'static str>,
+    /// Para as leituras de aleatório/repetir feitas em outra thread.
+    tx: Sender<Ev>,
+    /// App tocando pelo adaptador cujo aleatório/repetir vão por AppleScript.
+    scripted: Option<&'static str>,
+    /// Último aleatório/repetir conhecido desse app.
+    modes: Option<(&'static str, script::Modes)>,
 }
 
 fn epoch_micros() -> f64 {
@@ -279,8 +305,11 @@ fn text(p: &Map<String, Value>, k: &str) -> String {
 }
 
 impl State {
-    fn new(shared: Arc<Shared>, notify: fn()) -> Self {
+    fn new(shared: Arc<Shared>, notify: fn(), tx: Sender<Ev>) -> Self {
         Self {
+            tx,
+            scripted: None,
+            modes: None,
             shared,
             notify,
             payload: Map::new(),
@@ -312,7 +341,13 @@ impl State {
         } else {
             self.payload = p;
         }
+        self.adapter_publish();
+    }
+
+    /// Publica o que o adaptador informou por último.
+    fn adapter_publish(&mut self) {
         if self.adapter_empty() {
+            self.scripted = None;
             self.publish_empty();
             return;
         }
@@ -379,6 +414,20 @@ impl State {
             can_seek: dur > 0.0 && has(&[24], &["position", "seek"], true),
             ..Default::default()
         };
+        // Sem aleatório/repetir no Tocando Agora (Spotify): por AppleScript.
+        self.scripted = None;
+        if !(info.can_shuffle && info.can_repeat) {
+            if let Some(app) = script::app_for(&bundle) {
+                self.scripted = Some(app);
+                let allowed = DENIED.load(Ordering::Relaxed) & denied_bit(app) == 0;
+                info.can_shuffle = allowed;
+                info.can_repeat = allowed;
+                if let Some((_, md)) = self.modes.filter(|(a, _)| *a == app) {
+                    info.shuffle = md.shuffle;
+                    info.repeat = md.repeat;
+                }
+            }
+        }
         // Capa (base64): só decodifica quando muda.
         let old_src = self.art_src.clone();
         let src = p.get("artworkData").and_then(Value::as_str).unwrap_or("");
@@ -487,6 +536,30 @@ impl State {
         if matches!(c, MediaCmd::Next | MediaCmd::Previous) {
             self.last_manual = Some(Instant::now());
         }
+        // Aleatório/repetir por AppleScript (o player não os oferece no Tocando Agora).
+        if let (Some(app), None) = (self.scripted, self.script_app) {
+            match c {
+                // O card abriu: lê o estado atual (pede a permissão na primeira vez).
+                MediaCmd::Refresh => {
+                    self.read_modes(app, None);
+                    return;
+                }
+                MediaCmd::Shuffle(_) | MediaCmd::Repeat(_) => {
+                    let mut md = self.modes.filter(|(a, _)| *a == app).map(|m| m.1).unwrap_or_default();
+                    match c {
+                        MediaCmd::Shuffle(on) => md.shuffle = on,
+                        MediaCmd::Repeat(r) => md.repeat = script::repeat_for(app, r),
+                        _ => {}
+                    }
+                    // Mostra já o novo estado; a leitura depois do comando confirma.
+                    self.modes = Some((app, md));
+                    self.adapter_publish();
+                    self.read_modes(app, Some(c));
+                    return;
+                }
+                _ => {}
+            }
+        }
         if let (Some(a), None) = (adapter, self.script_app) {
             match c {
                 MediaCmd::PlayPause => a.run(&["send", "2"]),
@@ -501,6 +574,38 @@ impl State {
         }
         if let Some(app) = self.script_app {
             script::command(app, c);
+        }
+    }
+
+    /// Em outra thread: aplica `cmd` (se houver) e lê aleatório/repetir do app.
+    fn read_modes(&self, app: &'static str, cmd: Option<MediaCmd>) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            if let Some(c) = cmd {
+                script::command_now(app, c);
+                // O player aplica a mudança um instante depois.
+                std::thread::sleep(Duration::from_millis(350));
+            }
+            let _ = tx.send(Ev::Modes(app, script::read_modes(app)));
+        });
+    }
+
+    fn modes_read(&mut self, app: &'static str, r: script::ModesRead) {
+        let bit = denied_bit(app);
+        match r {
+            script::ModesRead::Ok(md) => {
+                DENIED.fetch_and(!bit, Ordering::Relaxed);
+                self.modes = Some((app, md));
+            }
+            script::ModesRead::Denied => {
+                if DENIED.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+                    log::warn(&format!("Automação negada para {app}: aleatório/repetir indisponíveis"));
+                }
+            }
+            script::ModesRead::Failed => return,
+        }
+        if self.scripted == Some(app) && self.script_app.is_none() {
+            self.adapter_publish();
         }
     }
 }
@@ -542,8 +647,75 @@ mod script {
     }
 
     fn osascript(src: &str) -> Option<String> {
-        let out = Command::new("/usr/bin/osascript").arg("-e").arg(src).output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+        osascript_full(src).ok()
+    }
+
+    /// Saída do script ou, se falhar, o erro (stderr).
+    fn osascript_full(src: &str) -> Result<String, String> {
+        let out = Command::new("/usr/bin/osascript").arg("-e").arg(src).output().map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim_end().to_string())
+        }
+    }
+
+    /// Nome do app no AppleScript a partir do identificador do pacote.
+    pub fn app_for(bundle: &str) -> Option<&'static str> {
+        match bundle {
+            "com.spotify.client" => Some("Spotify"),
+            "com.apple.Music" => Some("Music"),
+            _ => None,
+        }
+    }
+
+    /// Aleatório e repetir de um player (repetir: 0 = não, 1 = música, 2 = lista).
+    #[derive(Clone, Copy, Default, PartialEq, Debug)]
+    pub struct Modes {
+        pub shuffle: bool,
+        pub repeat: u8,
+    }
+
+    pub enum ModesRead {
+        Ok(Modes),
+        /// O usuário não deixou o Taskbeat controlar o app (Automação).
+        Denied,
+        Failed,
+    }
+
+    /// O Spotify só liga ou desliga a repetição (da lista): "música" vira "lista".
+    pub fn repeat_for(app: &str, r: u8) -> u8 {
+        if app == "Spotify" { if r != 0 { 2 } else { 0 } } else { r.min(2) }
+    }
+
+    pub fn read_modes(app: &str) -> ModesRead {
+        let src = if app == "Spotify" {
+            r#"if application "Spotify" is running then tell application "Spotify" to return (shuffling as text) & linefeed & (repeating as text)"#
+        } else {
+            r#"if application "Music" is running then tell application "Music" to return (shuffle enabled as text) & linefeed & (song repeat as text)"#
+        };
+        match osascript_full(src) {
+            Ok(out) => {
+                let mut l = out.lines().map(str::trim);
+                match (l.next(), l.next()) {
+                    (Some(sh), Some(rep)) => ModesRead::Ok(Modes {
+                        shuffle: sh == "true",
+                        repeat: match rep {
+                            "true" | "all" => 2,
+                            "one" => 1,
+                            _ => 0,
+                        },
+                    }),
+                    _ => ModesRead::Failed,
+                }
+            }
+            // -1743: "Not authorized to send Apple events".
+            Err(e) if e.contains("-1743") => ModesRead::Denied,
+            Err(e) => {
+                super::log::warn(&format!("AppleScript ({app}): {e}"));
+                ModesRead::Failed
+            }
+        }
     }
 
     const SPOTIFY: &str = r#"if application "Spotify" is running then
@@ -606,6 +778,12 @@ end if"#;
     }
 
     pub fn command(app: &str, c: MediaCmd) {
+        let app = app.to_string();
+        std::thread::spawn(move || command_now(&app, c));
+    }
+
+    /// Como `command`, mas espera o script terminar.
+    pub fn command_now(app: &str, c: MediaCmd) {
         let spotify = app == "Spotify";
         let what = match c {
             MediaCmd::PlayPause => "playpause".to_string(),
@@ -619,8 +797,8 @@ end if"#;
             MediaCmd::Refresh => return,
         };
         let src = format!("tell application \"{app}\" to {what}");
-        std::thread::spawn(move || {
-            let _ = osascript(&src);
-        });
+        if let Err(e) = osascript_full(&src) {
+            super::log::warn(&format!("AppleScript ({app}): {e}"));
+        }
     }
 }

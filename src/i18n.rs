@@ -440,6 +440,7 @@ static T: &[[&str; 4]] = &[
     ["Próxima", "Next", "Siguiente", "Weiter"],
     ["Anterior", "Previous", "Anterior", "Zurück"],
     ["Este player não deixa mudar isso pelo macOS", "This player doesn't allow changing this through macOS", "Este reproductor no permite cambiar esto desde macOS", "Dieser Player lässt das nicht über macOS ändern"],
+    ["Permita em Ajustes › Privacidade › Automação", "Allow it in Settings › Privacy › Automation", "Permítelo en Ajustes › Privacidad › Automatización", "In Einstellungen › Datenschutz › Automation erlauben"],
     ["Ligue \"Mostrar música no notch\" para usar esta opção", "Turn on \"Show music in the notch\" to use this option", "Activa \"Mostrar la música en el notch\" para usar esta opción", "Aktiviere „Musik in der Notch anzeigen“, um diese Option zu nutzen"],
     ["Abaixo do notch", "Below the notch", "Debajo del notch", "Unter der Notch"],
     ["Aviso", "Alert", "Aviso", "Hinweis"],

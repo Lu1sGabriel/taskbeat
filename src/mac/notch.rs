@@ -482,6 +482,8 @@ impl Notch {
             self.peek_pending = None;
             self.volume.poll();
             self.last_volume_poll = now;
+            // Aleatório/repetir lidos na hora (Spotify: por AppleScript).
+            shared().send_media(MediaCmd::Refresh);
         } else {
             self.it = Interact::default();
             self.seek_preview = None;
@@ -798,7 +800,11 @@ impl Notch {
     fn activate(&mut self, hit: Option<Hit>) {
         let sh = shared();
         let m = &self.media;
-        let not_here = "Este player não deixa mudar isso pelo macOS";
+        let not_here = if super::media::automation_denied(&m.aumid) {
+            "Permita em Ajustes › Privacidade › Automação"
+        } else {
+            "Este player não deixa mudar isso pelo macOS"
+        };
         match hit {
             Some(Hit::Info) if !self.open_target => self.set_open(true),
             Some(Hit::Play) if m.can_toggle => {

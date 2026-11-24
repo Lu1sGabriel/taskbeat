@@ -1,2 +1,2 @@
 "NSAudioCaptureUsageDescription" = "Taskbeat escucha el sonido que reproduce tu Mac solo para animar las barras de audio junto a la música. No se graba ni se guarda nada.";
-"NSAppleEventsUsageDescription" = "Taskbeat lee la canción actual y envía reproducir, pausar y saltar a Spotify y Música.";
+"NSAppleEventsUsageDescription" = "Taskbeat lee la canción actual y envía reproducir, pausar, saltar, aleatorio y repetir a Spotify y Música.";

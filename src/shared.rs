@@ -49,7 +49,8 @@ pub enum MediaCmd {
     Repeat(u8),
     /// Ir para a posição (segundos desde o início da faixa).
     Seek(f64),
-    /// Interno: o Windows avisou que algo mudou (sessão, música, play/pause).
+    /// Windows: aviso interno de que algo mudou (sessão, música, play/pause).
+    /// Mac: o card abriu (relê aleatório/repetir dos players por AppleScript).
     Refresh,
 }
 
