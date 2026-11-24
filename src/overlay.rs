@@ -20,6 +20,7 @@ use crate::taskbar::{self, Placement};
 use crate::text::TextRenderer;
 use crate::ui::{self, CLayout, Hit, Interact, Playback, WLayout};
 use crate::volume::Volume;
+use crate::vsync::{Pacer, Target};
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -39,6 +40,9 @@ use windows::core::{PCWSTR, w};
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const ACTIVE_PERIOD_MS: i32 = 16;
 const ANIM_PERIOD_MS: i32 = 33;
+/// Com o ritmo do monitor ligado, o timer só serve de reserva (e para a
+/// checagem periódica da posição da barra).
+const FALLBACK_PERIOD_MS: i32 = 200;
 /// Repouso: nada animando; só acompanha posição da barra e mudanças (4 fps).
 const IDLE_PERIOD_MS: i32 = 250;
 const SILENCE_HIDE_AFTER: Duration = Duration::from_millis(2500);
@@ -272,6 +276,36 @@ impl Surface {
         unsafe { std::slice::from_raw_parts(self.bits, (self.w * self.h) as usize) }
     }
 
+    /// Desloca o conteúdo `frac` (0..1) de pixel para baixo, misturando linhas
+    /// vizinhas: o cartão desliza em subpixel em vez de andar aos saltos de 1 px.
+    fn shift_down(&mut self, frac: f32) {
+        let k = (frac.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+        if k == 0 {
+            return;
+        }
+        let (w, h) = (self.w as usize, self.h as usize);
+        let px = unsafe { std::slice::from_raw_parts_mut(self.bits, w * h) };
+        for y in (1..h).rev() {
+            let (top, bot) = px.split_at_mut(y * w);
+            let above = &top[(y - 1) * w..];
+            for (d, &a) in bot[..w].iter_mut().zip(above) {
+                if *d != 0 || a != 0 {
+                    *d = render::lerp_px(*d, a, k);
+                }
+            }
+        }
+        for d in &mut px[..w] {
+            *d = render::scale_px(*d, 255 - k);
+        }
+    }
+
+    /// Mostra na posição (x, y) com y fracionário (desliza em subpixel).
+    pub(crate) fn present_at(&mut self, hwnd: HWND, x: i32, y: f32, alpha: f32) {
+        let yi = y.floor();
+        self.shift_down(y - yi);
+        self.present(hwnd, x, yi as i32, alpha);
+    }
+
     fn present(&self, hwnd: HWND, x: i32, y: i32, alpha: f32) {
         let blend = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
@@ -308,7 +342,7 @@ struct Backdrop {
 /// Captura a tela em volta de `rect` (com folga para o desfoque) e monta o
 /// fundo acrílico. Feita com a nossa janela escondida, então só pega o que está
 /// atrás dela.
-fn capture_backdrop((x, y, w, h): (i32, i32, i32, i32), blur: f32) -> Option<Image> {
+pub(crate) fn capture_backdrop((x, y, w, h): (i32, i32, i32, i32), blur: f32) -> Option<Image> {
     let margin = (blur * 1.2).ceil() as i32 + 2;
     let (vx, vy, vw, vh) = unsafe {
         (
@@ -440,6 +474,13 @@ struct Overlay {
     owner: Option<HWND>,
     timer: HANDLE,
     period: i32,
+    /// Quadros no ritmo do monitor durante animações (None: só o timer).
+    pacer: Option<Pacer>,
+    /// Animação leve (letreiro, indicador): desenha a cada 2 quadros do monitor.
+    half_rate: bool,
+    pacer_skip: bool,
+    last_pacer_frame: Instant,
+    monitor: isize,
     surface: Option<Surface>,
     text: TextRenderer,
     analyzer: Analyzer,
@@ -507,6 +548,10 @@ struct Overlay {
     media_version: u64,
     /// Assinatura do último quadro desenhado do widget (pula se nada mudou).
     last_sig: Option<WidgetSig>,
+    /// Troca de música no widget: música anterior e quando o texto/a capa mudaram.
+    prev_media: MediaInfo,
+    text_change: Option<Instant>,
+    art_change: Option<Instant>,
     trimmed: bool,
 }
 
@@ -523,6 +568,8 @@ struct WidgetSig {
     flyout_open: bool,
     playing: bool,
     progress_px: i32,
+    /// Segundo atual quando a segunda linha mostra o tempo.
+    clock: i64,
 }
 
 fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
@@ -544,6 +591,11 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         owner: None,
         timer,
         period: 0,
+        pacer: Pacer::new(Target::Event),
+        half_rate: false,
+        pacer_skip: false,
+        last_pacer_frame: now,
+        monitor: 0,
         surface: None,
         text: TextRenderer::new(),
         analyzer: Analyzer::new(cfg.bars, rate),
@@ -598,6 +650,9 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         demo_osd: std::env::var_os("TV_DEMO_CAPS").is_some(),
         media_version: u64::MAX,
         last_sig: None,
+        prev_media: MediaInfo::default(),
+        text_change: None,
+        art_change: None,
         trimmed: false,
         shared,
     };
@@ -606,8 +661,9 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
     ov.attach_to_taskbar();
 
     let mut msg = MSG::default();
+    let handles: Vec<HANDLE> = std::iter::once(ov.timer).chain(ov.pacer.as_ref().map(|p| p.event())).collect();
     'outer: loop {
-        let r = unsafe { MsgWaitForMultipleObjects(Some(&[ov.timer]), false, 1000, QS_ALLINPUT) };
+        let r = unsafe { MsgWaitForMultipleObjects(Some(&handles), false, 1000, QS_ALLINPUT) };
         unsafe {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
@@ -621,8 +677,20 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
             break;
         }
         let has_input = EVENTS.with(|e| !e.borrow().is_empty()) || LOCK_KEYS.with(|q| !q.borrow().is_empty());
-        if r == WAIT_OBJECT_0 || r == WAIT_TIMEOUT || has_input {
-            ov.frame();
+        let vblank = handles.len() > 1 && r.0 == WAIT_OBJECT_0.0 + 1;
+        let pacing = ov.pacer.as_ref().is_some_and(|p| p.active());
+        if vblank {
+            // Animação leve: um quadro sim, outro não (~30 fps, alinhado ao monitor).
+            ov.pacer_skip = ov.half_rate && !ov.pacer_skip;
+            if !ov.pacer_skip || has_input {
+                ov.last_pacer_frame = Instant::now();
+                ov.frame();
+            }
+        } else if r == WAIT_OBJECT_0 || r == WAIT_TIMEOUT || has_input {
+            // Com o ritmo do monitor ativo, o timer só entra se ele parou de bater.
+            if !pacing || has_input || ov.last_pacer_frame.elapsed() > Duration::from_millis(120) {
+                ov.frame();
+            }
         }
     }
 
@@ -643,6 +711,25 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
 }
 
 impl Overlay {
+    /// Ritmo dos quadros: animação forte (cada vblank), leve (vblank sim, vblank
+    /// não) ou repouso (timer lento). Sem o ritmo do monitor, volta aos timers.
+    fn set_rate(&mut self, busy: bool, decorative: bool) {
+        let Some(pacer) = &self.pacer else {
+            self.set_period(if busy {
+                ACTIVE_PERIOD_MS
+            } else if decorative {
+                ANIM_PERIOD_MS
+            } else {
+                IDLE_PERIOD_MS
+            });
+            return;
+        };
+        let on = busy || decorative;
+        self.half_rate = !busy;
+        pacer.set_active(on);
+        self.set_period(if on { FALLBACK_PERIOD_MS } else { IDLE_PERIOD_MS });
+    }
+
     fn set_period(&mut self, ms: i32) {
         if self.period == ms {
             return;
@@ -762,7 +849,26 @@ impl Overlay {
         let mv = self.shared.media_version.load(Ordering::Relaxed);
         if mv != self.media_version {
             self.media_version = mv;
-            self.media = self.shared.media.lock().unwrap().clone();
+            let new = self.shared.media.lock().unwrap().clone();
+            // Troca de música com o widget à vista: anima texto e capa.
+            if self.cfg.track_anim && self.shown && self.fade > 0.99 {
+                let old = &self.media;
+                let text = old.present() && new.present() && (old.title != new.title || old.artist != new.artist);
+                let art = !new.art_pending && !same_art(&old.art, &new.art) && (old.art.is_some() || new.art.is_some());
+                // Texto e capa animam separados: o player costuma mandar a capa
+                // nova um pouco depois do título.
+                if text {
+                    let art_shown = self.prev_media.art.take();
+                    self.prev_media = old.clone();
+                    self.prev_media.art = art_shown;
+                    self.text_change = Some(now);
+                }
+                if art {
+                    self.prev_media.art = old.art.clone();
+                    self.art_change = Some(now);
+                }
+            }
+            self.media = new;
         }
         self.colors.album = self.media.art.as_ref().map(|a| a.vibrant);
         let visible = self.placement.is_some_and(|p| p.visible);
@@ -826,6 +932,13 @@ impl Overlay {
             let logical = WLayout::build(1.0, 40.0, &self.cfg, panel, viz).width.ceil() as i32;
             self.placement = taskbar::compute(&self.cfg, logical.max(1));
             self.attach_to_taskbar();
+            let mon = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTOPRIMARY) };
+            if mon.0 as isize != self.monitor {
+                self.monitor = mon.0 as isize;
+                if let Some(p) = &self.pacer {
+                    p.set_monitor(mon);
+                }
+            }
         }
 
         // Áudio -> espectro (só com o visualizador ligado).
@@ -890,14 +1003,10 @@ impl Overlay {
             || had_input
             || (self.fade > 0.0 && self.fade < 1.0)
             || now - self.last_input < Duration::from_millis(500);
+        let changing = self.change_progress(now).is_some();
+        let busy = busy || changing;
         let decorative = panel && pb.playing && (self.cfg.playing_indicator || self.cfg.marquee || self.cfg.taskbar_progress);
-        self.set_period(if busy {
-            ACTIVE_PERIOD_MS
-        } else if decorative {
-            ANIM_PERIOD_MS
-        } else {
-            IDLE_PERIOD_MS
-        });
+        self.set_rate(busy, decorative);
 
         let Some(p) = placement.filter(|_| self.fade > 0.001) else {
             if self.shown {
@@ -912,7 +1021,7 @@ impl Overlay {
         };
 
         // Nada animando e nada mudou desde o último quadro: não redesenha.
-        let animating = (viz && sound) || decorative || (self.fade > 0.0 && self.fade < 1.0);
+        let animating = (viz && sound) || decorative || changing || (self.fade > 0.0 && self.fade < 1.0);
         let sig = WidgetSig {
             media: self.media_version,
             cfg: self.cfg_version,
@@ -924,6 +1033,7 @@ impl Overlay {
             flyout_open: self.flyout_open,
             playing: pb.playing,
             progress_px: if self.cfg.taskbar_progress && self.media.dur > 0.0 { (pb.pos / self.media.dur * 400.0) as i32 } else { 0 },
+            clock: if self.cfg.second_line == crate::config::SecondLine::Time { pb.pos as i64 } else { 0 },
         };
         if !animating && self.shown && self.last_sig == Some(sig) {
             self.keep_on_top();
@@ -941,6 +1051,7 @@ impl Overlay {
             cv.fill_raw(0x0100_0000); // alfa 1/255: invisível, mas recebe cliques
             let theme = ui::widget_theme(&self.cfg, &self.colors, &self.media);
             let pressed = self.pressed.filter(|(w, _)| *w == Win::Widget).map(|(_, h)| h);
+            let change = self.change_progress(now);
             let f = ui::WidgetFrame {
                 cfg: &self.cfg,
                 media: &self.media,
@@ -952,6 +1063,7 @@ impl Overlay {
                 viz: Some((&self.analyzer.values, &self.analyzer.peaks)),
                 flyout_open: self.flyout_open,
                 s: p.scale,
+                change: change.map(|(a, b)| (&self.prev_media, a, b)),
             };
             ui::draw_widget(&mut cv, &mut self.text, &layout, &f);
         }
@@ -967,6 +1079,19 @@ impl Overlay {
         }
         self.keep_on_top();
         self.maybe_trim(now);
+    }
+
+    /// Progresso (0..1) da troca de música: (texto, capa); `None` se nada anima.
+    fn change_progress(&mut self, now: Instant) -> Option<(f32, f32)> {
+        let p = |t: &mut Option<Instant>| {
+            let v = t.map(|t| ((now - t).as_secs_f32() / 0.42).min(1.0)).unwrap_or(1.0);
+            if v >= 1.0 {
+                *t = None;
+            }
+            v
+        };
+        let (a, b) = (p(&mut self.text_change), p(&mut self.art_change));
+        (a < 1.0 || b < 1.0).then_some((a, b))
     }
 
     /// Se o usuário clicou na barra, ela subiu na ordem Z: voltamos para cima dela.
@@ -1020,10 +1145,10 @@ impl Overlay {
         };
         let s = p.scale;
         let (w, h) = ui::osd_size(s, &self.cfg);
-        let e = if t < 0.25 {
-            ui::ease_out_cubic(t / 0.25)
-        } else if t > secs - 0.3 {
-            1.0 - ui::ease_out_cubic((t - (secs - 0.3)) / 0.3)
+        let e = if t < 0.3 {
+            ui::ease_enter(t / 0.3)
+        } else if t > secs - 0.22 {
+            1.0 - ui::ease_exit((t - (secs - 0.22)) / 0.22)
         } else {
             1.0
         };
@@ -1046,9 +1171,9 @@ impl Overlay {
         let x = (x + (self.cfg.osd_offset_x as f32 * s) as i32).clamp(p.mon_left - mi, p.mon_right - wi + mi);
         let y = (y + (self.cfg.osd_offset_y as f32 * s) as i32).clamp(p.mon_top - mi, p.mon_bottom - hi + mi);
         let (slide, zoom) = match self.cfg.osd_anim {
-            OsdAnim::Slide => (((1.0 - e) * 14.0 * s) as i32, 1.0),
-            OsdAnim::Zoom => (0, 0.86 + 0.14 * e),
-            OsdAnim::Fade => (0, 1.0),
+            OsdAnim::Slide => ((1.0 - e) * 18.0 * s, 1.0),
+            OsdAnim::Zoom => (0.0, 0.88 + 0.12 * e),
+            OsdAnim::Fade => (0.0, 1.0),
         };
 
         // Acrílico: o que está atrás do cartão na posição final.
@@ -1084,7 +1209,7 @@ impl Overlay {
                 ui::draw_osd(&mut cv, &mut self.text, &self.cfg, &self.colors, &th, s, name, num, on, t, backdrop.as_deref());
             }
         }
-        surf.present(self.osd.hwnd, x, y + dir * slide, e);
+        surf.present_at(self.osd.hwnd, x, y as f32 + dir as f32 * slide, e);
         self.osd.surface = Some(surf);
         self.osd.show(false);
         true
@@ -1243,7 +1368,8 @@ impl Overlay {
 
     fn update_flyout(&mut self, now: Instant, dt: f32, placement: Option<Placement>, pb: Playback) -> bool {
         let target = if self.flyout_open && placement.is_some() { 1.0 } else { 0.0 };
-        let speed = if target > 0.5 { 1.0 / 0.22 } else { 1.0 / 0.14 };
+        let opening = target > 0.5;
+        let speed = if opening { 1.0 / 0.28 } else { 1.0 / 0.16 };
         self.flyout_anim += (target - self.flyout_anim).clamp(-speed * dt, speed * dt);
         let Some(p) = placement.filter(|_| self.flyout_anim > 0.001) else {
             self.flyout.hide();
@@ -1256,11 +1382,12 @@ impl Overlay {
         let s = p.scale;
         let l = self.card_layout();
         let m = ui::SHADOW_MARGIN * s;
-        let e = ui::ease_out_cubic(self.flyout_anim);
+        // Abre com "decelerate" (Fluent) e fecha com "accelerate".
+        let e = if opening { ui::ease_enter(self.flyout_anim) } else { 1.0 - ui::ease_exit(1.0 - self.flyout_anim) };
         let wl = WLayout::build(s, p.h as f32, &self.cfg, self.panel, self.viz);
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - l.w as i32 + m as i32 - (8.0 * s) as i32);
-        let slide = ((1.0 - e) * 14.0 * s) as i32;
+        let slide = (1.0 - e) * if opening { 24.0 } else { 12.0 } * s;
         let (y, dir) = if p.taskbar_bottom_edge {
             (p.taskbar_top - (l.h - m) as i32 - (10.0 * s) as i32, 1)
         } else {
@@ -1300,7 +1427,7 @@ impl Overlay {
             };
             ui::draw_card(&mut cv, &mut self.text, &l, &f);
         }
-        surf.present(self.flyout.hwnd, x, y + dir * slide, e);
+        surf.present_at(self.flyout.hwnd, x, y as f32 + dir as f32 * slide, e);
         self.flyout.surface = Some(surf);
         self.flyout.show(true);
         true
@@ -1349,10 +1476,10 @@ impl Overlay {
         };
         let s = p.scale;
         let (w, h) = ui::upnext_size(s);
-        let e = if t < 0.45 {
-            ui::ease_out_cubic(t / 0.45)
-        } else if t > total - 0.4 {
-            1.0 - ui::ease_out_cubic((t - (total - 0.4)) / 0.4)
+        let e = if t < 0.5 {
+            ui::ease_enter(t / 0.5)
+        } else if t > total - 0.3 {
+            1.0 - ui::ease_exit((t - (total - 0.3)) / 0.3)
         } else {
             1.0
         };
@@ -1365,7 +1492,7 @@ impl Overlay {
                 v
             }
         };
-        let slide = ((1.0 - e) * 18.0 * s) as i32;
+        let slide = (1.0 - e) * 26.0 * s;
         let backdrop = if ui::card_wants_backdrop(&self.cfg) {
             let c = ui::upnext_card(s);
             let rect = (x + c.x.round() as i32, y + c.y.round() as i32, c.w.round() as i32, c.h.round() as i32);
@@ -1383,9 +1510,17 @@ impl Overlay {
             let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
             ui::draw_upnext(&mut cv, &mut self.text, &self.cfg, &self.colors, &self.media, &th, s, t, total, backdrop.as_deref());
         }
-        surf.present(self.popup.hwnd, x, y + dir * slide, e);
+        surf.present_at(self.popup.hwnd, x, y as f32 + dir as f32 * slide, e);
         self.popup.surface = Some(surf);
         self.popup.show(false);
         true
+    }
+}
+
+fn same_art(a: &Option<Arc<Image>>, b: &Option<Arc<Image>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
     }
 }

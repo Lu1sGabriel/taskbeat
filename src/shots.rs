@@ -127,7 +127,7 @@ fn shots() {
             ui::draw_card(cv, &mut tr, &cl, &f);
         });
         let widget = render(wl.width, 40.0 * S, |cv| {
-            let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: true, s: S };
+            let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: true, s: S, change: None };
             ui::draw_widget(cv, &mut tr, &wl, &f);
         });
         let img = render(iw, ih, |cv| {
@@ -138,8 +138,8 @@ fn shots() {
             let bc: Rgb = [0.11, 0.11, 0.12];
             let rad = 12.0 * S;
             cv.fill_rrect_ca(bar.x, bar.y, bar.right(), bar.bottom(), rad, |_, y| (bc, if y < bar.y + rad { 0.0 } else { 0.96 }));
-            cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + rad, 0.0, 0.96, |_, _| bc);
-            cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + S, 0.0, 0.10, |_, _| [1.0; 3]);
+            cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + rad, 0.0, 0.96, bc);
+            cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + S, 0.0, 0.10, [1.0; 3]);
             // Ícones fixados (genéricos) no centro.
             let n = 6;
             let x0 = iw * 0.30 - (n as f32 * 40.0 * S) / 2.0;
@@ -213,7 +213,7 @@ fn shots() {
                 let c = colors(cfg, &shuffled);
                 let l = WLayout::build(S, wh, cfg, true, false);
                 render(l.width, wh, |cv| {
-                    let f = WidgetFrame { cfg, media: &shuffled, theme: ui::widget_theme(cfg, &c, &shuffled), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S };
+                    let f = WidgetFrame { cfg, media: &shuffled, theme: ui::widget_theme(cfg, &c, &shuffled), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None };
                     ui::draw_widget(cv, &mut tr, &l, &f);
                 })
             })
@@ -225,7 +225,7 @@ fn shots() {
                 let y = 10.0 * S + k as f32 * (bar_h + 10.0 * S);
                 let bar = RectF::new(0.0, y, iw, bar_h);
                 cv.fill_round(bar, 10.0 * S, [0.11, 0.11, 0.12], 0.97);
-                cv.fill_rrect(bar.x + 10.0 * S, bar.y, bar.right() - 10.0 * S, bar.y + S, 0.0, 0.10, |_, _| [1.0; 3]);
+                cv.fill_rrect(bar.x + 10.0 * S, bar.y, bar.right() - 10.0 * S, bar.y + S, 0.0, 0.10, [1.0; 3]);
                 blit(cv, iw - 24.0 * S - layer.0 as f32, y + 4.0 * S, layer);
             }
         });

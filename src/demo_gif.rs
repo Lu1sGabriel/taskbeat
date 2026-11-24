@@ -372,7 +372,7 @@ fn demo_gif() {
     let bg = layer(W, H, |cv| {
         wallpaper(cv);
         cv.fill_round(bar, 0.0, [0.11, 0.11, 0.12], 0.96);
-        cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + 1.0, 0.0, 0.10, |_, _| [1.0; 3]);
+        cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + 1.0, 0.0, 0.10, [1.0; 3]);
         for k in 0..5 {
             let ix = W * 0.10 + k as f32 * 40.0;
             cv.fill_round(RectF::new(ix, bar.cy() - 11.0, 22.0, 22.0), 5.0, [0.85; 3], if k == 0 { 0.9 } else { 0.30 });
@@ -447,7 +447,7 @@ fn demo_gif() {
             let mut cv = Canvas::new(W as usize, H as usize, &mut px);
             let widget = layer(wl.width, 40.0, |c| {
                 let it = Interact { hover: on_widget.then_some(Hit::Info), pressed: (on_widget && pressed(t, 1.25)).then_some(Hit::Info), drag: None };
-                let fr = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &colors, &media), colors: &colors, it, pb, time: t, viz: None, flyout_open: open > 0.5, s };
+                let fr = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &colors, &media), colors: &colors, it, pb, time: t, viz: None, flyout_open: open > 0.5, s, change: None };
                 ui::draw_widget(c, &mut tr, &wl, &fr);
             });
             cv.draw_image(wrect, &widget, 0.0, 1.0);
