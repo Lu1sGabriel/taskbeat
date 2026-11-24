@@ -19,6 +19,8 @@ mod render;
 mod settings;
 mod setup;
 mod shared;
+#[cfg(test)]
+mod shots;
 mod system;
 mod taskbar;
 mod text;
