@@ -19,12 +19,19 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
   <img src="docs/screenshots/taskbar-card.png" width="820" alt="Taskbeat na barra de tarefas, com o card de controles aberto">
 </p>
 
-**Card expandido** em três estilos: capa desfocada, cor do álbum e vidro.
+**Widget da barra**: tudo dentro do mesmo fundo — capa, música, indicador e, se quiser, os
+botões (aleatório, anterior, play, próximo, repetir), em formato arredondado, pílula ou reto:
+
+<p align="center">
+  <img src="docs/screenshots/taskbar-widgets.png" width="420" alt="Quatro variações do widget da barra: só a música; com os botões; em pílula com indicador; reto com play só no ícone">
+</p>
+
+**Card expandido** em três estilos: capa desfocada, cor do álbum e acrílico (desfoca o que está atrás).
 
 <p align="center">
   <img src="docs/screenshots/card-artwork.png" width="32%" alt="Card com a capa desfocada">
   <img src="docs/screenshots/card-album-color.png" width="32%" alt="Card na cor do álbum">
-  <img src="docs/screenshots/card-glass.png" width="32%" alt="Card de vidro">
+  <img src="docs/screenshots/card-glass.png" width="32%" alt="Card acrílico sobre um papel de parede colorido">
 </p>
 
 **"A seguir"** (quando o player troca de música sozinho) e **aviso de Caps Lock**:
@@ -32,6 +39,12 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
 <p align="center">
   <img src="docs/screenshots/up-next.png" width="404" alt="Cartão A seguir">
   <img src="docs/screenshots/caps-lock.png" width="288" alt="Aviso de Caps Lock ativado">
+</p>
+
+Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, e ícone de letra, cadeado ou teclado:
+
+<p align="center">
+  <img src="docs/screenshots/caps-lock-styles.png" width="820" alt="Três avisos: sólido com a letra A, acrílico com cadeado e na cor de destaque com teclado numérico">
 </p>
 
 **Configurações** com prévia ao vivo e **instalador**:
@@ -44,22 +57,34 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
 ## O que faz
 
 - **Na barra de tarefas** (compacto): capa + título/artista, indicador animado
-  "tocando agora" e letreiro para títulos longos. Os botões ⏮ ▶ ⏭ ficam no card
-  por padrão (opcionalmente também na barra).
+  "tocando agora" e letreiro para títulos longos, tudo dentro de um único fundo.
+  Fica sempre na barra (com "Nada tocando" quando não há música; dá para desligar).
+  Os botões ficam no card por padrão; ligados na barra, entram no mesmo fundo
+  (⏮ ▶ ⏭, mais aleatório e repetir opcionais), com separador, play preenchido ou
+  só ícone e formato do fundo (arredondado, pílula, reto).
 - **Card expandido** (clique na música): capa grande, aleatório / anterior / play /
   próximo / repetir, barra de progresso arrastável e volume. O app de origem
   (Spotify, Brave…) fica escondido por padrão (opção "Mostrar app de origem").
-  Fundo **capa desfocada**, **cor do álbum** ou **vidro**; layout horizontal ou
-  vertical; tema; cor de destaque (capa ou Windows); cantos; formato do play.
-- **"A seguir"**: cartão animado com a próxima música, só quando o player troca de
-  faixa sozinho (trocas manuais não mostram).
+  Fundo **capa desfocada**, **cor do álbum** ou **acrílico** (vidro fosco que
+  desfoca o que está atrás); layout horizontal ou vertical; tema; cor de destaque
+  (capa ou Windows); cantos; formato do play. Mostra também o álbum, quando o
+  player informa. Aleatório e repetir aparecem sempre (apagados nos players que
+  não deixam mudar pelo Windows, como os navegadores; clicar explica o porquê)
+  ou só quando o player permite.
+- **"A seguir"**: cartão animado com a próxima música (capa, título, artista e
+  álbum), só quando o player troca de faixa sozinho (trocas manuais não mostram),
+  inclusive quando você pula para o fim da música. Com o card aberto, aparece
+  empilhado acima dele. Espera um instante pela capa nova antes de aparecer.
 - **Caps Lock / Num Lock**: aviso animado opcional ao ligar/desligar, com posição
   (centro da tela, topo ou acima do player, mais ajuste fino horizontal/vertical),
-  cantos, tamanho, tema, duração e botão "Mostrar agora". Só essas duas teclas são
-  observadas; nada do que você digita é lido.
+  fundo sólido, acrílico ou na cor de destaque (com opacidade e intensidade do
+  desfoque), ícone (letra, cadeado ou teclado), animação (deslizar, zoom ou
+  esmaecer), cantos, tamanho, tema, duração e botão "Mostrar agora". Só essas duas
+  teclas são observadas; nada do que você digita é lido.
 - **Barras de áudio dinâmicas** (desligadas por padrão): mini visualizador.
 - **Configurações** (clique no ícone da bandeja): janela Fluent com fundo Mica,
-  redimensionável/maximizável, pré-visualização ao vivo de cada componente,
+  abre maximizada (redimensionável), pré-visualização ao vivo de cada componente
+  sempre à vista (fica fixa no topo enquanto as opções rolam),
   controles segmentados e rolagem suave a 60 fps.
 
 Funciona com qualquer player que publique no painel de mídia do Windows (SMTC):
@@ -101,7 +126,8 @@ Como:
 | Volume | `IAudioEndpointVolume` | `src/volume.rs` |
 | Espectro | Hann + FFT 4096 (`realfft`), bandas log, AGC | `src/dsp.rs` |
 | Desenho (widget, card, "A seguir", Caps Lock) | Renderização própria com anti-aliasing (SDF), desfoque, sombras | `src/ui.rs`, `src/render.rs` |
-| Janelas sobre a barra | Janelas *layered* com alfa por pixel, topmost | `src/overlay.rs` |
+| Janelas sobre a barra | Janelas *layered* com alfa por pixel, topmost; o widget pertence à barra (não some atrás dela quando ela é ativada) | `src/overlay.rs` |
+| Fundo acrílico | Captura do que está atrás (antes de a janela aparecer), redução, desfoque, saturação, tinta e granulado | `src/overlay.rs`, `src/render.rs` |
 | Texto e ícones | DirectWrite (Direct2D em software, antialias em tons de cinza nas duas direções) → máscaras; fallback GDI | `src/text.rs` |
 | Capas reduzidas | Pirâmide de mipmaps (sem serrilhado ao encolher) | `src/render.rs` |
 | Posição | `Shell_TrayWnd` + `TrayNotifyWnd`, DPI por monitor, oculta em tela cheia | `src/taskbar.rs` |
@@ -130,7 +156,11 @@ Gera `dist\Taskbeat-Setup-<versão>.exe` (um arquivo só, ~2 MB). O próprio
   trabalho e abrir ao terminar.
 - Por usuário, sem administrador. Atalho no Menu Iniciar e registro em
   Configurações > Apps instalados.
-- Rodar de novo atualiza por cima (fecha o app aberto antes).
+- Rodar de novo detecta a versão instalada e compara com a do instalador: mostra
+  **Atualização disponível (v1.0.1 → v1.1.0)** e atualiza no mesmo lugar, sem
+  desinstalar, mantendo configurações, atalhos e inicialização (fecha o app antes e
+  abre de novo no fim). Com a mesma versão oferece **Reinstalar**; com uma mais nova
+  instalada avisa antes de voltar a versão.
 - Desinstalar: pelo "Apps instalados" (`Taskbeat.exe --uninstall`), com opção de
   apagar também as configurações.
 
@@ -165,6 +195,10 @@ $env:TASKBEAT_LANG="pt"; cargo test --release demo_gif -- --ignored
 ```
 
 `$env:TV_DEMO_MEDIA=1` faz as prévias da tela de configurações usarem a música de exemplo.
+
+Diagnóstico (ex.: o "A seguir" não apareceu): `$env:TASKBEAT_LOG="$env:TEMP\taskbeat.log"`
+antes de abrir o app grava cada leitura do player e cada troca de faixa
+(automática ou manual) nesse arquivo, também no build release.
 
 ## Limitações
 
