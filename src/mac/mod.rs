@@ -21,7 +21,7 @@ use crate::config::Config;
 use crate::shared::Shared;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSMenu, NSMenuDelegate, NSRunningApplication};
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
 use std::cell::OnceCell;

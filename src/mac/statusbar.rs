@@ -103,7 +103,7 @@ pub fn refresh(menu: &NSMenu) {
     let sh = shared();
     let m = sh.media.lock().unwrap().clone();
     let cfg = sh.config();
-    let state = |on: bool| if on { unsafe { NSControlStateValueOn } } else { unsafe { NSControlStateValueOff } };
+    let state = |on: bool| if on { NSControlStateValueOn } else { NSControlStateValueOff };
     if let Some(it) = menu.itemWithTag(TAG_NOW) {
         let title = if !m.present() {
             crate::i18n::tr("Nada tocando").to_string()

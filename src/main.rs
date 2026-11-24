@@ -9,6 +9,9 @@
 //! macOS: veja `mac/mod.rs` (widget no notch, AppKit na thread principal).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// No Mac parte do código comum (opções da barra de tarefas, aviso de teclas…)
+// não é usada.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 
 // Comuns aos dois sistemas: configurações, análise do áudio, traduções e desenho.
 mod config;

@@ -21,7 +21,7 @@ use crate::ui::{Hit, Interact, Playback};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSEvent, NSEventMask, NSPanel, NSResponder, NSScreen, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
@@ -180,15 +180,13 @@ pub fn start(mtm: MainThreadMarker) {
     let layout = NLayout::build(s, geom, &cfg, true);
 
     let rect = NSRect::new(CGPoint::new(0.0, 0.0), CGSize::new((layout.w / s) as f64, (layout.h / s) as f64));
-    let window = unsafe {
-        NSPanel::initWithContentRect_styleMask_backing_defer(
-            NSPanel::alloc(mtm),
-            rect,
-            NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
+    let window = NSPanel::initWithContentRect_styleMask_backing_defer(
+        NSPanel::alloc(mtm),
+        rect,
+        NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+        NSBackingStoreType::Buffered,
+        false,
+    );
     unsafe { window.setReleasedWhenClosed(false) };
     window.setOpaque(false);
     window.setBackgroundColor(Some(&NSColor::clearColor()));

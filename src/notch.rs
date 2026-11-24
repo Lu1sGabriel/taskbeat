@@ -539,6 +539,60 @@ fn draw_peek(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame
     }
 }
 
+/// Prévia da ilha sobre uma tela de mentira (papel de parede, barra de menus e
+/// notch de hardware): usada na tela de configurações e nas capturas.
+pub fn preview(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, colors: &Colors, media: &MediaInfo, open: f32, peek: f32, time: f32) -> (usize, usize, Vec<u32>) {
+    let l = NLayout::build(s, g, cfg, true);
+    let viz_v: Vec<f32> = (0..cfg.bars).map(|i| 0.35 + 0.6 * ((i as f32 * 1.7 + time * 3.0).sin() * 0.5 + 0.5)).collect();
+    let peaks: Vec<f32> = viz_v.iter().map(|v| (v + 0.12).min(1.0)).collect();
+    let colors = Colors { album: media.art.as_ref().map(|a| a.vibrant), ..*colors };
+    let f = NotchFrame {
+        cfg,
+        colors: &colors,
+        media,
+        theme: theme(cfg, &colors, media),
+        it: Interact::default(),
+        pb: Playback { playing: true, shuffle: media.shuffle, repeat: media.repeat, pos: media.pos, seek_preview: None, volume: 0.62, muted: false },
+        time,
+        viz: Some((&viz_v, &peaks)),
+        open,
+        peek,
+        peek_t: 2.0,
+        peek_total: 5.0,
+        hint: None,
+        change: None,
+    };
+    let (sw, sh) = (l.w.ceil() as usize, l.h.ceil() as usize);
+    let mut layer = vec![0u32; sw * sh];
+    draw(&mut Canvas::new(sw, sh, &mut layer), tr, &l, &f);
+
+    let (iw, ih) = ((sw as f32 + 120.0 * s) as usize, sh + (24.0 * s) as usize);
+    let mut px = vec![0u32; iw * ih];
+    {
+        let mut cv = Canvas::new(iw, ih, &mut px);
+        let (fw, fh) = (iw as f32, ih as f32);
+        cv.fill_rrect_ca(0.0, 0.0, fw, fh, 0.0, |x, y| {
+            let u = x / fw;
+            let v = y / fh;
+            let base = lerp3([0.16, 0.36, 0.78], [0.62, 0.30, 0.62], (u * 0.6 + v * 0.4).clamp(0.0, 1.0));
+            (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.5) * 1.6).clamp(0.0, 1.0) * 0.6), 1.0)
+        });
+        // Barra de menus (translúcida) com itens genéricos dos dois lados.
+        let bar = l.band;
+        cv.fill_rrect(0.0, 0.0, fw, bar, 0.0, 0.28, [0.0; 3]);
+        ui::glyph(&mut cv, tr, RectF::new(12.0 * s, 0.0, 22.0 * s, bar), G_MUSIC, Font::IconSmall, [1.0; 3], 0.95);
+        ui::text(&mut cv, tr, "Arquivo   Editar   Ver", Font::Body, 44.0 * s, 0.0, 220.0 * s, bar, [1.0; 3], 0.95);
+        ui::text_right(&mut cv, tr, "12:34", Font::Body, fw - 14.0 * s, 0.0, bar, [1.0; 3], 0.95, s);
+        let x0 = ((fw - sw as f32) / 2.0).round();
+        if g.notch_w > 1.0 {
+            let n = l.notch.offset(x0, 0.0);
+            cv.fill_rrect(n.x, -12.0 * s, n.right(), n.bottom(), 10.0 * s, 1.0, [0.0; 3]);
+        }
+        cv.composite(x0 as i32, 0, &layer, sw, sh, 1.0);
+    }
+    (iw, ih, px)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,64 +607,12 @@ mod tests {
         d.join(name)
     }
 
-    fn colors(media: &MediaInfo) -> Colors {
-        Colors { palette: crate::config::Palette::Album, accent: [0.0, 0.48, 1.0], accent_light: [0.25, 0.6, 1.0], light_taskbar: false, album: media.art.as_ref().map(|a| a.vibrant) }
-    }
-
-    /// Papel de parede + barra de menus + notch de hardware, e a ilha por cima.
-    fn scene(name: &str, g: Geom, cfg: &Config, media: &MediaInfo, open: f32, peek: f32, change: Option<(&MediaInfo, f32)>) {
+    fn scene(name: &str, g: Geom, cfg: &Config, media: &MediaInfo, open: f32, peek: f32) {
         let mut tr = TextRenderer::new();
         tr.set_scale(S);
-        let l = NLayout::build(S, g, cfg, true);
-        let c = colors(media);
-        let viz_v: Vec<f32> = (0..cfg.bars).map(|i| 0.35 + 0.6 * ((i as f32 * 1.7).sin() * 0.5 + 0.5)).collect();
-        let peaks: Vec<f32> = viz_v.iter().map(|v| (v + 0.12).min(1.0)).collect();
-        let f = NotchFrame {
-            cfg,
-            colors: &c,
-            media,
-            theme: theme(cfg, &c, media),
-            it: Interact::default(),
-            pb: Playback { playing: true, shuffle: false, repeat: 0, pos: media.pos, seek_preview: None, volume: 0.62, muted: false },
-            time: 1.3,
-            viz: Some((&viz_v, &peaks)),
-            open,
-            peek,
-            peek_t: 2.0,
-            peek_total: 5.0,
-            hint: None,
-            change,
-        };
-        let (sw, sh) = (l.w.ceil() as usize, l.h.ceil() as usize);
-        let mut layer = vec![0u32; sw * sh];
-        draw(&mut Canvas::new(sw, sh, &mut layer), &mut tr, &l, &f);
-
-        let (iw, ih) = ((sw as f32 + 160.0 * S) as usize, sh + (40.0 * S) as usize);
-        let mut px = vec![0u32; iw * ih];
-        {
-            let mut cv = Canvas::new(iw, ih, &mut px);
-            let (fw, fh) = (iw as f32, ih as f32);
-            cv.fill_rrect_ca(0.0, 0.0, fw, fh, 0.0, |x, y| {
-                let u = x / fw;
-                let v = y / fh;
-                let base = lerp3([0.16, 0.36, 0.78], [0.62, 0.30, 0.62], (u * 0.6 + v * 0.4).clamp(0.0, 1.0));
-                (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.5) * 1.6).clamp(0.0, 1.0) * 0.6), 1.0)
-            });
-            // Barra de menus (translúcida) e itens genéricos dos dois lados.
-            let bar = l.band;
-            cv.fill_rrect(0.0, 0.0, fw, bar, 0.0, 0.28, [0.0; 3]);
-            ui::text(&mut cv, &mut tr, "Música   Arquivo   Editar   Ver", Font::Body, 46.0 * S, 0.0, 300.0 * S, bar, [1.0; 3], 0.95);
-            ui::glyph(&mut cv, &mut tr, RectF::new(12.0 * S, 0.0, 24.0 * S, bar), G_MUSIC, Font::Icon, [1.0; 3], 0.95);
-            ui::text(&mut cv, &mut tr, "Ter 24 nov  12:34", Font::Body, fw - 136.0 * S, 0.0, 130.0 * S, bar, [1.0; 3], 0.95);
-            // Notch de hardware.
-            let x0 = (fw - sw as f32) / 2.0;
-            if g.notch_w > 1.0 {
-                let n = l.notch.offset(x0, 0.0);
-                cv.fill_rrect(n.x, -12.0 * S, n.right(), n.bottom(), 10.0 * S, 1.0, [0.0; 3]);
-            }
-            cv.composite(x0.round() as i32, 0, &layer, sw, sh, 1.0);
-        }
-        crate::png::save(&out(name), iw, ih, &px);
+        let c = Colors { palette: crate::config::Palette::Album, accent: [0.0, 0.48, 1.0], accent_light: [0.25, 0.6, 1.0], light_taskbar: false, album: None };
+        let (w, h, px) = preview(&mut tr, S, g, cfg, &c, media, open, peek, 1.3);
+        crate::png::save(&out(name), w, h, &px);
     }
 
     #[test]
@@ -620,17 +622,17 @@ mod tests {
         let flat = Geom { notch_w: 0.0, notch_h: 24.0 * S };
         let media = ui::sample_media();
         let cfg = Config::default();
-        scene("notch-closed.png", notch, &cfg, &media, 0.0, 0.0, None);
-        scene("notch-open.png", notch, &cfg, &media, 1.0, 0.0, None);
-        scene("notch-opening.png", notch, &cfg, &media, grow(0.45), 0.0, None);
-        scene("notch-peek.png", notch, &cfg, &media, 0.0, 1.0, None);
+        scene("notch-closed.png", notch, &cfg, &media, 0.0, 0.0);
+        scene("notch-open.png", notch, &cfg, &media, 1.0, 0.0);
+        scene("notch-opening.png", notch, &cfg, &media, grow(0.45), 0.0);
+        scene("notch-peek.png", notch, &cfg, &media, 0.0, 1.0);
         for (name, bg) in [("notch-open-black.png", NotchBg::Black), ("notch-open-artwork.png", NotchBg::Artwork)] {
-            scene(name, notch, &Config { notch_bg: bg, ..cfg.clone() }, &media, 1.0, 0.0, None);
+            scene(name, notch, &Config { notch_bg: bg, ..cfg.clone() }, &media, 1.0, 0.0);
         }
-        scene("notch-open-novol.png", notch, &Config { show_volume: false, show_visualizer: false, ..cfg.clone() }, &media, 1.0, 0.0, None);
-        scene("flat-closed.png", flat, &cfg, &media, 0.0, 0.0, None);
-        scene("flat-open.png", flat, &cfg, &media, 1.0, 0.0, None);
-        scene("notch-idle.png", notch, &cfg, &MediaInfo::default(), 0.0, 0.0, None);
-        scene("notch-idle-open.png", notch, &cfg, &MediaInfo::default(), 1.0, 0.0, None);
+        scene("notch-open-novol.png", notch, &Config { show_volume: false, show_visualizer: false, ..cfg.clone() }, &media, 1.0, 0.0);
+        scene("flat-closed.png", flat, &cfg, &media, 0.0, 0.0);
+        scene("flat-open.png", flat, &cfg, &media, 1.0, 0.0);
+        scene("notch-idle.png", notch, &cfg, &MediaInfo::default(), 0.0, 0.0);
+        scene("notch-idle-open.png", notch, &cfg, &MediaInfo::default(), 1.0, 0.0);
     }
 }
