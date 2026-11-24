@@ -259,6 +259,10 @@ static T: &[[&str; 4]] = &[
     ["Restaurar", "Restore", "Restaurar", "Zurücksetzen"],
     ["Taskbeat", "Taskbeat", "Taskbeat", "Taskbeat"],
     ["Idioma", "Language", "Idioma", "Sprache"],
+    ["Licenças", "Licenses", "Licencias", "Lizenzen"],
+    ["Licença MIT e bibliotecas de código aberto usadas", "MIT license and the open-source libraries used", "Licencia MIT y bibliotecas de código abierto usadas", "MIT-Lizenz und verwendete Open-Source-Bibliotheken"],
+    ["Ver licenças", "View licenses", "Ver licencias", "Lizenzen anzeigen"],
+    ["Licença MIT e avisos de terceiros", "MIT license and third-party notices", "Licencia MIT y avisos de terceros", "MIT-Lizenz und Hinweise zu Drittanbietern"],
     // ---- instalador
     ["Instalar o Taskbeat", "Install Taskbeat", "Instalar Taskbeat", "Taskbeat installieren"],
     ["Remover o Taskbeat", "Remove Taskbeat", "Quitar Taskbeat", "Taskbeat entfernen"],

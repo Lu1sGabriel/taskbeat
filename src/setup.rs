@@ -70,6 +70,7 @@ pub fn mode_from_args() -> Option<Mode> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Hit {
     Change,
+    Licenses,
     Opt(usize),
     Cancel,
     Primary,
@@ -266,6 +267,8 @@ fn install(dir: &Path, autostart: bool, desktop: bool) -> Result<(), String> {
     if me.canonicalize().ok() != exe.canonicalize().ok() {
         write_retry(&exe, &bytes).map_err(|_| no_access())?;
     }
+    // A licença MIT pede que os avisos acompanhem as cópias do programa.
+    crate::licenses::write_to(dir).map_err(|_| no_access())?;
     // Instalação anterior em outra pasta: some o executável velho.
     if let Some(old) = reg_get_sz(UNINSTALL_KEY, "InstallLocation").map(PathBuf::from) {
         if old.canonicalize().ok() != dir.canonicalize().ok() {
@@ -457,6 +460,8 @@ struct Lay {
     opts: Vec<RectF>,
     cancel: Option<RectF>,
     primary: RectF,
+    /// Link "Licença MIT e avisos de terceiros" no rodapé.
+    licenses: RectF,
 }
 
 impl St {
@@ -472,7 +477,9 @@ impl St {
         let pw = (self.text.mask(tr(primary_label), Font::BodyStrong, (300.0 * s) as i32, (20.0 * s) as i32, Align::Left).used_width() + 48.0 * s).max(120.0 * s);
         let primary = RectF::new((W - 24.0) * s - pw, by, pw, 38.0 * s);
         let cancel = matches!(self.phase, Phase::Ready).then(|| RectF::new(primary.x - 118.0 * s, by, 110.0 * s, 38.0 * s));
-        Lay { banner, path, change, opts, cancel, primary }
+        let lw = self.text.mask(tr("Licença MIT e avisos de terceiros"), Font::Caption, (400.0 * s) as i32, (18.0 * s) as i32, Align::Left).used_width();
+        let licenses = RectF::new(24.0 * s, by + 20.0 * s, lw + 2.0 * s, 18.0 * s);
+        Lay { banner, path, change, opts, cancel, primary, licenses }
     }
 
     fn primary_label(&self) -> &'static str {
@@ -505,6 +512,9 @@ impl St {
         }
         if self.mode == Mode::Install && l.change.contains(x, y) {
             return Some(Hit::Change);
+        }
+        if self.mode == Mode::Install && l.licenses.contains(x, y) {
+            return Some(Hit::Licenses);
         }
         l.opts.iter().position(|r| r.contains(x, y)).map(Hit::Opt)
     }
@@ -594,7 +604,15 @@ impl St {
                 self.draw_box(cv, l.change, hot);
                 ui::text_center(cv, &mut self.text, tr("Alterar…"), Font::Body, l.change, fg, 1.0);
                 self.draw_options(cv, &l);
-                ui::text(cv, &mut self.text, tr("Instala só para você; não precisa de administrador."), Font::Caption, x0, l.primary.y, (l.cancel.map(|c| c.x).unwrap_or(l.primary.x) - x0 - 12.0 * s).max(10.0), l.primary.h, fg, 0.55);
+                let note_w = (l.cancel.map(|c| c.x).unwrap_or(l.primary.x) - x0 - 12.0 * s).max(10.0);
+                ui::text(cv, &mut self.text, tr("Instala só para você; não precisa de administrador."), Font::Caption, x0, l.primary.y + 1.0 * s, note_w, 18.0 * s, fg, 0.55);
+                // Link para a licença e os avisos de terceiros.
+                let hot = self.hover == Some(Hit::Licenses);
+                let lr = l.licenses;
+                ui::text(cv, &mut self.text, tr("Licença MIT e avisos de terceiros"), Font::Caption, lr.x, lr.y, note_w, lr.h, self.accent, if hot { 1.0 } else { 0.9 });
+                if hot {
+                    cv.fill_round(RectF::new(lr.x, lr.bottom() - 2.0 * s, lr.w - 2.0 * s, 1.0 * s), 0.0, self.accent, 0.9);
+                }
             }
             (Phase::Ready, Mode::Uninstall) => {
                 ui::text(cv, &mut self.text, tr("Remover o Taskbeat?"), Font::Display, x0, 184.0 * s, body_w, 28.0 * s, fg, 1.0);
@@ -859,6 +877,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         with(|st| st.opts[i] = !st.opts[i]);
                     }
                     Some(Hit::Cancel) => close = true,
+                    Some(Hit::Licenses) => crate::licenses::open(),
                     Some(Hit::Primary) => close = with(primary).unwrap_or(false),
                     Some(Hit::Change) => {
                         // O seletor é modal: nada de `borrow` aberto aqui.

@@ -87,6 +87,7 @@ enum Key {
     Language,
     Fullscreen,
     Reset,
+    Licenses,
     About,
 }
 
@@ -252,6 +253,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E740}", title: "Ocultar em tela cheia", desc: "Some durante jogos, vídeos e apresentações", key: Key::Fullscreen, kind: Kind::Toggle },
             Row { icon: "\u{E72C}", title: "Restaurar padrões", desc: "Volta todas as opções para os valores originais", key: Key::Reset, kind: Kind::Button("Restaurar") },
             Section("Sobre"),
+            Row { icon: "\u{E8A5}", title: "Licenças", desc: "Licença MIT e bibliotecas de código aberto usadas", key: Key::Licenses, kind: Kind::Button("Ver licenças") },
             Row { icon: "\u{E946}", title: "Taskbeat", desc: "Feito em Rust · WASAPI loopback · System Media Transport Controls", key: Key::About, kind: Kind::Info },
         ],
     },
@@ -322,7 +324,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::Autostart => AUTOSTART.with(|a| a.get()) as i32,
         Key::Fullscreen => c.hide_on_fullscreen as i32,
         Key::Language => idx(LANG_V, c.language),
-        Key::Reset | Key::About | Key::OsdTest => 0,
+        Key::Reset | Key::About | Key::OsdTest | Key::Licenses => 0,
     }
 }
 
@@ -379,7 +381,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
             c.language = pick(LANG_V, i);
             crate::i18n::apply(c.language);
         }
-        Key::Autostart | Key::Reset | Key::About | Key::OsdTest => {}
+        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses => {}
     }
 }
 
@@ -1307,6 +1309,10 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 Kind::Button(_) if key == Key::Reset => {
                     u.shared.update_config(|c| *c = Config::default());
                     crate::i18n::apply(Language::Auto);
+                    Action::Redraw
+                }
+                Kind::Button(_) if key == Key::Licenses => {
+                    crate::licenses::open();
                     Action::Redraw
                 }
                 Kind::Button(_) if key == Key::OsdTest => {

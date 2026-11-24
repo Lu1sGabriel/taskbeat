@@ -13,6 +13,7 @@ mod audio;
 mod config;
 mod dsp;
 mod i18n;
+mod licenses;
 mod media;
 mod overlay;
 mod render;
