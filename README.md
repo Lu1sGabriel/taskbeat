@@ -5,6 +5,10 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
 
 <img src="assets/taskbeat-256.png" width="96" alt="Ícone do Taskbeat">
 
+> Projeto desenvolvido com o auxílio do [Claude Code](https://claude.com/claude-code).
+
+**[⬇ Baixar o instalador (Windows 10/11)](https://github.com/Lu1sGabriel/taskbeat/releases/latest)**
+
 ## O que faz
 
 - **Na barra de tarefas** (compacto): capa + título/artista, indicador animado
@@ -119,3 +123,8 @@ Regenerar o ícone: `python assets/make_icon.py`.
 
 - Só a barra do monitor principal.
 - A tela de configurações ainda não tem navegação por teclado.
+
+## Créditos
+
+Desenvolvido por Luis Goés com o auxílio do [Claude Code](https://claude.com/claude-code),
+a ferramenta de programação com IA da Anthropic.
