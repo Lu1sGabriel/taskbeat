@@ -3,7 +3,7 @@ name = "taskbeat"
 description = "Widget de música para a barra de tarefas do Windows e o notch do Mac"
 license = "MIT"
 repository = "https://github.com/Lu1sGabriel/taskbeat"
-version = "1.3.0-beta.1"
+version = "1.3.0-beta.2"
 edition = "2024"
 
 [dependencies]
