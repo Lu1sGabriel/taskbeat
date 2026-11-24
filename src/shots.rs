@@ -20,8 +20,11 @@ use windows::core::HSTRING;
 /// Escala das imagens (2x = nítidas em telas de alta densidade).
 const S: f32 = 2.0;
 
+/// `docs/screenshots` (ou a pasta em `TASKBEAT_SHOTS_DIR`, para conferir sem mexer no README).
 fn out_dir() -> PathBuf {
-    let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs").join("screenshots");
+    let d = std::env::var_os("TASKBEAT_SHOTS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("docs").join("screenshots"));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
@@ -89,6 +92,21 @@ fn wallpaper(cv: &mut Canvas, r: RectF, radius: f32) {
     });
 }
 
+/// Papel de parede com "janelas" coloridas, para o acrílico ter o que desfocar.
+fn busy_wallpaper(cv: &mut Canvas, r: RectF, radius: f32) {
+    wallpaper(cv, r, radius);
+    let shapes: [(f32, f32, f32, f32, Rgb); 5] = [
+        (0.06, 0.20, 0.22, 0.62, [0.98, 0.45, 0.55]),
+        (0.36, 0.06, 0.16, 0.42, [1.0, 0.78, 0.35]),
+        (0.55, 0.48, 0.20, 0.44, [0.30, 0.80, 0.95]),
+        (0.78, 0.10, 0.16, 0.50, [0.62, 0.45, 1.0]),
+        (0.26, 0.58, 0.18, 0.34, [0.40, 0.90, 0.55]),
+    ];
+    for (u, v, w, h, c) in shapes {
+        cv.fill_round(RectF::new(r.x + r.w * u, r.y + r.h * v, r.w * w, r.h * h), 12.0 * S, c, 0.7);
+    }
+}
+
 #[test]
 #[ignore]
 fn shots() {
@@ -105,7 +123,7 @@ fn shots() {
         let cl = CLayout::build(S, &cfg, true);
         let wl = WLayout::build(S, 40.0 * S, &cfg, true, false);
         let card = render(cl.w, cl.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None };
             ui::draw_card(cv, &mut tr, &cl, &f);
         });
         let widget = render(wl.width, 40.0 * S, |cv| {
@@ -147,15 +165,71 @@ fn shots() {
     }
 
     // ---- 2. Estilos do card
-    for (name, style, theme) in [("card-artwork.png", CardStyle::Artwork, ThemeMode::Auto), ("card-album-color.png", CardStyle::AlbumColor, ThemeMode::Auto), ("card-glass.png", CardStyle::Glass, ThemeMode::Dark)] {
+    for (name, style, theme) in [("card-artwork.png", CardStyle::Artwork, ThemeMode::Auto), ("card-album-color.png", CardStyle::AlbumColor, ThemeMode::Auto)] {
         let cfg = Config { card_style: style, theme, ..Config::default() };
         let c = colors(&cfg, &media);
         let l = CLayout::build(S, &cfg, true);
         let img = render(l.w, l.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None };
             ui::draw_card(cv, &mut tr, &l, &f);
         });
         save_png(name, img.0, img.1, &img.2);
+    }
+    // Acrílico: mostrado sobre um papel de parede, para dar para ver o desfoque.
+    {
+        let cfg = Config { card_style: CardStyle::Glass, theme: ThemeMode::Dark, ..Config::default() };
+        let c = colors(&cfg, &media);
+        let l = CLayout::build(S, &cfg, true);
+        let (w, h) = (l.w, l.h);
+        let bg = render(w, h, |cv| busy_wallpaper(cv, RectF::new(0.0, 0.0, w, h), 14.0 * S));
+        let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::GLASS_BLUR * S);
+        let card = render(w, h, |cv| {
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None };
+            ui::draw_card(cv, &mut tr, &l, &f);
+        });
+        let img = render(w, h, |cv| {
+            blit(cv, 0.0, 0.0, bg);
+            blit(cv, 0.0, 0.0, card);
+        });
+        save_png("card-glass.png", img.0, img.1, &img.2);
+    }
+
+    // ---- 2b. Widget da barra: tudo dentro do mesmo fundo, em algumas combinações
+    {
+        let variants = [
+            Config::default(),
+            Config { taskbar_controls: true, ..Config::default() },
+            Config { taskbar_controls: true, playing_indicator: true, widget_shape: WidgetShape::Pill, ..Config::default() },
+            Config { taskbar_controls: true, taskbar_shuffle_repeat: false, taskbar_play: TaskbarPlay::Icon, widget_shape: WidgetShape::Square, ..Config::default() },
+        ];
+        let bar_h = 48.0 * S;
+        let wh = 40.0 * S;
+        let mut shuffled = media.clone();
+        shuffled.repeat = 2;
+        let pb = Playback { repeat: 2, ..playback(&shuffled) };
+        let layers: Vec<_> = variants
+            .iter()
+            .map(|cfg| {
+                let c = colors(cfg, &shuffled);
+                let l = WLayout::build(S, wh, cfg, true, false);
+                render(l.width, wh, |cv| {
+                    let f = WidgetFrame { cfg, media: &shuffled, theme: ui::widget_theme(cfg, &c, &shuffled), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S };
+                    ui::draw_widget(cv, &mut tr, &l, &f);
+                })
+            })
+            .collect();
+        let iw = layers.iter().map(|l| l.0).max().unwrap() as f32 + 48.0 * S;
+        let ih = layers.len() as f32 * (bar_h + 10.0 * S) + 10.0 * S;
+        let img = render(iw, ih, |cv| {
+            for (k, layer) in layers.into_iter().enumerate() {
+                let y = 10.0 * S + k as f32 * (bar_h + 10.0 * S);
+                let bar = RectF::new(0.0, y, iw, bar_h);
+                cv.fill_round(bar, 10.0 * S, [0.11, 0.11, 0.12], 0.97);
+                cv.fill_rrect(bar.x + 10.0 * S, bar.y, bar.right() - 10.0 * S, bar.y + S, 0.0, 0.10, |_, _| [1.0; 3]);
+                blit(cv, iw - 24.0 * S - layer.0 as f32, y + 4.0 * S, layer);
+            }
+        });
+        save_png("taskbar-widgets.png", img.0, img.1, &img.2);
     }
 
     // ---- 3. "A seguir"
@@ -164,7 +238,7 @@ fn shots() {
         let (w, h) = ui::upnext_size(S);
         let img = render(w, h, |cv| {
             let th = ui::card_theme(&cfg, &c, &media);
-            ui::draw_upnext(cv, &mut tr, &cfg, &c, &media, &th, S, 2.5, cfg.popup_secs as f32 + 0.5);
+            ui::draw_upnext(cv, &mut tr, &cfg, &c, &media, &th, S, 2.5, cfg.popup_secs as f32 + 0.5, None);
         });
         save_png("up-next.png", img.0, img.1, &img.2);
     }
@@ -175,8 +249,44 @@ fn shots() {
         let (w, h) = ui::osd_size(S, &cfg);
         let img = render(w, h, |cv| {
             let th = ui::osd_theme(&cfg, &c);
-            ui::draw_osd(cv, &mut tr, &cfg, &th, S, crate::i18n::tr("Caps Lock"), "A", true, 1.0);
+            ui::draw_osd(cv, &mut tr, &cfg, &c, &th, S, crate::i18n::tr("Caps Lock"), false, true, 1.0, None);
         });
         save_png("caps-lock.png", img.0, img.1, &img.2);
+    }
+
+    // ---- 5. Aviso de teclas: sólido, acrílico e cor de destaque, sobre um papel de parede
+    {
+        let variants = [
+            (OsdMaterial::Solid, OsdIcon::Letter, false, "Caps Lock"),
+            (OsdMaterial::Acrylic, OsdIcon::Lock, false, "Caps Lock"),
+            (OsdMaterial::Accent, OsdIcon::Keyboard, true, "Num Lock"),
+        ];
+        let base = Config { osd_theme: ThemeMode::Dark, ..Config::default() };
+        let (ow, oh) = ui::osd_size(S, &base);
+        let m = ui::SHADOW_MARGIN * S;
+        let (gap, cw) = (24.0 * S, ow - 2.0 * m);
+        let (iw, ih) = (3.0 * cw + 4.0 * gap, oh - 2.0 * m + 2.0 * gap);
+        let bg = render(iw, ih, |cv| busy_wallpaper(cv, RectF::new(0.0, 0.0, iw, ih), 14.0 * S));
+        let mut layers = Vec::new();
+        for (k, (material, icon, num, key)) in variants.into_iter().enumerate() {
+            let cfg = Config { osd_material: material, osd_icon: icon, ..base.clone() };
+            let c = colors(&cfg, &MediaInfo::default());
+            let x = gap - m + k as f32 * (cw + gap);
+            let y = gap - m;
+            let (cw, ch) = ui::osd_card(S, &cfg);
+            let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, RectF::new(x + m, y + m, cw, ch), ui::osd_blur_px(&cfg, S));
+            let layer = render(ow, oh, |cv| {
+                let th = ui::osd_theme(&cfg, &c);
+                ui::draw_osd(cv, &mut tr, &cfg, &c, &th, S, crate::i18n::tr(key), num, true, 1.0, Some(&backdrop));
+            });
+            layers.push((x, y, layer));
+        }
+        let img = render(iw, ih, |cv| {
+            blit(cv, 0.0, 0.0, bg);
+            for (x, y, l) in layers {
+                blit(cv, x, y, l);
+            }
+        });
+        save_png("caps-lock-styles.png", img.0, img.1, &img.2);
     }
 }

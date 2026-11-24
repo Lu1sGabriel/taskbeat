@@ -11,7 +11,7 @@
 use crate::config::*;
 use crate::i18n::tr;
 use crate::overlay::Surface;
-use crate::render::{Canvas, Colors, RectF, Rgb, lerp3};
+use crate::render::{self, Canvas, Colors, Image, RectF, Rgb, lerp3};
 use crate::shared::{MediaInfo, Shared};
 use crate::system;
 use crate::text::{Align, Font, TextRenderer};
@@ -41,12 +41,18 @@ const ANIM_TIMER: usize = 1;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Key {
     ShowMedia,
+    AlwaysShow,
     TaskbarControls,
     ShowArtist,
     Indicator,
     TaskbarProgress,
     CoverShape,
     WidgetPill,
+    WidgetShape,
+    WidgetDivider,
+    TaskbarShuffle,
+    TaskbarPlay,
+    CardShuffle,
     Marquee,
     TitleWidth,
     Anchor,
@@ -74,6 +80,11 @@ enum Key {
     OsdTheme,
     OsdDuration,
     OsdSwitch,
+    OsdMaterial,
+    OsdOpacity,
+    OsdBlur,
+    OsdIcon,
+    OsdAnim,
     OsdTest,
     ShowViz,
     Style,
@@ -129,7 +140,7 @@ use Item::{Row, Section};
 const SHAPES: &[&str] = &["Arredondada", "Círculo", "Quadrada"];
 const PLAY_SHAPES: &[&str] = &["Círculo", "Arredondado", "Quadrado"];
 const ANCHORS: &[&str] = &["Ao lado do relógio", "À esquerda"];
-const CARD_STYLES: &[&str] = &["Capa desfocada", "Cor do álbum", "Vidro"];
+const CARD_STYLES: &[&str] = &["Capa desfocada", "Cor do álbum", "Acrílico"];
 const CARD_LAYOUTS: &[&str] = &["Horizontal", "Vertical"];
 const THEMES: &[&str] = &["Automático", "Escuro", "Claro"];
 const ACCENTS: &[&str] = &["Cor da capa", "Cor do Windows"];
@@ -137,6 +148,12 @@ const CORNERS: &[&str] = &["Pequenos", "Médios", "Grandes"];
 const OSD_POSITIONS: &[&str] = &["Embaixo", "Centro", "Topo", "Acima do player"];
 const OSD_SHAPES: &[&str] = &["Iguais ao card", "Pílula", "Retos"];
 const OSD_SIZES: &[&str] = &["Compacto", "Normal", "Grande"];
+const WIDGET_SHAPES: &[&str] = &["Arredondado", "Pílula", "Reto"];
+const TASKBAR_PLAYS: &[&str] = &["Preenchido", "Só o ícone"];
+const SHUFFLE_MODES: &[&str] = &["Sempre", "Quando o player permite"];
+const OSD_MATERIALS: &[&str] = &["Sólido", "Acrílico", "Cor de destaque"];
+const OSD_ICONS: &[&str] = &["Letra", "Cadeado", "Teclado"];
+const OSD_ANIMS: &[&str] = &["Deslizar", "Zoom", "Esmaecer"];
 const VIZ_STYLES: &[&str] = &["Barras", "Espelhado", "Onda"];
 const PALETTES: &[&str] = &["Cor da capa", "Cor de destaque do Windows", "Arco-íris", "Neon", "Monocromático"];
 const LANGS: &[&str] = &["Automático (idioma do Windows)", "Português (Brasil)", "English", "Español", "Deutsch"];
@@ -153,13 +170,19 @@ const PAGES: &[Page] = &[
         items: &[
             Section("Conteúdo"),
             Row { icon: "\u{E8D6}", title: "Mostrar música na barra", desc: "Capa, título e artista; clique para abrir o card", key: Key::ShowMedia, kind: Kind::Toggle },
-            Row { icon: "\u{E768}", title: "Botões de controle na barra", desc: "Anterior, play e próximo também na barra; por padrão ficam só no card", key: Key::TaskbarControls, kind: Kind::Toggle },
+            Row { icon: "\u{E7B3}", title: "Sempre visível", desc: "Fica na barra mesmo sem nada tocando (\"Nada tocando\")", key: Key::AlwaysShow, kind: Kind::Toggle },
             Row { icon: "\u{E77B}", title: "Mostrar artista", desc: "Segunda linha com o nome do artista", key: Key::ShowArtist, kind: Kind::Toggle },
             Row { icon: "\u{E9E9}", title: "Indicador \"tocando agora\"", desc: "Mini equalizador animado ao lado do título", key: Key::Indicator, kind: Kind::Toggle },
             Row { icon: "\u{E916}", title: "Barra de progresso", desc: "Linha fina com o andamento da música", key: Key::TaskbarProgress, kind: Kind::Toggle },
+            Section("Botões na barra"),
+            Row { icon: "\u{E768}", title: "Botões de controle na barra", desc: "Anterior, play e próximo dentro do widget; por padrão ficam só no card", key: Key::TaskbarControls, kind: Kind::Toggle },
+            Row { icon: "\u{E8B1}", title: "Aleatório e repetir na barra", desc: "Junto dos botões; apagados quando o player não deixa (navegadores)", key: Key::TaskbarShuffle, kind: Kind::Toggle },
+            Row { icon: "\u{E768}", title: "Botão play", desc: "Círculo na cor de destaque ou só o ícone, como os outros", key: Key::TaskbarPlay, kind: Kind::Segmented(TASKBAR_PLAYS) },
+            Row { icon: "\u{E7FB}", title: "Separador", desc: "Linha fina entre a música e os botões", key: Key::WidgetDivider, kind: Kind::Toggle },
             Section("Aparência"),
             Row { icon: "\u{E91B}", title: "Formato da capa", desc: "Como a capa aparece na barra", key: Key::CoverShape, kind: Kind::Segmented(SHAPES) },
-            Row { icon: "\u{E7B5}", title: "Fundo em pílula", desc: "Destaque sutil sempre visível atrás do widget", key: Key::WidgetPill, kind: Kind::Toggle },
+            Row { icon: "\u{E7B5}", title: "Fundo em pílula", desc: "Fundo sutil sempre visível, com a música e os botões dentro", key: Key::WidgetPill, kind: Kind::Toggle },
+            Row { icon: "\u{E7FB}", title: "Formato do fundo", desc: "Cantos do fundo do widget", key: Key::WidgetShape, kind: Kind::Segmented(WIDGET_SHAPES) },
             Row { icon: "\u{E8C9}", title: "Rolar títulos longos", desc: "Letreiro suave quando o nome não cabe", key: Key::Marquee, kind: Kind::Toggle },
             Row { icon: "\u{E8D2}", title: "Largura do título", desc: "Espaço para o nome da música e do artista", key: Key::TitleWidth, kind: Kind::Slider { min: 100, max: 280, step: 10, unit: "px" } },
             Section("Posição"),
@@ -174,7 +197,7 @@ const PAGES: &[Page] = &[
         preview: Preview::Card,
         items: &[
             Section("Estilo"),
-            Row { icon: "\u{E771}", title: "Fundo", desc: "Capa desfocada, cor extraída da capa ou vidro neutro", key: Key::CardStyle, kind: Kind::Segmented(CARD_STYLES) },
+            Row { icon: "\u{E771}", title: "Fundo", desc: "Capa desfocada, cor extraída da capa ou acrílico (desfoca o que está atrás)", key: Key::CardStyle, kind: Kind::Segmented(CARD_STYLES) },
             Row { icon: "\u{E8A9}", title: "Layout", desc: "Capa ao lado ou capa grande em cima", key: Key::CardLayout, kind: Kind::Segmented(CARD_LAYOUTS) },
             Row { icon: "\u{E793}", title: "Tema", desc: "Segue o Windows ou fixa claro/escuro", key: Key::Theme, kind: Kind::Segmented(THEMES) },
             Row { icon: "\u{E790}", title: "Cor de destaque", desc: "Botões e progresso na cor da capa ou do Windows", key: Key::Accent, kind: Kind::Segmented(ACCENTS) },
@@ -185,7 +208,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e botão de mudo", key: Key::ShowVolume, kind: Kind::Toggle },
             Row { icon: "\u{E7F4}", title: "Mostrar app de origem", desc: "Nome do app (Spotify, Brave…) no card e ícone sobre a capa", key: Key::ShowSource, kind: Kind::Toggle },
             Row { icon: "\u{E916}", title: "Fechar sozinho após", desc: "Tempo sem o mouse em cima do card", key: Key::Autoclose, kind: Kind::Slider { min: 2, max: 20, step: 1, unit: "s" } },
-            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "Aparecem quando o player permite (Spotify, Media Player). Navegadores como Brave e Chrome não permitem", key: Key::About, kind: Kind::Info },
+            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "Funcionam no Spotify e no Media Player; navegadores (Brave, Chrome) não deixam, então ficam apagados", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
         ],
     },
     Page {
@@ -214,11 +237,17 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E7C4}", title: "Onde aparece", desc: "Predefinições rápidas; ajuste fino logo abaixo", key: Key::OsdPos, kind: Kind::Segmented(OSD_POSITIONS) },
             Row { icon: "\u{E8AB}", title: "Ajuste horizontal", desc: "Move o aviso para a esquerda ou para a direita", key: Key::OsdOffX, kind: Kind::Slider { min: -800, max: 800, step: 10, unit: "px" } },
             Row { icon: "\u{E8CB}", title: "Ajuste vertical", desc: "Move o aviso para cima ou para baixo", key: Key::OsdOffY, kind: Kind::Slider { min: -600, max: 600, step: 10, unit: "px" } },
+            Section("Fundo"),
+            Row { icon: "\u{E771}", title: "Material", desc: "Sólido, acrílico (vidro fosco que desfoca o que está atrás) ou na cor de destaque", key: Key::OsdMaterial, kind: Kind::Segmented(OSD_MATERIALS) },
+            Row { icon: "\u{E706}", title: "Opacidade", desc: "Quanto o fundo cobre o que está atrás", key: Key::OsdOpacity, kind: Kind::Slider { min: 20, max: 100, step: 2, unit: "%" } },
+            Row { icon: "\u{E890}", title: "Desfoque", desc: "Intensidade do desfoque no fundo acrílico", key: Key::OsdBlur, kind: Kind::Slider { min: 0, max: 100, step: 5, unit: "%" } },
             Section("Aparência"),
+            Row { icon: "\u{E72E}", title: "Ícone", desc: "Letra (A / 1), cadeado que abre e fecha, ou teclado", key: Key::OsdIcon, kind: Kind::Segmented(OSD_ICONS) },
             Row { icon: "\u{E7FB}", title: "Cantos", desc: "Formato do aviso e do ícone", key: Key::OsdShape, kind: Kind::Segmented(OSD_SHAPES) },
             Row { icon: "\u{E8D3}", title: "Tamanho", desc: "Tamanho do aviso e do texto", key: Key::OsdSize, kind: Kind::Segmented(OSD_SIZES) },
             Row { icon: "\u{E793}", title: "Tema", desc: "Segue o Windows ou fixa claro/escuro", key: Key::OsdTheme, kind: Kind::Segmented(THEMES) },
             Row { icon: "\u{E7E8}", title: "Interruptor", desc: "Chave animada no lado direito", key: Key::OsdSwitch, kind: Kind::Toggle },
+            Row { icon: "\u{E768}", title: "Animação", desc: "Como o aviso entra e sai da tela", key: Key::OsdAnim, kind: Kind::Segmented(OSD_ANIMS) },
             Row { icon: "\u{E916}", title: "Duração", desc: "Quanto tempo o aviso fica na tela", key: Key::OsdDuration, kind: Kind::Slider { min: 8, max: 50, step: 1, unit: "s" } },
             Section("Privacidade"),
             Row { icon: "\u{E72E}", title: "Privacidade", desc: "Só essas duas teclas são observadas; nada do que você digita é lido ou guardado", key: Key::About, kind: Kind::Info },
@@ -275,17 +304,29 @@ const VIZ_V: &[Style] = &[Style::Bars, Style::Mirror, Style::Wave];
 const OSD_POS_V: &[OsdPosition] = &[OsdPosition::Bottom, OsdPosition::Center, OsdPosition::Top, OsdPosition::AbovePlayer];
 const OSD_SHAPE_V: &[OsdShape] = &[OsdShape::Rounded, OsdShape::Pill, OsdShape::Square];
 const OSD_SIZE_V: &[OsdSize] = &[OsdSize::Compact, OsdSize::Normal, OsdSize::Large];
+const WIDGET_SHAPE_V: &[WidgetShape] = &[WidgetShape::Rounded, WidgetShape::Pill, WidgetShape::Square];
+const TASKBAR_PLAY_V: &[TaskbarPlay] = &[TaskbarPlay::Filled, TaskbarPlay::Icon];
+const SHUFFLE_V: &[ShuffleRepeat] = &[ShuffleRepeat::Always, ShuffleRepeat::WhenSupported];
+const OSD_MATERIAL_V: &[OsdMaterial] = &[OsdMaterial::Solid, OsdMaterial::Acrylic, OsdMaterial::Accent];
+const OSD_ICON_V: &[OsdIcon] = &[OsdIcon::Letter, OsdIcon::Lock, OsdIcon::Keyboard];
+const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
 const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbow, Palette::Neon, Palette::Mono];
 
 fn get(c: &Config, key: Key) -> i32 {
     match key {
         Key::ShowMedia => c.show_media as i32,
+        Key::AlwaysShow => c.always_show_widget as i32,
         Key::TaskbarControls => c.taskbar_controls as i32,
         Key::ShowArtist => c.show_artist as i32,
         Key::Indicator => c.playing_indicator as i32,
         Key::TaskbarProgress => c.taskbar_progress as i32,
         Key::CoverShape => idx(SHAPE_V, c.cover_shape),
         Key::WidgetPill => c.widget_pill as i32,
+        Key::WidgetShape => idx(WIDGET_SHAPE_V, c.widget_shape),
+        Key::WidgetDivider => c.widget_divider as i32,
+        Key::TaskbarShuffle => c.taskbar_shuffle_repeat as i32,
+        Key::TaskbarPlay => idx(TASKBAR_PLAY_V, c.taskbar_play),
+        Key::CardShuffle => idx(SHUFFLE_V, c.card_shuffle_repeat),
         Key::Marquee => c.marquee as i32,
         Key::TitleWidth => c.title_width,
         Key::Anchor => idx(ANCHOR_V, c.anchor),
@@ -313,6 +354,11 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::OsdTheme => idx(THEME_V, c.osd_theme),
         Key::OsdDuration => c.osd_duration,
         Key::OsdSwitch => c.osd_switch as i32,
+        Key::OsdMaterial => idx(OSD_MATERIAL_V, c.osd_material),
+        Key::OsdOpacity => c.osd_opacity,
+        Key::OsdBlur => c.osd_blur,
+        Key::OsdIcon => idx(OSD_ICON_V, c.osd_icon),
+        Key::OsdAnim => idx(OSD_ANIM_V, c.osd_anim),
         Key::ShowViz => c.show_visualizer as i32,
         Key::Style => idx(VIZ_V, c.style),
         Key::Palette => idx(PALETTE_V, c.palette),
@@ -335,12 +381,18 @@ fn set(c: &mut Config, key: Key, v: i32) {
     }
     match key {
         Key::ShowMedia => c.show_media = v != 0,
+        Key::AlwaysShow => c.always_show_widget = v != 0,
         Key::TaskbarControls => c.taskbar_controls = v != 0,
         Key::ShowArtist => c.show_artist = v != 0,
         Key::Indicator => c.playing_indicator = v != 0,
         Key::TaskbarProgress => c.taskbar_progress = v != 0,
         Key::CoverShape => c.cover_shape = pick(SHAPE_V, i),
         Key::WidgetPill => c.widget_pill = v != 0,
+        Key::WidgetShape => c.widget_shape = pick(WIDGET_SHAPE_V, i),
+        Key::WidgetDivider => c.widget_divider = v != 0,
+        Key::TaskbarShuffle => c.taskbar_shuffle_repeat = v != 0,
+        Key::TaskbarPlay => c.taskbar_play = pick(TASKBAR_PLAY_V, i),
+        Key::CardShuffle => c.card_shuffle_repeat = pick(SHUFFLE_V, i),
         Key::Marquee => c.marquee = v != 0,
         Key::TitleWidth => c.title_width = v,
         Key::Anchor => c.anchor = pick(ANCHOR_V, i),
@@ -368,6 +420,11 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::OsdTheme => c.osd_theme = pick(THEME_V, i),
         Key::OsdDuration => c.osd_duration = v,
         Key::OsdSwitch => c.osd_switch = v != 0,
+        Key::OsdMaterial => c.osd_material = pick(OSD_MATERIAL_V, i),
+        Key::OsdOpacity => c.osd_opacity = v,
+        Key::OsdBlur => c.osd_blur = v,
+        Key::OsdIcon => c.osd_icon = pick(OSD_ICON_V, i),
+        Key::OsdAnim => c.osd_anim = pick(OSD_ANIM_V, i),
         Key::ShowViz => c.show_visualizer = v != 0,
         Key::Style => c.style = pick(VIZ_V, i),
         Key::Palette => c.palette = pick(PALETTE_V, i),
@@ -389,6 +446,7 @@ fn value_label(kind: Kind, key: Key, v: i32) -> String {
     let Kind::Slider { unit, .. } = kind else { return String::new() };
     match key {
         Key::Sens | Key::Offset | Key::OsdOffX | Key::OsdOffY => format!("{v:+} {unit}"),
+        _ if unit == "%" => format!("{v}%"),
         Key::OsdDuration => format!("{},{} {unit}", v / 10, v % 10),
         _ => format!("{v} {unit}"),
     }
@@ -440,6 +498,9 @@ struct HeroKey {
     light_tb: bool,
 }
 
+/// Retângulo do cartão dentro da prévia, desfoque e fundo usados no acrílico.
+type BackdropKey = (i32, i32, i32, i32, i32, HeroKey);
+
 struct Ui {
     shared: Arc<Shared>,
     hwnd: HWND,
@@ -456,10 +517,14 @@ struct Ui {
     tracking: bool,
     surface: Option<Surface>,
     text: TextRenderer,
+    /// Texto da prévia (pode ter escala menor que a da janela).
+    preview_text: TextRenderer,
     t0: std::time::Instant,
     colors: Option<(Palette, Colors)>,
     content: Option<Cached<ContentKey>>,
     hero_bg: Option<Cached<HeroKey>>,
+    /// Fundo acrílico da prévia (o "papel de parede" desfocado atrás do componente).
+    backdrop: Option<(BackdropKey, Arc<Image>)>,
     /// Período do timer de animação em ms (0 = parado).
     timer_ms: u32,
     last_tick: std::time::Instant,
@@ -575,18 +640,21 @@ pub fn open(shared: Arc<Shared>, icon: HICON) {
                 tracking: false,
                 surface: None,
                 text,
+                preview_text: TextRenderer::new(),
                 t0: std::time::Instant::now(),
                 colors: None,
                 content: None,
                 hero_bg: None,
+                backdrop: None,
                 timer_ms: 0,
                 last_tick: std::time::Instant::now(),
             });
         });
+        // Abre maximizada (ao restaurar, volta ao tamanho padrão, centralizada).
         // A 1ª chamada de ShowWindow do processo pode herdar o modo de exibição do
         // atalho/linha de comando (ex.: oculto); a 2ª garante que a janela apareça.
-        let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
-        let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+        let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+        let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
         let _ = SetForegroundWindow(hwnd);
         with_ui(|u| u.schedule());
     }
@@ -616,6 +684,8 @@ struct Layout {
     x1: f32,
     title_y: f32,
     hero: Option<RectF>,
+    /// Topo da área que rola (logo abaixo da prévia fixa).
+    list_top: f32,
     sections: Vec<(usize, f32)>,
     rows: Vec<RowL>,
     content_h: f32,
@@ -650,8 +720,7 @@ impl Ui {
         if m.present() { m } else { ui::sample_media() }
     }
 
-    fn hero_height(&self, page: &Page, cfg: &Config) -> f32 {
-        let s = self.scale;
+    fn hero_height_at(page: &Page, cfg: &Config, s: f32) -> f32 {
         match page.preview {
             Preview::Widget | Preview::Visualizer => 168.0 * s,
             Preview::Card => ui::CLayout::build(s, cfg, true).h + 8.0 * s,
@@ -659,6 +728,19 @@ impl Ui {
             Preview::LockKeys => ui::osd_size(s, cfg).1 + 40.0 * s,
             Preview::None => 0.0,
         }
+    }
+
+    /// Escala da prévia: a da janela ou menor, quando ela tomaria mais da
+    /// metade da altura (a prévia fica fixa no topo; as opções rolam embaixo).
+    fn preview_scale(&self, page: &Page, cfg: &Config) -> f32 {
+        let s = self.scale;
+        let natural = Self::hero_height_at(page, cfg, s);
+        let budget = (self.client().1 * 0.5).max(190.0 * s);
+        if natural <= budget { s } else { (s * budget / natural).max(0.55 * s) }
+    }
+
+    fn hero_height(&self, page: &Page, cfg: &Config) -> f32 {
+        Self::hero_height_at(page, cfg, self.preview_scale(page, cfg))
     }
 
     /// Rolagem em pixels inteiros (a camada de conteúdo é copiada sem reamostrar).
@@ -681,13 +763,16 @@ impl Ui {
         let left = NAV_W * s + 12.0 * s;
         let right = (w - 32.0 * s).max(left + 200.0 * s);
         let (x0, x1) = (left - ox, right - ox);
-        let mut y = 92.0 * s - scroll;
+        // Título e prévia ficam fixos; só a lista de opções rola, abaixo da prévia.
+        let mut y = 92.0 * s;
         let mut hero = None;
         let hh = self.hero_height(page, &cfg);
         if hh > 0.0 {
             hero = Some(RectF::new(x0, y, x1 - x0, hh));
-            y += hh + 20.0 * s;
+            y += hh + 12.0 * s;
         }
+        let list_top = y.round();
+        y -= scroll;
         let mut sections = Vec::new();
         let mut rows = Vec::new();
         for (i, item) in page.items.iter().enumerate() {
@@ -728,7 +813,7 @@ impl Ui {
             }
         }
         let content_h = y + scroll + 24.0 * s;
-        Layout { nav, x0, x1, title_y: 26.0 * s - scroll, hero, sections, rows, content_h }
+        Layout { nav, x0, x1, title_y: 26.0 * s, hero, list_top, sections, rows, content_h }
     }
 
     fn max_scroll(&mut self) -> f32 {
@@ -743,7 +828,8 @@ impl Ui {
         if let Some(i) = l.nav.iter().position(|r| r.contains(x, y)) {
             return Some(Hit::Nav(i));
         }
-        if x < NAV_W * self.scale {
+        // A lista rola por baixo da prévia fixa: o que está escondido não recebe clique.
+        if x < NAV_W * self.scale || y < l.list_top {
             return None;
         }
         for (ri, r) in l.rows.iter().enumerate() {
@@ -784,15 +870,9 @@ impl Ui {
         Some(((raw / step as f32).round() as i32 * step).clamp(min, max))
     }
 
-    /// A prévia do topo está (parcialmente) na tela?
+    /// A página tem prévia? (Ela fica sempre visível, fixa no topo.)
     fn hero_visible(&self) -> bool {
-        let page = &PAGES[self.page];
-        if page.preview == Preview::None {
-            return false;
-        }
-        let cfg = self.cfg();
-        let top = 92.0 * self.scale - self.scroll;
-        top + self.hero_height(page, &cfg) > 0.0
+        PAGES[self.page].preview != Preview::None
     }
 
     /// Liga o timer só quando precisa: ~60 fps rolando, ~30 fps com prévia
@@ -878,28 +958,36 @@ impl Ui {
         }
         self.label(cv, tr("v1.0 · feito em Rust"), Font::Caption, 26.0 * s, h - 34.0 * s, 200.0 * s, 18.0 * s, fg, 0.45);
 
-        // ---- conteúdo: camada pronta, só copiada na posição da rolagem
+        // ---- conteúdo: camada pronta. Título fixo; a lista é copiada na posição
+        // da rolagem, recortada abaixo da prévia (que fica sempre à vista).
         let ox = (NAV_W * s).round();
+        let lt = l.list_top;
         self.ensure_content(w, h, ox);
         if let Some(c) = &self.content {
+            cv.set_clip(intersect(dirty, RectF::new(ox, 0.0, w - ox, lt)));
+            cv.copy_from(ox as i32, 0, &c.px, c.w, c.h, 0);
+            cv.set_clip(intersect(dirty, RectF::new(ox, lt, w - ox, h - lt)));
             cv.copy_from(ox as i32, 0, &c.px, c.w, c.h, self.scroll_px() as i32);
         }
 
         // ---- prévia animada por cima (recortada à direita do menu)
         cv.set_clip(intersect(dirty, RectF::new(ox, 0.0, w - ox, h)));
         if let Some(hero) = l.hero {
-            if hero.bottom() > 0.0 && hero.y < h {
-                let preview = PAGES[self.page].preview;
-                self.draw_hero(cv, hero, preview, &cfg);
+            let preview = PAGES[self.page].preview;
+            self.draw_hero(cv, hero, preview, &cfg);
+            // Com a lista rolada, uma linha marca onde ela passa por baixo da prévia.
+            if self.scroll > 0.5 {
+                cv.fill_rrect(l.x0, lt - 1.0 * s, l.x1, lt, 0.0, 0.10, |_, _| fg);
             }
         }
 
-        // Barra de rolagem fina (só quando há o que rolar).
+        // Barra de rolagem fina (só quando há o que rolar), ao lado da lista.
         let max = (l.content_h - h).max(0.0);
         if max > 1.0 {
-            let track_h = h - 16.0 * s;
-            let bar_h = (track_h * h / l.content_h).max(30.0 * s);
-            let by = 8.0 * s + (track_h - bar_h) * (self.scroll / max).clamp(0.0, 1.0);
+            let view = h - lt;
+            let track_h = view - 16.0 * s;
+            let bar_h = (track_h * view / (l.content_h - lt)).max(30.0 * s);
+            let by = lt + 8.0 * s + (track_h - bar_h) * (self.scroll / max).clamp(0.0, 1.0);
             cv.fill_round(RectF::new(w - 8.0 * s, by, 3.0 * s, bar_h), 1.5 * s, fg, 0.28);
         }
         cv.set_clip(dirty);
@@ -1010,8 +1098,7 @@ impl Ui {
     }
 
     /// Fundo fixo da prévia (papel de parede e, no widget, a barra simulada).
-    fn hero_static(&mut self, cv: &mut Canvas, r: RectF, preview: Preview, light_tb: bool) {
-        let s = self.scale;
+    fn hero_static(&mut self, cv: &mut Canvas, r: RectF, preview: Preview, light_tb: bool, s: f32) {
         let radius = 10.0 * s;
         let dark = self.dark;
         let (y0, x0) = (r.y, r.x);
@@ -1024,6 +1111,21 @@ impl Ui {
             let glow = (-(((u - 0.72) * 2.2).powi(2) + ((v - 0.35) * 2.6).powi(2))).exp();
             (lerp3(c, if dark { [0.30, 0.45, 0.95] } else { [1.0; 3] }, glow * 0.55), 1.0)
         });
+        // "Janelas" coloridas no papel de parede das prévias de cartões: dão
+        // forma ao que o acrílico desfoca (num degradê liso ele não aparece).
+        if matches!(preview, Preview::Card | Preview::UpNext | Preview::LockKeys) {
+            // (deslocamento do centro e largura em px lógicos; topo e altura em fração da prévia)
+            let shapes: [(f32, f32, f32, f32, Rgb); 4] = [
+                (-330.0, 0.20, 250.0, 0.55, [0.98, 0.45, 0.55]),
+                (-110.0, 0.06, 190.0, 0.36, [1.0, 0.78, 0.35]),
+                (40.0, 0.54, 240.0, 0.40, [0.30, 0.80, 0.95]),
+                (220.0, 0.10, 150.0, 0.50, [0.62, 0.45, 1.0]),
+            ];
+            for (dx, v, w, h, c) in shapes {
+                let b = RectF::new(r.cx() + dx * s, r.y + r.h * v, w * s, r.h * h);
+                cv.fill_round(b, 10.0 * s, c, if dark { 0.55 } else { 0.65 });
+            }
+        }
         cv.stroke_round(r, radius, s, [0.0; 3], if dark { 0.3 } else { 0.08 });
         self.label(cv, tr("PRÉ-VISUALIZAÇÃO"), Font::Label, r.x + 16.0 * s, r.y + 12.0 * s, 200.0 * s, 16.0 * s, [1.0; 3], 0.75);
 
@@ -1045,7 +1147,10 @@ impl Ui {
 
     /// Prévia ao vivo: fundo em cache + componente animado por cima.
     fn draw_hero(&mut self, cv: &mut Canvas, r: RectF, preview: Preview, cfg: &Config) {
-        let s = self.scale;
+        // Escala própria (a prévia encolhe em janelas baixas) e texto próprio,
+        // para não descartar o cache de textos da tela a cada quadro.
+        let s = self.preview_scale(&PAGES[self.page], cfg);
+        self.preview_text.set_scale(s);
         let r = RectF::new(r.x.round(), r.y.round(), r.w.round(), r.h.round());
         let t = self.t0.elapsed().as_secs_f32();
         let mut colors = self.colors(cfg.palette);
@@ -1056,7 +1161,7 @@ impl Ui {
             let mut px = vec![if self.mica { 0 } else { self.base_px() }; hw * hh];
             {
                 let mut hc = Canvas::new(hw, hh, &mut px);
-                self.hero_static(&mut hc, RectF::new(0.0, 0.0, r.w, r.h), preview, colors.light_taskbar);
+                self.hero_static(&mut hc, RectF::new(0.0, 0.0, r.w, r.h), preview, colors.light_taskbar, s);
             }
             self.hero_bg = Some(Cached { key, w: hw, h: hh, px });
         }
@@ -1105,7 +1210,7 @@ impl Ui {
                     flyout_open: false,
                     s,
                 };
-                ui::draw_widget(&mut sub.canvas(), &mut self.text, &l, &f);
+                ui::draw_widget(&mut sub.canvas(), &mut self.preview_text, &l, &f);
                 sub.commit(cv);
             }
             Preview::Card => {
@@ -1114,8 +1219,9 @@ impl Ui {
                 let mut m2 = media.clone();
                 m2.dur = m2.dur.max(1.0);
                 let mut sub = SubCanvas::new(r.cx() - l.w / 2.0, r.y + 4.0 * s, l.w, l.h);
-                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s };
-                ui::draw_card(&mut sub.canvas(), &mut self.text, &l, &f);
+                let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(r, l.card.offset(sub.x, sub.y), ui::GLASS_BLUR * s)).flatten();
+                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None };
+                ui::draw_card(&mut sub.canvas(), &mut self.preview_text, &l, &f);
                 sub.commit(cv);
             }
             Preview::UpNext => {
@@ -1124,7 +1230,8 @@ impl Ui {
                 let tt = (t % (total + 1.2)).min(total - 0.6);
                 let th = ui::card_theme(cfg, &colors, &media);
                 let mut sub = SubCanvas::new(r.cx() - uw / 2.0, r.y + 12.0 * s, uw, uh);
-                ui::draw_upnext(&mut sub.canvas(), &mut self.text, cfg, &colors, &media, &th, s, tt, total);
+                let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(r, ui::upnext_card(s).offset(sub.x, sub.y), ui::GLASS_BLUR * s)).flatten();
+                ui::draw_upnext(&mut sub.canvas(), &mut self.preview_text, cfg, &colors, &media, &th, s, tt, total, backdrop.as_deref());
                 sub.commit(cv);
             }
             Preview::LockKeys => {
@@ -1134,11 +1241,31 @@ impl Ui {
                 let tt = cycle % 2.0;
                 let th = ui::osd_theme(cfg, &colors);
                 let mut sub = SubCanvas::new(r.cx() - ow / 2.0, r.y + 22.0 * s, ow, oh);
-                ui::draw_osd(&mut sub.canvas(), &mut self.text, cfg, &th, s, tr("Caps Lock"), "A", on, tt);
+                let m = ui::SHADOW_MARGIN * s;
+                let (cw, ch) = ui::osd_card(s, cfg);
+                let card = RectF::new(sub.x + m, sub.y + m, cw, ch);
+                let backdrop = ui::osd_wants_backdrop(cfg).then(|| self.preview_backdrop(r, card, ui::osd_blur_px(cfg, s))).flatten();
+                ui::draw_osd(&mut sub.canvas(), &mut self.preview_text, cfg, &colors, &th, s, tr("Caps Lock"), false, on, tt, backdrop.as_deref());
                 sub.commit(cv);
             }
             Preview::None => {}
         }
+    }
+
+    /// Acrílico da prévia: o "papel de parede" (em cache) atrás de `card`,
+    /// desfocado. `hero`: retângulo da prévia; `card`: cartão, nas mesmas coordenadas.
+    fn preview_backdrop(&mut self, hero: RectF, card: RectF, blur: f32) -> Option<Arc<Image>> {
+        let bg = self.hero_bg.as_ref()?;
+        let local = RectF::new(card.x - hero.x.round(), card.y - hero.y.round(), card.w, card.h);
+        let key: BackdropKey = (local.x.round() as i32, local.y.round() as i32, local.w.round() as i32, local.h.round() as i32, blur.round() as i32, bg.key);
+        if let Some((k, img)) = &self.backdrop {
+            if *k == key {
+                return Some(img.clone());
+            }
+        }
+        let img = Arc::new(render::acrylic_backdrop(&bg.px, bg.w, bg.h, local, blur));
+        self.backdrop = Some((key, img.clone()));
+        Some(img)
     }
 
     fn draw_box(&mut self, cv: &mut Canvas, r: RectF, hot: bool) {

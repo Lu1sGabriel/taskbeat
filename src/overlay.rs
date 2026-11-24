@@ -11,9 +11,9 @@
 
 use crate::i18n::tr;
 use crate::audio::log;
-use crate::config::{Config, OsdPosition};
+use crate::config::{Config, OsdAnim, OsdPosition};
 use crate::dsp::{Analyzer, FFT_SIZE};
-use crate::render::{Canvas, Colors};
+use crate::render::{self, Canvas, Colors, Image, RectF};
 use crate::shared::{MediaCmd, MediaInfo, Shared};
 use crate::system;
 use crate::taskbar::{self, Placement};
@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -267,6 +268,10 @@ impl Surface {
         Canvas::new(self.w as usize, self.h as usize, px)
     }
 
+    pub fn pixels(&self) -> &[u32] {
+        unsafe { std::slice::from_raw_parts(self.bits, (self.w * self.h) as usize) }
+    }
+
     fn present(&self, hwnd: HWND, x: i32, y: i32, alpha: f32) {
         let blend = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
@@ -293,14 +298,63 @@ impl Drop for Surface {
     }
 }
 
+/// Fundo acrílico de uma janela: o que está atrás do cartão, já desfocado.
+struct Backdrop {
+    /// Retângulo do cartão na tela (x, y, w, h) e desfoque usados na captura.
+    key: (i32, i32, i32, i32, i32),
+    img: Option<Arc<Image>>,
+}
+
+/// Captura a tela em volta de `rect` (com folga para o desfoque) e monta o
+/// fundo acrílico. Feita com a nossa janela escondida, então só pega o que está
+/// atrás dela.
+fn capture_backdrop((x, y, w, h): (i32, i32, i32, i32), blur: f32) -> Option<Image> {
+    let margin = (blur * 1.2).ceil() as i32 + 2;
+    let (vx, vy, vw, vh) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    let (x0, y0) = ((x - margin).max(vx), (y - margin).max(vy));
+    let (x1, y1) = ((x + w + margin).min(vx + vw), (y + h + margin).min(vy + vh));
+    if x1 - x0 < 2 || y1 - y0 < 2 {
+        return None;
+    }
+    let surf = Surface::new(x1 - x0, y1 - y0)?;
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() {
+            return None;
+        }
+        let ok = BitBlt(surf.dc, 0, 0, x1 - x0, y1 - y0, Some(screen), x0, y0, SRCCOPY).is_ok();
+        ReleaseDC(None, screen);
+        let _ = GdiFlush();
+        if !ok {
+            return None;
+        }
+    }
+    let rect = RectF::new((x - x0) as f32, (y - y0) as f32, w as f32, h as f32);
+    Some(render::acrylic_backdrop(surf.pixels(), surf.w as usize, surf.h as usize, rect, blur))
+}
+
 /// Janela animada simples (card, "A seguir", aviso de teclas).
 struct Layer {
     hwnd: HWND,
     surface: Option<Surface>,
     shown: bool,
+    backdrop: Option<Backdrop>,
+    /// Desde quando o cartão está num lugar diferente do fundo capturado.
+    moved_at: Option<Instant>,
 }
 
 impl Layer {
+    fn new(hwnd: HWND) -> Self {
+        Self { hwnd, surface: None, shown: false, backdrop: None, moved_at: None }
+    }
+
     fn hide(&mut self) {
         if self.shown {
             unsafe {
@@ -308,7 +362,35 @@ impl Layer {
             }
             self.shown = false;
             self.surface = None;
+            self.backdrop = None;
         }
+    }
+
+    /// Fundo acrílico para o cartão em `rect` (tela). Capturado antes de a
+    /// janela aparecer. Se o cartão mudar de lugar com a janela visível (ajuste
+    /// ao vivo nas configurações), espera parar de mexer e, se `may_hide`,
+    /// esconde a janela por um quadro para capturar de novo.
+    fn backdrop(&mut self, rect: (i32, i32, i32, i32), blur: f32, now: Instant, may_hide: bool) -> Option<Arc<Image>> {
+        let key = (rect.0, rect.1, rect.2, rect.3, blur.round() as i32);
+        let old = self.backdrop.as_ref().and_then(|b| b.img.clone());
+        if self.backdrop.as_ref().is_some_and(|b| b.key == key) {
+            self.moved_at = None;
+            return old;
+        }
+        if self.shown {
+            let since = *self.moved_at.get_or_insert(now);
+            if !may_hide || now - since < Duration::from_millis(250) {
+                return old;
+            }
+            self.hide();
+            unsafe {
+                let _ = DwmFlush();
+            }
+        }
+        self.moved_at = None;
+        let img = capture_backdrop(rect, blur).map(Arc::new);
+        self.backdrop = Some(Backdrop { key, img: img.clone() });
+        img
     }
 
     fn show(&mut self, activate: bool) {
@@ -354,6 +436,8 @@ impl<T: Copy + PartialEq> Pending<T> {
 struct Overlay {
     shared: Arc<Shared>,
     hwnd: HWND,
+    /// Barra de tarefas que é "dona" do widget (ver `attach_to_taskbar`).
+    owner: Option<HWND>,
     timer: HANDLE,
     period: i32,
     surface: Option<Surface>,
@@ -375,13 +459,26 @@ struct Overlay {
     flyout_open: bool,
     flyout_anim: f32,
     flyout_last_hover: Instant,
+    /// Superfície do card na posição final (x, y, largura, altura), quando visível.
+    flyout_box: Option<(i32, i32, i32, i32)>,
+    /// Aviso "o player não deixa" no card, desde quando.
+    hint: Option<Instant>,
+    /// Último estado registrado de visibilidade (barra visível, painel, música).
+    vis_log: Option<(Option<bool>, bool, bool)>,
     // "A seguir"
     popup: Layer,
     popup_start: Option<Instant>,
+    /// Troca automática detectada; esperando a capa nova chegar (no máximo ~1,5 s).
+    popup_wait: Option<Instant>,
+    /// Posição final (x, y) e sentido da entrada, fixados quando o cartão aparece.
+    popup_pos: Option<(i32, i32, i32)>,
     // Caps/Num Lock
     osd: Layer,
     osd_start: Option<Instant>,
-    osd_key: (&'static str, &'static str, bool),
+    /// (nome da tecla, é Num Lock, ligada)
+    osd_key: (&'static str, bool, bool),
+    /// Buffer reaproveitado para a animação de zoom do aviso.
+    osd_tmp: Vec<u32>,
     lock_state: [bool; 2],
     hook: Option<HHOOK>,
     // entrada
@@ -444,6 +541,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
     let lock_state = unsafe { [GetKeyState(VK_CAPITAL.0 as i32) & 1 != 0, GetKeyState(VK_NUMLOCK.0 as i32) & 1 != 0] };
     let mut ov = Overlay {
         hwnd,
+        owner: None,
         timer,
         period: 0,
         surface: None,
@@ -460,15 +558,21 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         seen_seq: media.auto_change_seq,
         media,
         started: now,
-        flyout: Layer { hwnd: flyout, surface: None, shown: false },
+        flyout: Layer::new(flyout),
         flyout_open: false,
         flyout_anim: 0.0,
         flyout_last_hover: now,
-        popup: Layer { hwnd: popup, surface: None, shown: false },
+        flyout_box: None,
+        hint: None,
+        vis_log: None,
+        popup: Layer::new(popup),
         popup_start: None,
-        osd: Layer { hwnd: osd, surface: None, shown: false },
+        popup_wait: None,
+        popup_pos: None,
+        osd: Layer::new(osd),
         osd_start: None,
-        osd_key: (tr("Caps Lock"), "A", false),
+        osd_key: (tr("Caps Lock"), false, false),
+        osd_tmp: Vec::new(),
         lock_state,
         hook: None,
         hover_w: None,
@@ -499,6 +603,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
     };
     ov.set_period(ACTIVE_PERIOD_MS);
     ov.update_hook();
+    ov.attach_to_taskbar();
 
     let mut msg = MSG::default();
     'outer: loop {
@@ -565,6 +670,41 @@ impl Overlay {
         }
     }
 
+    /// Faz a barra de tarefas ser a "dona" do widget. O Windows mantém janelas
+    /// possuídas sempre acima da dona: quando a barra é ativada (abrir/fechar os
+    /// ícones ocultos, clicar no relógio) ela sobe junto com o widget, em vez de
+    /// cobri-lo até o próximo quadro (o widget "piscava"). Se o Explorer
+    /// reiniciar, a barra nova vira a dona; se a janela tiver sido destruída
+    /// junto com a barra antiga, é recriada.
+    fn attach_to_taskbar(&mut self) {
+        let alive = unsafe { IsWindow(Some(self.hwnd)).as_bool() };
+        if !alive {
+            match create_window(w!("TaskbeatWidget"), Some(widget_proc), WS_EX_NOACTIVATE) {
+                Ok(h) => {
+                    self.hwnd = h;
+                    self.shown = false;
+                    self.surface = None;
+                    self.last_sig = None;
+                    self.owner = None;
+                }
+                Err(e) => {
+                    log::warn(&format!("widget: não deu para recriar a janela: {e}"));
+                    return;
+                }
+            }
+        }
+        let tb = taskbar::taskbar_hwnd();
+        if tb == self.owner {
+            return;
+        }
+        if let Some(tb) = tb {
+            unsafe {
+                SetWindowLongPtrW(self.hwnd, GWLP_HWNDPARENT, tb.0 as isize);
+            }
+        }
+        self.owner = tb;
+    }
+
     fn scale(&self) -> f32 {
         self.placement.map(|p| p.scale).unwrap_or(1.0)
     }
@@ -627,24 +767,42 @@ impl Overlay {
         self.colors.album = self.media.art.as_ref().map(|a| a.vibrant);
         let visible = self.placement.is_some_and(|p| p.visible);
 
-        // Cartão "A seguir": só troca automática.
+        // Cartão "A seguir": só troca automática. Também com o card aberto (aí
+        // aparece empilhado acima dele). Espera um instante pela capa nova (o
+        // player costuma publicar o título antes da imagem) e, se o widget
+        // estiver escondido naquele instante, espera ele voltar.
         if self.media.auto_change_seq != self.seen_seq {
             self.seen_seq = self.media.auto_change_seq;
-            if self.cfg.next_track_popup && self.media.present() && visible && !self.flyout_open {
-                self.popup_start = Some(now);
+            if self.cfg.next_track_popup {
+                self.popup_wait = Some(now);
+                log::info(&format!("\"A seguir\": troca automática (widget visível={visible}, música={})", self.media.present()));
             }
         }
-        if self.demo_popup && self.media.present() && visible {
-            self.demo_popup = false;
-            self.popup_start = Some(now);
+        if let Some(t0) = self.popup_wait {
+            let waited = now - t0;
+            let ready = !self.media.art_pending || waited > Duration::from_millis(1500);
+            if ready && visible && self.media.present() {
+                self.popup_wait = None;
+                self.start_popup(now);
+                log::info("\"A seguir\": mostrado");
+            } else if waited > Duration::from_secs(5) {
+                self.popup_wait = None;
+                log::info(&format!("\"A seguir\": desistiu (widget visível={visible}, música={})", self.media.present()));
+            }
         }
+        // Demonstração (capturas de tela): o card abre antes, para dar para ver
+        // o "A seguir" empilhado acima dele com as duas variáveis ligadas.
         if self.demo_flyout && self.media.present() && visible {
             self.demo_flyout = false;
             self.open_flyout(now);
         }
+        if self.demo_popup && self.media.present() && visible {
+            self.demo_popup = false;
+            self.start_popup(now);
+        }
         if self.demo_osd && visible {
             self.demo_osd = false;
-            self.osd_key = (tr("Caps Lock"), "A", true);
+            self.osd_key = (tr("Caps Lock"), false, true);
             self.osd_start = Some(now);
         }
         self.process_lock_keys(now);
@@ -652,13 +810,13 @@ impl Overlay {
             // Já visível (ex.: arrastando o ajuste de posição): mantém aberto sem
             // reiniciar a animação de entrada.
             let shown = self.osd_start.is_some_and(|t| (now - t).as_secs_f32() > 0.3);
-            self.osd_key = (tr("Caps Lock"), "A", self.lock_state[0]);
+            self.osd_key = (tr("Caps Lock"), false, self.lock_state[0]);
             self.osd_start = Some(if shown { now - Duration::from_millis(350) } else { now });
         }
 
         // Quais partes aparecem e onde.
         let horizontal = self.placement.map(|p| p.horizontal).unwrap_or(true);
-        let panel = self.cfg.show_media && self.media.present() && horizontal;
+        let panel = self.cfg.show_media && horizontal && (self.media.present() || self.cfg.always_show_widget);
         let viz = self.cfg.show_visualizer;
         let layout_every = Duration::from_millis(if self.period == IDLE_PERIOD_MS { 500 } else { 250 });
         if panel != self.panel || viz != self.viz || now - self.last_layout > layout_every {
@@ -667,6 +825,7 @@ impl Overlay {
             self.last_layout = now;
             let logical = WLayout::build(1.0, 40.0, &self.cfg, panel, viz).width.ceil() as i32;
             self.placement = taskbar::compute(&self.cfg, logical.max(1));
+            self.attach_to_taskbar();
         }
 
         // Áudio -> espectro (só com o visualizador ligado).
@@ -699,6 +858,13 @@ impl Overlay {
 
         let placement = self.placement.filter(|p| p.visible);
         let want = placement.is_some() && (panel || (viz && sound));
+        // Diagnóstico: registra quando o widget some/volta e por quê.
+        let vis = (self.placement.map(|p| p.visible), panel, self.media.present());
+        if self.vis_log != Some(vis) {
+            self.vis_log = Some(vis);
+            let why = self.placement.and_then(|p| p.why_hidden).unwrap_or(if self.placement.is_none() { "barra de tarefas não encontrada" } else { "" });
+            log::info(&format!("widget: {} [barra visível={:?}, painel={panel}, música={}] {why}", if want { "visível" } else { "escondido" }, vis.0, vis.2));
+        }
         let target = if want { 1.0 } else { 0.0 };
         let speed = if want { 6.0 } else { 2.5 };
         self.fade += (target - self.fade).clamp(-speed * dt, speed * dt);
@@ -708,7 +874,7 @@ impl Overlay {
             self.flyout_open = false;
         }
         let pb = self.playback();
-        let flyout_active = self.update_flyout(dt, placement, pb);
+        let flyout_active = self.update_flyout(now, dt, placement, pb);
         let popup_active = self.update_popup(now, placement);
         let osd_active = self.update_osd(now, placement);
 
@@ -719,6 +885,7 @@ impl Overlay {
             || self.drag.is_some()
             || flyout_active
             || popup_active
+            || self.popup_wait.is_some()
             || osd_active
             || had_input
             || (self.fade > 0.0 && self.fade < 1.0)
@@ -827,16 +994,16 @@ impl Overlay {
     fn process_lock_keys(&mut self, now: Instant) {
         let keys: Vec<u16> = LOCK_KEYS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for vk in keys {
-            let (i, name, sym, enabled) = if vk == VK_CAPITAL.0 {
-                (0, "Caps Lock", "A", self.cfg.caps_lock_osd)
+            let (i, name, num, enabled) = if vk == VK_CAPITAL.0 {
+                (0, "Caps Lock", false, self.cfg.caps_lock_osd)
             } else {
-                (1, tr("Num Lock"), "1", self.cfg.num_lock_osd)
+                (1, tr("Num Lock"), true, self.cfg.num_lock_osd)
             };
             // A tecla alterna o estado; o hook vê a tecla antes do Windows aplicar.
             self.lock_state[i] = !self.lock_state[i];
             let show_state = self.lock_state[i] || self.cfg.osd_show_off;
             if enabled && show_state && self.placement.is_some_and(|p| p.visible) {
-                self.osd_key = (name, sym, self.lock_state[i]);
+                self.osd_key = (name, num, self.lock_state[i]);
                 self.osd_start = Some(now);
             }
         }
@@ -861,36 +1028,63 @@ impl Overlay {
             1.0
         };
         let m = ui::SHADOW_MARGIN * s;
-        let slide = ((1.0 - e) * 14.0 * s) as i32;
         let gap = (12.0 * s) as i32;
         let (wi, hi, mi) = (w as i32, h as i32, m as i32);
         let center_x = (p.mon_left + p.mon_right) / 2 - wi / 2;
-        let (x, y) = match self.cfg.osd_position {
-            OsdPosition::Bottom if p.taskbar_bottom_edge => (center_x, p.taskbar_top - hi + mi - (20.0 * s) as i32 + slide),
-            OsdPosition::Bottom => (center_x, p.mon_bottom - hi + mi - (60.0 * s) as i32 + slide),
-            OsdPosition::Center => (center_x, (p.mon_top + p.mon_bottom) / 2 - hi / 2 + slide),
-            OsdPosition::Top => (center_x, p.mon_top + (40.0 * s) as i32 - mi - slide),
+        // Posição final e de que lado o aviso entra (+1: de baixo, -1: de cima).
+        let (x, y, dir) = match self.cfg.osd_position {
+            OsdPosition::Bottom if p.taskbar_bottom_edge => (center_x, p.taskbar_top - hi + mi - (20.0 * s) as i32, 1),
+            OsdPosition::Bottom => (center_x, p.mon_bottom - hi + mi - (60.0 * s) as i32, 1),
+            OsdPosition::Center => (center_x, (p.mon_top + p.mon_bottom) / 2 - hi / 2, 1),
+            OsdPosition::Top => (center_x, p.mon_top + (40.0 * s) as i32 - mi, -1),
             OsdPosition::AbovePlayer => {
                 let x = p.x + p.w / 2 - wi / 2;
-                let y = if p.taskbar_bottom_edge { p.taskbar_top - hi + mi - gap + slide } else { p.y + p.h + gap - mi - slide };
-                (x, y)
+                if p.taskbar_bottom_edge { (x, p.taskbar_top - hi + mi - gap, 1) } else { (x, p.y + p.h + gap - mi, -1) }
             }
         };
         // Ajuste fino do usuário; nunca sai do monitor.
         let x = (x + (self.cfg.osd_offset_x as f32 * s) as i32).clamp(p.mon_left - mi, p.mon_right - wi + mi);
         let y = (y + (self.cfg.osd_offset_y as f32 * s) as i32).clamp(p.mon_top - mi, p.mon_bottom - hi + mi);
+        let (slide, zoom) = match self.cfg.osd_anim {
+            OsdAnim::Slide => (((1.0 - e) * 14.0 * s) as i32, 1.0),
+            OsdAnim::Zoom => (0, 0.86 + 0.14 * e),
+            OsdAnim::Fade => (0, 1.0),
+        };
+
+        // Acrílico: o que está atrás do cartão na posição final.
+        let backdrop = if ui::osd_wants_backdrop(&self.cfg) {
+            let (cw, ch) = ui::osd_card(s, &self.cfg);
+            self.osd.backdrop((x + mi, y + mi, cw.round() as i32, ch.round() as i32), ui::osd_blur_px(&self.cfg, s), now, true)
+        } else {
+            None
+        };
 
         self.text.set_scale(s);
         Surface::ensure(&mut self.osd.surface, w as i32, h as i32);
         let Some(mut surf) = self.osd.surface.take() else { return true };
         {
-            let mut cv = surf.canvas();
-            cv.clear();
             let th = ui::osd_theme(&self.cfg, &self.colors);
-            let (name, sym, on) = self.osd_key;
-            ui::draw_osd(&mut cv, &mut self.text, &self.cfg, &th, s, name, sym, on, t);
+            let (name, num, on) = self.osd_key;
+            if zoom < 0.999 {
+                // Zoom: desenha em tamanho normal e reduz a partir do centro.
+                let (sw, sh) = (surf.w as usize, surf.h as usize);
+                let mut px = std::mem::take(&mut self.osd_tmp);
+                px.clear();
+                px.resize(sw * sh, 0);
+                ui::draw_osd(&mut Canvas::new(sw, sh, &mut px), &mut self.text, &self.cfg, &self.colors, &th, s, name, num, on, t, backdrop.as_deref());
+                let img = Image::plain(sw, sh, px);
+                let (zw, zh) = (sw as f32 * zoom, sh as f32 * zoom);
+                let mut cv = surf.canvas();
+                cv.clear();
+                cv.draw_image(RectF::new((sw as f32 - zw) / 2.0, (sh as f32 - zh) / 2.0, zw, zh), &img, 0.0, 1.0);
+                self.osd_tmp = img.px;
+            } else {
+                let mut cv = surf.canvas();
+                cv.clear();
+                ui::draw_osd(&mut cv, &mut self.text, &self.cfg, &self.colors, &th, s, name, num, on, t, backdrop.as_deref());
+            }
         }
-        surf.present(self.osd.hwnd, x, y, e);
+        surf.present(self.osd.hwnd, x, y + dir * slide, e);
         self.osd.surface = Some(surf);
         self.osd.show(false);
         true
@@ -902,6 +1096,7 @@ impl Overlay {
         self.flyout_open = true;
         self.flyout_last_hover = now;
         self.popup_start = None;
+        self.popup_wait = None;
     }
 
     fn frac(x: f32, track: Option<(f32, f32)>) -> Option<f32> {
@@ -1032,6 +1227,13 @@ impl Overlay {
                 self.repeat_pending.set(next);
                 self.shared.send_media(MediaCmd::Repeat(next));
             }
+            // O player não deixa (navegadores): explica no card em vez de não fazer nada.
+            Hit::Shuffle | Hit::Repeat => {
+                if !self.flyout_open {
+                    self.open_flyout(now);
+                }
+                self.hint = Some(now);
+            }
             Hit::VolBtn => self.volume.toggle_mute(),
             _ => {}
         }
@@ -1039,7 +1241,7 @@ impl Overlay {
 
     // ------------------------------------------------------------ card expandido
 
-    fn update_flyout(&mut self, dt: f32, placement: Option<Placement>, pb: Playback) -> bool {
+    fn update_flyout(&mut self, now: Instant, dt: f32, placement: Option<Placement>, pb: Playback) -> bool {
         let target = if self.flyout_open && placement.is_some() { 1.0 } else { 0.0 };
         let speed = if target > 0.5 { 1.0 / 0.22 } else { 1.0 / 0.14 };
         self.flyout_anim += (target - self.flyout_anim).clamp(-speed * dt, speed * dt);
@@ -1048,6 +1250,7 @@ impl Overlay {
             self.hover_f = None;
             self.flyout_anim = 0.0;
             self.flyout_open = false;
+            self.flyout_box = None;
             return false;
         };
         let s = p.scale;
@@ -1058,10 +1261,20 @@ impl Overlay {
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - l.w as i32 + m as i32 - (8.0 * s) as i32);
         let slide = ((1.0 - e) * 14.0 * s) as i32;
-        let y = if p.taskbar_bottom_edge {
-            p.taskbar_top - (l.h - m) as i32 - (10.0 * s) as i32 + slide
+        let (y, dir) = if p.taskbar_bottom_edge {
+            (p.taskbar_top - (l.h - m) as i32 - (10.0 * s) as i32, 1)
         } else {
-            p.y + p.h + (10.0 * s) as i32 - m as i32 - slide
+            (p.y + p.h + (10.0 * s) as i32 - m as i32, -1)
+        };
+        self.flyout_box = Some((x, y, l.w.round() as i32, l.h.round() as i32));
+        // Acrílico: captura antes de o card aparecer (o card tem o foco: escondê-lo
+        // para recapturar o fecharia, então mudanças com ele aberto usam a mesma imagem).
+        let backdrop = if ui::card_wants_backdrop(&self.cfg) {
+            let c = l.card;
+            let rect = (x + c.x.round() as i32, y + c.y.round() as i32, c.w.round() as i32, c.h.round() as i32);
+            self.flyout.backdrop(rect, ui::GLASS_BLUR * s, now, false)
+        } else {
+            None
         };
 
         self.text.set_scale(s);
@@ -1079,10 +1292,15 @@ impl Overlay {
                 it: Interact { hover: self.hover_f, pressed, drag: self.drag },
                 pb,
                 s,
+                backdrop: backdrop.as_deref(),
+                hint: self.hint.and_then(|t| {
+                    let k = (now - t).as_secs_f32();
+                    (k < 2.8).then(|| (tr("Este player não deixa mudar isso pelo Windows"), (1.0 - (k - 2.4) / 0.4).clamp(0.0, 1.0)))
+                }),
             };
             ui::draw_card(&mut cv, &mut self.text, &l, &f);
         }
-        surf.present(self.flyout.hwnd, x, y, e);
+        surf.present(self.flyout.hwnd, x, y + dir * slide, e);
         self.flyout.surface = Some(surf);
         self.flyout.show(true);
         true
@@ -1090,18 +1308,47 @@ impl Overlay {
 
     // ------------------------------------------------------------ "A seguir"
 
+    fn start_popup(&mut self, now: Instant) {
+        self.popup_start = Some(now);
+        self.popup_pos = None;
+        self.popup.hide();
+    }
+
+    /// Onde o "A seguir" fica: acima da música na barra ou, com o card aberto,
+    /// empilhado acima (ou abaixo, com a barra no topo) dele.
+    fn popup_home(&self, p: &Placement, w: f32, h: f32) -> (i32, i32, i32) {
+        let s = p.scale;
+        let m = ui::SHADOW_MARGIN * s;
+        let gap = 10.0 * s;
+        let wl = WLayout::build(s, p.h as f32, &self.cfg, self.panel, self.viz);
+        let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
+        let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - w as i32 + m as i32 - (8.0 * s) as i32);
+        let (y, dir) = match (self.flyout_box, p.taskbar_bottom_edge) {
+            (Some((_, fy, _, _)), true) => ((fy as f32 + m - gap - (h - m)) as i32, 1),
+            (Some((_, fy, _, fh)), false) => ((fy as f32 + fh as f32 - m + gap - m) as i32, -1),
+            (None, true) => (p.taskbar_top - (h - m) as i32 - gap as i32, 1),
+            (None, false) => (p.y + p.h + gap as i32 - m as i32, -1),
+        };
+        let y = y.clamp(p.mon_top - m as i32, p.mon_bottom - h as i32 + m as i32);
+        (x, y, dir)
+    }
+
     fn update_popup(&mut self, now: Instant, placement: Option<Placement>) -> bool {
-        let Some(start) = self.popup_start else { return false };
+        let Some(start) = self.popup_start else {
+            // Dispensado (ex.: o card foi aberto): some na hora, sem ficar congelado.
+            self.popup.hide();
+            return false;
+        };
         let total = self.cfg.popup_secs.max(2) as f32 + 0.5;
         let t = (now - start).as_secs_f32();
         let Some(p) = placement.filter(|_| t < total) else {
             self.popup_start = None;
+            self.popup_pos = None;
             self.popup.hide();
             return false;
         };
         let s = p.scale;
         let (w, h) = ui::upnext_size(s);
-        let m = ui::SHADOW_MARGIN * s;
         let e = if t < 0.45 {
             ui::ease_out_cubic(t / 0.45)
         } else if t > total - 0.4 {
@@ -1109,14 +1356,22 @@ impl Overlay {
         } else {
             1.0
         };
-        let wl = WLayout::build(s, p.h as f32, &self.cfg, self.panel, self.viz);
-        let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
-        let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - w as i32 + m as i32 - (8.0 * s) as i32);
+        // A posição é fixada quando o cartão aparece (não pula se o card fechar).
+        let (x, y, dir) = match self.popup_pos {
+            Some(v) => v,
+            None => {
+                let v = self.popup_home(&p, w, h);
+                self.popup_pos = Some(v);
+                v
+            }
+        };
         let slide = ((1.0 - e) * 18.0 * s) as i32;
-        let y = if p.taskbar_bottom_edge {
-            p.taskbar_top - (h - m) as i32 - (10.0 * s) as i32 + slide
+        let backdrop = if ui::card_wants_backdrop(&self.cfg) {
+            let c = ui::upnext_card(s);
+            let rect = (x + c.x.round() as i32, y + c.y.round() as i32, c.w.round() as i32, c.h.round() as i32);
+            self.popup.backdrop(rect, ui::GLASS_BLUR * s, now, false)
         } else {
-            p.y + p.h + (10.0 * s) as i32 - m as i32 - slide
+            None
         };
 
         self.text.set_scale(s);
@@ -1126,9 +1381,9 @@ impl Overlay {
             let mut cv = surf.canvas();
             cv.clear();
             let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
-            ui::draw_upnext(&mut cv, &mut self.text, &self.cfg, &self.colors, &self.media, &th, s, t, total);
+            ui::draw_upnext(&mut cv, &mut self.text, &self.cfg, &self.colors, &self.media, &th, s, t, total, backdrop.as_deref());
         }
-        surf.present(self.popup.hwnd, x, y, e);
+        surf.present(self.popup.hwnd, x, y + dir * slide, e);
         self.popup.surface = Some(surf);
         self.popup.show(false);
         true

@@ -7,7 +7,7 @@
 //! Segoe UI Variable) e cards de "now playing" populares no Dribbble (capa
 //! desfocada como fundo, cor extraída da capa, vidro, play circular).
 
-use crate::config::{CardLayout, CardStyle, Config, OsdShape, OsdSize, Shape, ThemeMode};
+use crate::config::{CardLayout, CardStyle, Config, OsdIcon, OsdMaterial, OsdShape, OsdSize, Shape, ShuffleRepeat, TaskbarPlay, ThemeMode, WidgetShape};
 use crate::render::*;
 use crate::shared::MediaInfo;
 use crate::text::*;
@@ -16,6 +16,25 @@ use std::sync::Arc;
 
 /// Margem (lógica) em volta dos cards para caber a sombra.
 pub const SHADOW_MARGIN: f32 = 26.0;
+/// Desfoque (px lógicos) do fundo acrílico do card e do "A seguir".
+pub const GLASS_BLUR: f32 = 30.0;
+/// Cartão "A seguir" (sem a margem da sombra), em px lógicos.
+const UPNEXT_W: f32 = 360.0;
+const UPNEXT_H: f32 = 92.0;
+
+/// Desfoque (px físicos) do fundo acrílico do aviso de teclas.
+pub fn osd_blur_px(cfg: &Config, s: f32) -> f32 {
+    (4.0 + cfg.osd_blur as f32 * 0.4) * s
+}
+
+/// O componente usa fundo acrílico (precisa da imagem do que está atrás)?
+pub fn card_wants_backdrop(cfg: &Config) -> bool {
+    cfg.card_style == CardStyle::Glass
+}
+
+pub fn osd_wants_backdrop(cfg: &Config) -> bool {
+    cfg.osd_material == OsdMaterial::Acrylic
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -287,6 +306,24 @@ fn slider(cv: &mut Canvas, x0: f32, x1: f32, cy: f32, t: f32, th: &Theme, hot: b
     }
 }
 
+/// Acrílico do Fluent: o que está atrás (já desfocado) + tinta do tema + granulado.
+pub fn acrylic(cv: &mut Canvas, r: RectF, radius: f32, backdrop: &Image, tint: Rgb, tint_alpha: f32) {
+    cv.draw_image_cover(r, backdrop, radius, 1.0);
+    cv.fill_round(r, radius, tint, tint_alpha);
+    cv.grain(r, radius, 0.026);
+}
+
+/// "Artista · Álbum" (sem repetir o álbum quando ele é igual ao título/artista).
+pub fn artist_album(m: &MediaInfo) -> String {
+    let album = m.album.trim();
+    let show_album = !album.is_empty() && album != m.title.trim() && album != m.artist.trim();
+    match (m.artist.is_empty(), show_album) {
+        (false, true) => format!("{} · {}", m.artist, album),
+        (true, true) => album.to_string(),
+        _ => m.artist.clone(),
+    }
+}
+
 pub fn fmt_time(secs: f64) -> String {
     let s = secs.max(0.0).round() as u64;
     if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
@@ -294,28 +331,46 @@ pub fn fmt_time(secs: f64) -> String {
 
 // ---------------------------------------------------------------- widget da barra
 
+/// Widget da barra: um único "quadrado" (o fundo) com tudo dentro — capa,
+/// título/artista, indicador, botões e barras de áudio.
 #[derive(Default, Clone, Debug)]
 pub struct WLayout {
     pub width: f32,
+    /// Fundo que envolve todo o conteúdo.
+    pub bg: Option<RectF>,
+    pub radius: f32,
+    /// Área da música (clique abre o card).
     pub info: Option<RectF>,
     pub art: Option<RectF>,
     pub text: Option<RectF>,
     pub indicator: Option<RectF>,
+    /// Separador vertical entre a música e os botões: (x, y0, y1).
+    pub divider: Option<(f32, f32, f32)>,
+    pub shuffle: Option<RectF>,
     pub prev: Option<RectF>,
     pub play: Option<RectF>,
     pub next: Option<RectF>,
+    pub repeat: Option<RectF>,
     pub viz: Option<RectF>,
 }
 
 impl WLayout {
     pub fn build(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool) -> Self {
         let mut l = WLayout::default();
-        let mut x = 2.0 * s;
+        let (top, bh) = (3.0 * s, h - 6.0 * s);
+        l.radius = match cfg.widget_shape {
+            WidgetShape::Rounded => 6.0 * s,
+            WidgetShape::Pill => bh / 2.0,
+            WidgetShape::Square => 2.0 * s,
+        };
+        let x0 = 2.0 * s;
+        let mut x = x0;
+        let art = (28.0 * s).min(h - 10.0 * s);
+        // Na pílula a capa fica concêntrica com a ponta arredondada.
+        let lead = if cfg.widget_shape == WidgetShape::Pill && cfg.widget_pill { (bh - art) / 2.0 } else { 7.0 * s };
         if panel {
-            let x_start = x;
-            let art = (28.0 * s).min(h - 10.0 * s);
-            l.art = Some(RectF::new(x + 7.0 * s, (h - art) * 0.5, art, art));
-            let tx = x + 7.0 * s + art + 10.0 * s;
+            l.art = Some(RectF::new(x + lead, (h - art) * 0.5, art, art));
+            let tx = x + lead + art + 10.0 * s;
             let tw = cfg.title_width as f32 * s;
             l.text = Some(RectF::new(tx, 0.0, tw, h));
             x = tx + tw + 4.0 * s;
@@ -323,41 +378,70 @@ impl WLayout {
                 l.indicator = Some(RectF::new(x, 0.0, 18.0 * s, h));
                 x += 18.0 * s;
             }
-            x += 6.0 * s;
-            l.info = Some(RectF::new(x_start, 3.0 * s, x - x_start, h - 6.0 * s));
+            x += 4.0 * s;
+            l.info = Some(RectF::new(x0, top, x - x0, bh));
             if cfg.taskbar_controls {
-                x += 2.0 * s;
-                let btn = 30.0 * s;
-                for slot in [&mut l.prev, &mut l.play, &mut l.next] {
-                    *slot = Some(RectF::new(x, 3.0 * s, btn, h - 6.0 * s));
-                    x += btn;
+                if cfg.widget_divider {
+                    l.divider = Some((x.round() + 0.5, h * 0.3, h * 0.7));
                 }
                 x += 4.0 * s;
+                let btn = 28.0 * s;
+                let mut slot = |w: f32| {
+                    let r = RectF::new(x, top, w, bh);
+                    x += w;
+                    Some(r)
+                };
+                if cfg.taskbar_shuffle_repeat {
+                    l.shuffle = slot(btn);
+                }
+                l.prev = slot(btn);
+                l.play = slot(32.0 * s);
+                l.next = slot(btn);
+                if cfg.taskbar_shuffle_repeat {
+                    l.repeat = slot(btn);
+                }
+                x += 2.0 * s;
             }
         }
         if viz {
             let vw = cfg.width as f32 * s;
             let vh = (h * 0.5).round();
-            l.viz = Some(RectF::new(x + 4.0 * s, (h - vh) * 0.5, vw, vh));
-            x += vw + 10.0 * s;
+            l.viz = Some(RectF::new(x + 6.0 * s, (h - vh) * 0.5, vw, vh));
+            x += vw + 12.0 * s;
         }
-        l.width = if panel || viz { x } else { 0.0 };
+        // A ponta direita da pílula precisa do mesmo respiro da esquerda.
+        if panel && cfg.widget_shape == WidgetShape::Pill && cfg.widget_pill {
+            x += (lead - 7.0 * s).max(0.0);
+        }
+        if panel && cfg.widget_pill {
+            l.bg = Some(RectF::new(x0, top, x - x0, bh));
+        }
+        l.width = if panel || viz { x + 2.0 * s } else { 0.0 };
         l
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
-        [(self.prev, Hit::Prev), (self.play, Hit::Play), (self.next, Hit::Next), (self.info, Hit::Info)]
-            .iter()
-            .find(|(r, _)| r.is_some_and(|r| r.contains(x, y)))
-            .map(|(_, h)| *h)
+        [
+            (self.shuffle, Hit::Shuffle),
+            (self.prev, Hit::Prev),
+            (self.play, Hit::Play),
+            (self.next, Hit::Next),
+            (self.repeat, Hit::Repeat),
+            (self.info, Hit::Info),
+        ]
+        .iter()
+        .find(|(r, _)| r.is_some_and(|r| r.contains(x, y)))
+        .map(|(_, h)| *h)
     }
 
     fn rect(&self, h: Hit) -> Option<RectF> {
         match h {
             Hit::Info => self.info,
+            Hit::Shuffle => self.shuffle,
             Hit::Prev => self.prev,
             Hit::Play => self.play,
             Hit::Next => self.next,
+            Hit::Repeat => self.repeat,
             _ => None,
         }
     }
@@ -378,29 +462,49 @@ pub struct WidgetFrame<'a> {
 
 pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &WidgetFrame) {
     let (s, th, m, cfg) = (f.s, &f.theme, f.media, f.cfg);
-    // Fundo: pílula opcional sempre visível; hover/aberto destacam a área da música.
+    // Fundo único com tudo dentro; o card aberto deixa o fundo um pouco mais forte.
+    if let Some(bg) = l.bg {
+        let a = if f.flyout_open { 0.10 } else { 0.06 };
+        cv.fill_round(bg, l.radius, th.fg, a);
+        cv.stroke_round(bg, l.radius, s, th.fg, if th.dark { 0.08 } else { 0.10 });
+        // Brilho fino no topo (elevação do Fluent).
+        cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), l.radius, |_, y| ([1.0; 3], if y < bg.y + 1.5 * s { 0.05 } else { 0.0 }));
+    }
+    // Hover dentro do fundo: a área da música e cada botão têm o próprio destaque.
     if let Some(r) = l.info {
-        let hot = f.it.hover == Some(Hit::Info) || f.flyout_open;
-        if cfg.widget_pill {
-            cv.fill_round(r, 6.0 * s, th.fg, if hot { 0.11 } else { 0.06 });
-            cv.stroke_round(r, 6.0 * s, s, th.fg, 0.07);
-        } else if hot {
-            hover_bg(cv, r, 6.0 * s, th, f.it.pressed == Some(Hit::Info));
+        let hot = f.it.hover == Some(Hit::Info) || (f.flyout_open && l.bg.is_none());
+        if hot {
+            let inner = if l.bg.is_some() { r.inset(2.0 * s) } else { r };
+            let rad = if l.bg.is_some() { (l.radius - 2.0 * s).max(3.0 * s) } else { 6.0 * s };
+            hover_bg(cv, inner, rad, th, f.it.pressed == Some(Hit::Info));
         }
     }
-    for h in [Hit::Prev, Hit::Next] {
+    for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::Play] {
+        if h == Hit::Play && cfg.taskbar_play == TaskbarPlay::Filled {
+            continue;
+        }
         if f.it.hover == Some(h) {
             if let Some(r) = l.rect(h) {
-                hover_bg(cv, r, 5.0 * s, th, f.it.pressed == Some(h));
+                let k = (r.w.min(r.h) - 4.0 * s).max(1.0);
+                hover_bg(cv, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), k / 2.0, th, f.it.pressed == Some(h));
             }
         }
+    }
+    if let Some((x, y0, y1)) = l.divider {
+        cv.fill_rrect(x - 0.5 * s, y0, x + 0.5 * s, y1, 0.5 * s, 0.14, |_, _| th.fg);
     }
 
     if let Some(r) = l.art {
         draw_art(cv, tr, r, m, th, cfg.cover_shape, s, cfg.show_source.then_some(12.0 * s));
     }
     if let Some(r) = l.text {
-        let title = if m.title.is_empty() { m.app.clone() } else { m.title.clone() };
+        let title = if !m.present() {
+            crate::i18n::tr("Nada tocando").to_string()
+        } else if m.title.is_empty() {
+            m.app.clone()
+        } else {
+            m.title.clone()
+        };
         let sub = if !cfg.show_artist || m.title.is_empty() {
             String::new()
         } else if m.artist.is_empty() {
@@ -433,14 +537,24 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
     }
 
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
+    // Aleatório/repetir: apagados quando o player não deixa mudar pelo Windows.
+    if let Some(r) = l.shuffle {
+        toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s);
+    }
     if let Some(r) = l.prev {
         glyph(cv, tr, r, G_PREV, Font::IconSmall, th.fg, dim(m.can_prev));
     }
     if let Some(r) = l.play {
-        play_button(cv, tr, r, (24.0 * s).min(r.h - 4.0 * s), f.cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s);
+        match cfg.taskbar_play {
+            TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s),
+            TaskbarPlay::Icon => glyph(cv, tr, r, if f.pb.playing { G_PAUSE } else { G_PLAY }, Font::Icon, th.fg, dim(m.can_toggle)),
+        }
     }
     if let Some(r) = l.next {
         glyph(cv, tr, r, G_NEXT, Font::IconSmall, th.fg, dim(m.can_next));
+    }
+    if let Some(r) = l.repeat {
+        toggle_glyph(cv, tr, r, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s);
     }
     if let (Some(r), Some((values, peaks))) = (l.viz, f.viz) {
         draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s });
@@ -478,28 +592,31 @@ impl CLayout {
         let pad = 16.0 * s;
         let mut l = CLayout { radius: cfg.corners.radius() * s, vertical: cfg.card_layout == CardLayout::Vertical, ..Default::default() };
         let seek = has_seek && cfg.card_seek;
+        // Cinco botões com os ícones das pontas alinhados às bordas da coluna
+        // (aleatório começa onde o título começa; repetir termina onde ele termina).
+        let row = |x0: f32, x1: f32, y: f32, h: f32, inset: f32| {
+            let (c0, c4) = (x0 + inset, x1 - inset);
+            let step = (c4 - c0) / 4.0;
+            let slot = |k: f32| RectF::new(c0 + k * step - step / 2.0, y, step, h);
+            (slot(0.0), slot(1.0), slot(2.0), slot(3.0), slot(4.0))
+        };
         let (cw, mut y);
         if !l.vertical {
             cw = 372.0 * s;
             let art = 112.0 * s;
             l.art = RectF::new(m + pad, m + pad, art, art);
-            let tx = l.art.right() + 16.0 * s;
+            let tx = l.art.right() + 18.0 * s;
             let tw = m + cw - pad - tx;
-            // Sem o nome do app, título e artista descem para o centro da área de texto.
-            let ty = if cfg.show_source { 28.0 } else { 12.0 } * s;
             l.chip = RectF::new(tx, m + pad, tw, 22.0 * s);
-            l.title = RectF::new(tx, m + pad + ty, tw, 24.0 * s);
-            l.artist = RectF::new(tx, m + pad + ty + 24.0 * s, tw, 19.0 * s);
-            let by = l.art.bottom() - 38.0 * s;
-            let bw = (tw + 8.0 * s) / 5.0;
-            let mut x = tx - 4.0 * s;
-            let mut btn = || {
-                let r = RectF::new(x, by, bw, 38.0 * s);
-                x += bw;
-                r
-            };
-            (l.shuffle, l.prev, l.play, l.next, l.repeat) = (btn(), btn(), btn(), btn(), btn());
-            l.play_size = 36.0 * s;
+            let by = l.art.bottom() - 40.0 * s;
+            (l.shuffle, l.prev, l.play, l.next, l.repeat) = row(tx, tx + tw, by, 40.0 * s, 9.0 * s);
+            l.play_size = 38.0 * s;
+            // Título e artista ficam centralizados entre o topo da capa (ou o nome
+            // do app) e os botões; `draw_card` desce um pouco se houver álbum.
+            let top = if cfg.show_source { l.chip.bottom() + 4.0 * s } else { l.art.y };
+            let ty = top + ((by - top) - 43.0 * s) / 2.0;
+            l.title = RectF::new(tx, ty.round(), tw, 24.0 * s);
+            l.artist = RectF::new(tx, (ty + 24.0 * s).round(), tw, 19.0 * s);
             y = l.art.bottom() + 16.0 * s;
         } else {
             cw = 304.0 * s;
@@ -509,25 +626,20 @@ impl CLayout {
             l.title = RectF::new(m + pad, l.art.bottom() + 14.0 * s, art, 26.0 * s);
             l.artist = RectF::new(m + pad, l.art.bottom() + 40.0 * s, art, 19.0 * s);
             let by = l.art.bottom() + 66.0 * s;
-            let bw = 50.0 * s;
-            let mut x = m + cw / 2.0 - 2.5 * bw;
-            let mut btn = || {
-                let r = RectF::new(x, by, bw, 46.0 * s);
-                x += bw;
-                r
-            };
-            (l.shuffle, l.prev, l.play, l.next, l.repeat) = (btn(), btn(), btn(), btn(), btn());
-            l.play_size = 44.0 * s;
+            (l.shuffle, l.prev, l.play, l.next, l.repeat) = row(m + pad, m + cw - pad, by, 46.0 * s, 20.0 * s);
+            l.play_size = 46.0 * s;
             y = by + 46.0 * s + 12.0 * s;
         }
+        // Progresso e volume com os trilhos nas mesmas bordas (as da capa e do texto).
         if seek {
             l.seek = Some(RectF::new(m + pad, y, cw - 2.0 * pad, 30.0 * s));
             y += 34.0 * s;
         }
         if cfg.show_volume {
-            let b = RectF::new(m + pad - 8.0 * s, y, 34.0 * s, 32.0 * s);
+            let b = RectF::new(m + pad - 8.0 * s, y, 32.0 * s, 32.0 * s);
             l.vol_btn = Some(b);
-            l.vol = Some(RectF::new(b.right() + 2.0 * s, y, m + cw - pad - b.right() - 2.0 * s, 32.0 * s));
+            let vx = m + pad + 26.0 * s;
+            l.vol = Some(RectF::new(vx, y, m + cw - pad - vx, 32.0 * s));
             y += 36.0 * s;
         }
         let ch = y + 8.0 * s - m;
@@ -555,16 +667,17 @@ impl CLayout {
     }
 
     pub fn vol_track(&self, s: f32) -> Option<(f32, f32)> {
-        self.vol.map(|r| (r.x + 10.0 * s, r.right() - 10.0 * s))
+        self.vol.map(|r| (r.x + 4.0 * s, r.right() - 1.0 * s))
     }
 
     pub fn seek_track(&self, s: f32) -> Option<(f32, f32)> {
-        self.seek.map(|r| (r.x + 2.0 * s, r.right() - 2.0 * s))
+        self.seek.map(|r| (r.x + 1.0 * s, r.right() - 1.0 * s))
     }
 }
 
-/// Sombra + fundo do card no estilo escolhido.
-pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32) {
+/// Sombra + fundo do card no estilo escolhido. `backdrop`: o que está atrás,
+/// já desfocado (estilo acrílico); sem ele o acrílico vira um vidro sólido.
+pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32, backdrop: Option<&Image>) {
     cv.drop_shadow(card, radius, 24.0 * s, 8.0 * s, if th.dark { 0.55 } else { 0.22 });
     match (cfg.card_style, &media.art) {
         (CardStyle::Artwork, Some(art)) => {
@@ -589,10 +702,14 @@ pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, 
             cv.stroke_round(card, radius, s, if dark { [1.0; 3] } else { [0.0; 3] }, 0.10);
         }
         (CardStyle::Glass, _) => {
-            let base: Rgb = if th.dark { [0.12, 0.12, 0.13] } else { [0.97, 0.97, 0.975] };
+            let base: Rgb = if th.dark { [0.12, 0.12, 0.13] } else { [0.96, 0.96, 0.965] };
             let tint = media.art.as_ref().map(|a| a.avg).unwrap_or(th.accent);
-            cv.fill_round(card, radius, lerp3(base, tint, if th.dark { 0.14 } else { 0.06 }), 0.96);
-            cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.10 } else { 0.08 });
+            let c = lerp3(base, tint, if th.dark { 0.14 } else { 0.06 });
+            match backdrop {
+                Some(b) => acrylic(cv, card, radius, b, c, if th.dark { 0.70 } else { 0.66 }),
+                None => cv.fill_round(card, radius, c, 0.96),
+            }
+            cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.12 } else { 0.08 });
         }
     }
 }
@@ -629,16 +746,26 @@ pub struct CardFrame<'a> {
     pub it: Interact,
     pub pb: Playback,
     pub s: f32,
+    /// O que está atrás do card, já desfocado (estilo acrílico).
+    pub backdrop: Option<&'a Image>,
+    /// Aviso rápido sobre o card: (texto, opacidade).
+    pub hint: Option<(&'a str, f32)>,
+}
+
+/// Sombra da capa: brilho na cor dela + sombra curta, como capas "flutuando".
+fn art_shadow(cv: &mut Canvas, r: RectF, radius: f32, art: &Image, th: &Theme, s: f32) {
+    cv.glow(r, radius, 22.0 * s, 7.0 * s, art.vibrant, if th.dark { 0.42 } else { 0.30 });
+    cv.drop_shadow(r, radius, 12.0 * s, 4.0 * s, if th.dark { 0.40 } else { 0.22 });
 }
 
 pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFrame) {
     let (s, th, m, cfg) = (f.s, &f.theme, f.media, f.cfg);
-    card_background(cv, l.card, l.radius, cfg, f.colors, m, th, s);
+    card_background(cv, l.card, l.radius, cfg, f.colors, m, th, s, f.backdrop);
 
     // Capa com sombra.
     let art_r = (l.radius * 0.6).max(6.0 * s);
-    if m.art.is_some() {
-        cv.drop_shadow(l.art, art_r, 14.0 * s, 4.0 * s, 0.45);
+    if let Some(a) = &m.art {
+        art_shadow(cv, l.art, art_r, a, th, s);
     }
     let art_shape = if cfg.cover_shape == Shape::Circle && !l.vertical { Shape::Circle } else { Shape::Rounded };
     match art_shape {
@@ -656,19 +783,40 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     if cfg.show_source {
         app_chip(cv, tr, l.chip, m, th, s, l.vertical && m.art.is_some());
     }
-    let title = if m.title.is_empty() { m.app.clone() } else { m.title.clone() };
-    text(cv, tr, &title, Font::CardTitle, l.title.x, l.title.y, l.title.w, l.title.h, th.fg, 1.0);
-    text(cv, tr, &m.artist, Font::Subtitle, l.artist.x, l.artist.y, l.artist.w, l.artist.h, th.fg, 0.72);
+    let title = if !m.present() {
+        crate::i18n::tr("Nada tocando").to_string()
+    } else if m.title.is_empty() {
+        m.app.clone()
+    } else {
+        m.title.clone()
+    };
+    if l.vertical {
+        // Coluna larga: "Artista · Álbum" numa linha só.
+        text(cv, tr, &title, Font::CardTitle, l.title.x, l.title.y, l.title.w, l.title.h, th.fg, 1.0);
+        text(cv, tr, &artist_album(m), Font::Subtitle, l.artist.x, l.artist.y, l.artist.w, l.artist.h, th.fg, 0.72);
+    } else {
+        // Álbum numa terceira linha; o bloco sobe metade dela para seguir centralizado.
+        let sub = artist_album(m);
+        let album = (sub != m.artist && !m.artist.is_empty()).then(|| m.album.trim());
+        let dy = if album.is_some() { -8.0 * s } else { 0.0 };
+        let (t, a) = (l.title.offset(0.0, dy), l.artist.offset(0.0, dy));
+        text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
+        text(cv, tr, if m.artist.is_empty() { &sub } else { &m.artist }, Font::Subtitle, a.x, a.y, a.w, a.h, th.fg, 0.72);
+        if let Some(album) = album {
+            text(cv, tr, album, Font::Small, a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s, th.fg, 0.52);
+        }
+    }
 
-    // Controles.
-    // Aleatório/repetir só aparecem quando o player permite (navegadores não permitem).
+    // Controles. Aleatório/repetir: sempre (apagados quando o player não deixa
+    // mudar pelo Windows, como os navegadores) ou só quando dá, conforme a opção.
+    let always = cfg.card_shuffle_repeat == ShuffleRepeat::Always;
     for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::VolBtn] {
-        let supported = match h {
-            Hit::Shuffle => m.can_shuffle,
-            Hit::Repeat => m.can_repeat,
+        let shown = match h {
+            Hit::Shuffle => m.can_shuffle || always,
+            Hit::Repeat => m.can_repeat || always,
             _ => true,
         };
-        if f.it.hover == Some(h) && supported {
+        if f.it.hover == Some(h) && shown {
             let r = match h {
                 Hit::Shuffle => l.shuffle,
                 Hit::Prev => l.prev,
@@ -681,14 +829,14 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         }
     }
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
-    if m.can_shuffle {
-        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, true, th, s);
+    if m.can_shuffle || always {
+        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s);
     }
     glyph(cv, tr, l.prev, G_PREV, Font::Icon, th.fg, dim(m.can_prev));
     play_button(cv, tr, l.play, l.play_size, cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s);
     glyph(cv, tr, l.next, G_NEXT, Font::Icon, th.fg, dim(m.can_next));
-    if m.can_repeat {
-        toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, true, th, s);
+    if m.can_repeat || always {
+        toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s);
     }
 
     // Progresso com tempos embaixo.
@@ -721,64 +869,98 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let hot = f.it.hover == Some(Hit::Vol) || f.it.drag == Some(Hit::Vol);
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, true, s);
     }
+
+    // Aviso rápido (ex.: clicou em aleatório num player que não deixa).
+    if let Some((msg, a)) = f.hint {
+        let h = 26.0 * s;
+        let tw = tr.mask(msg, Font::Caption, (l.card.w - 40.0 * s) as i32, h as i32, Align::Left).used_width();
+        let w = (tw + 28.0 * s).min(l.card.w - 24.0 * s);
+        let y = l.shuffle.bottom() + 4.0 * s;
+        let r = RectF::new((l.card.cx() - w / 2.0).round(), y.round(), w, h);
+        cv.drop_shadow(r, h / 2.0, 10.0 * s, 2.0 * s, 0.35 * a);
+        cv.fill_round(r, h / 2.0, [0.10, 0.10, 0.11], 0.92 * a);
+        cv.stroke_round(r, h / 2.0, s, [1.0; 3], 0.10 * a);
+        text_center(cv, tr, msg, Font::Caption, r, [1.0; 3], a);
+    }
 }
 
 // ---------------------------------------------------------------- "A seguir"
 
 pub fn upnext_size(s: f32) -> (f32, f32) {
     let m = SHADOW_MARGIN * s;
-    (352.0 * s + 2.0 * m, 96.0 * s + 2.0 * m)
+    (UPNEXT_W * s + 2.0 * m, UPNEXT_H * s + 2.0 * m)
+}
+
+/// Retângulo do cartão "A seguir" dentro da sua superfície (sem a sombra).
+pub fn upnext_card(s: f32) -> RectF {
+    let m = SHADOW_MARGIN * s;
+    RectF::new(m, m, UPNEXT_W * s, UPNEXT_H * s)
 }
 
 /// Cartão "A seguir" (t = segundos desde que apareceu; `total` = duração).
-pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32, t: f32, total: f32) {
-    let m = SHADOW_MARGIN * s;
-    let card = RectF::new(m, m, 352.0 * s, 96.0 * s);
+///
+/// Grade: capa de 64 px à esquerda; à direita, quatro linhas cujo topo e base
+/// coincidem com os da capa: selo "A SEGUIR", título, "artista · álbum" e a
+/// barrinha do tempo restante do cartão.
+pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32, t: f32, total: f32, backdrop: Option<&Image>) {
+    let card = upnext_card(s);
     let radius = cfg.corners.radius() * s;
-    card_background(cv, card, radius, cfg, colors, media, th, s);
+    card_background(cv, card, radius, cfg, colors, media, th, s, backdrop);
 
     let pad = 14.0 * s;
     let full = card.h - 2.0 * pad;
-    let k = 0.82 + 0.18 * ease_out_back(t / 0.6);
+    let slot = RectF::new(card.x + pad, card.y + pad, full, full);
+    let art_r = (radius * 0.55).max(6.0 * s);
+    let k = 0.86 + 0.14 * ease_out_back(t / 0.6);
     let a = full * k;
-    let art = RectF::new(card.x + pad + (full - a) / 2.0, card.y + pad + (full - a) / 2.0, a, a);
-    if media.art.is_some() {
-        cv.drop_shadow(art, (radius * 0.6).max(6.0 * s), 10.0 * s, 3.0 * s, 0.4);
-    }
+    let art = RectF::new(slot.cx() - a / 2.0, slot.cy() - a / 2.0, a, a);
     match &media.art {
-        Some(img) => cv.draw_image_cover(art, img, (radius * 0.6).max(6.0 * s), 1.0),
+        Some(img) => {
+            art_shadow(cv, art, art_r, img, th, s);
+            cv.draw_image_cover(art, img, art_r, 1.0);
+            cv.stroke_round(art, art_r, s, [1.0; 3], 0.10);
+        }
         None => draw_art(cv, tr, art, media, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
     }
 
-    let tx0 = card.x + pad + full + 14.0 * s;
-    let slide = (1.0 - ease_out_cubic((t - 0.1) / 0.5)) * 14.0 * s;
+    let tx0 = slot.right() + 14.0 * s;
+    let right = card.right() - 16.0 * s;
+    let slide = (1.0 - ease_out_cubic((t - 0.1) / 0.5)) * 12.0 * s;
     let ta = ((t - 0.1) / 0.35).clamp(0.0, 1.0);
     let tx = tx0 + slide;
-    let tw = card.right() - pad - tx0;
+    let tw = right - tx0;
+    let top = slot.y;
 
-    eq_indicator(cv, RectF::new(tx, card.y + pad - 4.0 * s, 14.0 * s, 16.0 * s), th.accent, true, t, s, ta);
-    text(cv, tr, crate::i18n::tr("A SEGUIR"), Font::Label, tx + 18.0 * s, card.y + pad - 1.5 * s, tw / 2.0, 14.0 * s, th.accent, ta);
+    // Selo "A SEGUIR" com o mini equalizador, numa pílula na cor de destaque.
+    let label = crate::i18n::tr("A SEGUIR");
+    let lh = 18.0 * s;
+    let lw = tr.mask(label, Font::Label, (160.0 * s) as i32, lh as i32, Align::Left).used_width();
+    let badge = RectF::new(tx, top - 1.0 * s, 26.0 * s + lw + 9.0 * s, lh);
+    cv.fill_round(badge, lh / 2.0, th.accent, 0.18 * ta);
+    eq_indicator(cv, RectF::new(badge.x + 7.0 * s, badge.y - 0.5 * s, 13.0 * s, lh), th.accent, true, t, s, ta);
+    text(cv, tr, label, Font::Label, badge.x + 25.0 * s, badge.y, lw + 4.0 * s, lh, th.accent, ta);
     if cfg.show_source && !media.app.is_empty() {
-        let right = card.right() - pad;
-        let mm = tr.mask(&media.app, Font::Caption, (tw * 0.5) as i32, (16.0 * s) as i32, Align::Left);
+        let avail = (right - badge.right() - 26.0 * s).max(0.0);
+        let mm = tr.mask(&media.app, Font::Caption, avail as i32, lh as i32, Align::Left);
         let ax = right - mm.used_width();
-        cv.blit_mask(ax as i32, (card.y + pad - 2.5 * s) as i32, &mm, th.fg, ta * 0.65);
+        cv.blit_mask(ax as i32, badge.y as i32, &mm, th.fg, ta * 0.6);
         if let Some(icon) = &media.icon {
             let ik = 13.0 * s;
-            cv.draw_image(RectF::new(ax - ik - 5.0 * s, card.y + pad - 0.5 * s, ik, ik), icon, 3.0 * s, ta);
+            cv.draw_image(RectF::new(ax - ik - 5.0 * s, badge.cy() - ik / 2.0, ik, ik), icon, 3.0 * s, ta);
         }
     }
-    let title = if media.title.is_empty() { media.app.clone() } else { media.title.clone() };
-    text(cv, tr, &title, Font::CardTitle, tx, card.y + pad + 17.0 * s, tw, 24.0 * s, th.fg, ta);
-    text(cv, tr, &media.artist, Font::Subtitle, tx, card.y + pad + 41.0 * s, tw, 18.0 * s, th.fg, ta * 0.72);
 
-    // Linha de tempo restante do cartão.
+    let title = if media.title.is_empty() { media.app.clone() } else { media.title.clone() };
+    text(cv, tr, &title, Font::CardTitle, tx, top + 20.0 * s, tw, 22.0 * s, th.fg, ta);
+    text(cv, tr, &artist_album(media), Font::Subtitle, tx, top + 42.0 * s, tw, 17.0 * s, th.fg, ta * 0.72);
+
+    // Tempo restante do cartão: a base da barrinha encosta na base da capa.
     let hold = ((t - 0.45) / (total - 0.85).max(0.5)).clamp(0.0, 1.0);
-    let (bx0, bx1) = (tx0, card.right() - pad);
-    let by = card.bottom() - pad - 1.0 * s;
-    cv.fill_rrect(bx0, by, bx1, by + 3.0 * s, 1.5 * s, 0.16, |_, _| th.fg);
+    let (bx0, bx1) = (tx0, right);
+    let by = slot.bottom() - 3.0 * s;
+    cv.fill_rrect(bx0, by, bx1, by + 3.0 * s, 1.5 * s, if th.dark { 0.18 } else { 0.12 }, |_, _| th.fg);
     let xe = bx0 + (bx1 - bx0) * (1.0 - hold);
-    if xe > bx0 {
+    if xe > bx0 + 1.0 {
         cv.fill_rrect(bx0, by, xe, by + 3.0 * s, 1.5 * s, 0.95, |_, _| th.accent);
     }
 }
@@ -786,7 +968,7 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
 // ---------------------------------------------------------------- Caps Lock / Num Lock
 
 /// Tamanho do cartão do aviso (sem a margem da sombra), em pixels físicos.
-fn osd_card(s: f32, cfg: &Config) -> (f32, f32) {
+pub fn osd_card(s: f32, cfg: &Config) -> (f32, f32) {
     let k = s * cfg.osd_size.factor();
     let w = if cfg.osd_switch { 236.0 } else { 184.0 };
     (w * k, 64.0 * k)
@@ -798,20 +980,37 @@ pub fn osd_size(s: f32, cfg: &Config) -> (f32, f32) {
     (w + 2.0 * m, h + 2.0 * m)
 }
 
-/// Cores do aviso de teclas (tema próprio; destaque do Windows).
-pub fn osd_theme(cfg: &Config, colors: &Colors) -> Theme {
-    let dark = match cfg.osd_theme {
+fn osd_dark(cfg: &Config, colors: &Colors) -> bool {
+    match cfg.osd_theme {
         ThemeMode::Auto => system_dark(colors),
         ThemeMode::Dark => true,
         ThemeMode::Light => false,
-    };
+    }
+}
+
+/// Fundo do aviso no material "Cor de destaque".
+fn osd_accent_bg(cfg: &Config, colors: &Colors) -> Rgb {
+    if osd_dark(cfg, colors) { lerp3(colors.accent, [0.0; 3], 0.18) } else { colors.accent }
+}
+
+/// Cores do aviso de teclas (tema próprio; destaque do Windows). No material
+/// "Cor de destaque" o cartão é a cor e o ícone aceso fica no contraste dela.
+pub fn osd_theme(cfg: &Config, colors: &Colors) -> Theme {
+    if cfg.osd_material == OsdMaterial::Accent {
+        let bg = osd_accent_bg(cfg, colors);
+        let fg = on_color(bg);
+        return Theme { fg, accent: fg, on_accent: bg, dark: luma(bg) < 0.5 };
+    }
+    let dark = osd_dark(cfg, colors);
     let fg = if dark { [1.0; 3] } else { [0.08, 0.08, 0.09] };
     let accent = if dark { colors.accent_light } else { colors.accent };
     Theme { fg, accent, on_accent: on_color(accent), dark }
 }
 
-/// Aviso de tecla de bloqueio: cartão de vidro com ícone que "acende" quando liga.
-pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, th: &Theme, s: f32, key: &str, symbol: &str, on: bool, t: f32) {
+/// Aviso de tecla de bloqueio: cartão (sólido, acrílico ou colorido) com ícone
+/// que "acende" quando liga. `num`: Num Lock (senão Caps Lock). `backdrop`: o
+/// que está atrás, já desfocado, para o material acrílico.
+pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &Colors, th: &Theme, s: f32, key: &str, num: bool, on: bool, t: f32, backdrop: Option<&Image>) {
     let m = SHADOW_MARGIN * s;
     let k = s * cfg.osd_size.factor();
     let (cw, ch) = osd_card(s, cfg);
@@ -821,15 +1020,20 @@ pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, th: &Theme
         OsdShape::Rounded => cfg.corners.radius() * k,
         OsdShape::Square => 5.0 * k,
     };
-    cv.drop_shadow(card, radius, 22.0 * s, 7.0 * s, if th.dark { 0.5 } else { 0.22 });
+    let opacity = cfg.osd_opacity as f32 / 100.0;
+    cv.drop_shadow(card, radius, 22.0 * s, 7.0 * s, (if th.dark { 0.5 } else { 0.22 }) * (0.4 + 0.6 * opacity));
     let base: Rgb = if th.dark { [0.13, 0.13, 0.14] } else { [0.975, 0.975, 0.98] };
-    cv.fill_round(card, radius, base, 0.97);
-    cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.10 } else { 0.08 });
+    match (cfg.osd_material, backdrop) {
+        (OsdMaterial::Accent, _) => cv.fill_round(card, radius, osd_accent_bg(cfg, colors), opacity),
+        (OsdMaterial::Acrylic, Some(b)) => acrylic(cv, card, radius, b, base, opacity * 0.78),
+        _ => cv.fill_round(card, radius, base, opacity),
+    }
+    cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.12 } else { 0.08 });
 
-    let (f_sym, f_key, f_state) = match cfg.osd_size {
-        OsdSize::Compact => (Font::CardTitle, Font::Title, Font::Small),
-        OsdSize::Normal => (Font::Display, Font::BodyStrong, Font::Caption),
-        OsdSize::Large => (Font::Hero, Font::CardTitle, Font::Body),
+    let (f_sym, f_key, f_state, f_icon) = match cfg.osd_size {
+        OsdSize::Compact => (Font::CardTitle, Font::Title, Font::Small, Font::Icon),
+        OsdSize::Normal => (Font::Display, Font::BodyStrong, Font::Caption, Font::IconLg),
+        OsdSize::Large => (Font::Hero, Font::CardTitle, Font::Body, Font::IconHero),
     };
 
     // Ícone: círculo (ou quadrado, seguindo os cantos) que acende na cor de destaque.
@@ -846,7 +1050,11 @@ pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, th: &Theme
     cv.fill_round(c, icon_r, th.fg, 0.10 * (1.0 - lit));
     cv.fill_round(c, icon_r, th.accent, lit);
     let sym_c = lerp3(th.fg, th.on_accent, lit);
-    text_center(cv, tr, symbol, f_sym, c, sym_c, 1.0);
+    match cfg.osd_icon {
+        OsdIcon::Letter => text_center(cv, tr, if num { "1" } else { "A" }, f_sym, c, sym_c, 1.0),
+        OsdIcon::Lock => glyph(cv, tr, c, if on { G_LOCK } else { G_UNLOCK }, f_icon, sym_c, 1.0),
+        OsdIcon::Keyboard => glyph(cv, tr, c, if num { G_NUMPAD } else { G_KEYBOARD }, f_icon, sym_c, 1.0),
+    }
 
     let tx = card.x + 64.0 * k;
     let right = if cfg.osd_switch { card.right() - 64.0 * k } else { card.right() - 14.0 * k };
@@ -972,7 +1180,7 @@ mod tests {
         let mut px = vec![0u32; w * h];
         {
             let mut cv = Canvas::new(w, h, &mut px);
-            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0 };
+            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0, backdrop: None, hint: None };
             draw_card(&mut cv, &mut tr, &l, &f);
         }
         let mut s = stray(&px, w, h);
@@ -997,7 +1205,7 @@ mod tests {
             let mut px = vec![0u32; w * h];
             {
                 let mut cv = Canvas::new(w, h, &mut px);
-                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0 };
+                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0, backdrop: None, hint: None };
                 draw_card(&mut cv, &mut tr, &l, &f);
             }
             let st = stray(&px, w, h);

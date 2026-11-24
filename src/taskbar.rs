@@ -26,6 +26,8 @@ pub struct Placement {
     pub h: i32,
     pub scale: f32,
     pub visible: bool,
+    /// Por que está escondido (diagnóstico).
+    pub why_hidden: Option<&'static str>,
     /// Barra na horizontal (painel de mídia só aparece nesse caso).
     pub horizontal: bool,
     /// Borda superior da barra (para o cartão de "próxima música" subir a partir dela).
@@ -69,6 +71,7 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
     let on_thickness = if horizontal { on.bottom - on.top } else { on.right - on.left };
     // Barra com ocultação automática recolhida: só uma faixa de ~2px fica visível.
     let mut visible = thickness > 0 && on_thickness * 2 >= thickness;
+    let mut why_hidden = (!visible).then_some("barra de tarefas recolhida (ocultar automaticamente)");
 
     let notify = unsafe { FindWindowExW(Some(tray), None, w!("TrayNotifyWnd"), PCWSTR::null()).ok() }
         .and_then(rect_of)
@@ -104,8 +107,11 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
         } + offset;
     }
 
-    if cfg.hide_on_fullscreen && fullscreen_active(&screen) {
-        visible = false;
+    if cfg.hide_on_fullscreen {
+        if let Some(why) = fullscreen_active(&screen) {
+            visible = false;
+            why_hidden = Some(why);
+        }
     }
 
     Some(Placement {
@@ -115,6 +121,7 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
         h,
         scale,
         visible,
+        why_hidden,
         horizontal,
         taskbar_top: on.top,
         taskbar_bottom_edge: tb.top > screen.top + (screen.bottom - screen.top) / 2,
@@ -131,19 +138,40 @@ fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n.max(0) as usize])
 }
 
-/// Jogo/vídeo em tela cheia, apresentação, ou janela em primeiro plano cobrindo o monitor.
-fn fullscreen_active(screen: &RECT) -> bool {
+/// Jogo/vídeo em tela cheia, apresentação, ou janela em primeiro plano cobrindo
+/// o monitor da barra. Devolve o motivo (para o registro de diagnóstico).
+fn fullscreen_active(screen: &RECT) -> Option<&'static str> {
     if let Ok(state) = unsafe { SHQueryUserNotificationState() } {
-        if state == QUNS_BUSY || state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE {
-            return true;
+        if state == QUNS_RUNNING_D3D_FULL_SCREEN {
+            return Some("jogo/vídeo em tela cheia (D3D)");
+        }
+        if state == QUNS_PRESENTATION_MODE {
+            return Some("modo de apresentação");
+        }
+        if state == QUNS_BUSY {
+            // "Ocupado" vale para tela cheia em qualquer monitor: só conta se a
+            // janela em primeiro plano estiver no monitor da barra.
+            if foreground_covers(screen) {
+                return Some("app em tela cheia");
+            }
+            return None;
         }
     }
+    foreground_covers(screen).then_some("janela em primeiro plano cobrindo o monitor")
+}
+
+/// A janela em primeiro plano cobre o monitor inteiro (inclusive a barra)?
+fn foreground_covers(screen: &RECT) -> bool {
     let fg = unsafe { GetForegroundWindow() };
     if fg.is_invalid() {
         return false;
     }
     let cls = class_name(fg);
-    if matches!(cls.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd") {
+    // Área de trabalho, barra e janelas do próprio shell (menus, painéis) não contam.
+    if matches!(
+        cls.as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "Windows.UI.Core.CoreWindow" | "XamlExplorerHostIslandWindow" | "TopLevelWindowForOverflowXamlIsland"
+    ) {
         return false;
     }
     match rect_of(fg) {

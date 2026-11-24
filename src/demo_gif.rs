@@ -463,7 +463,7 @@ fn demo_gif() {
                     };
                     let down = pressed(t, 2.5) || pressed(t, 3.2) || pressed(t, 4.0);
                     let it = Interact { hover, pressed: if down { hover } else { None }, drag: None };
-                    let fr = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: ui::card_theme(&cfg, &colors, &media), it, pb, s };
+                    let fr = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: ui::card_theme(&cfg, &colors, &media), it, pb, s, backdrop: None, hint: None };
                     ui::draw_card(c, &mut tr, &cl, &fr);
                 });
                 let slide = ((1.0 - open) * 14.0).round();
@@ -478,7 +478,7 @@ fn demo_gif() {
                 let e = if tp < 0.45 { ui::ease_out_cubic(tp / 0.45) } else if tp > total - 0.4 { 1.0 - ui::ease_out_cubic((tp - (total - 0.4)) / 0.4) } else { 1.0 };
                 let pop = layer(uw, uh, |c| {
                     let th = ui::card_theme(&cfg, &colors, &media);
-                    ui::draw_upnext(c, &mut tr, &cfg, &colors, &media, &th, s, tp, total);
+                    ui::draw_upnext(c, &mut tr, &cfg, &colors, &media, &th, s, tp, total, None);
                 });
                 let ux = (wx + 2.0 - m).min(W - uw + m - 16.0).round();
                 let uy = (bar.y - (uh - m) - 10.0 + (1.0 - e) * 18.0).round();
@@ -493,7 +493,7 @@ fn demo_gif() {
                 let e = if to < 0.25 { ui::ease_out_cubic(to / 0.25) } else if to > secs - 0.3 { 1.0 - ui::ease_out_cubic((to - (secs - 0.3)) / 0.3) } else { 1.0 };
                 let osd = layer(ow, oh, |c| {
                     let th = ui::osd_theme(&cfg, &colors);
-                    ui::draw_osd(c, &mut tr, &cfg, &th, s, crate::i18n::tr("Caps Lock"), "A", true, to);
+                    ui::draw_osd(c, &mut tr, &cfg, &colors, &th, s, crate::i18n::tr("Caps Lock"), false, true, to, None);
                 });
                 let ox = (W / 2.0 - ow / 2.0).round();
                 let oy = (bar.y - oh + m - 20.0 + (1.0 - e) * 14.0).round();
