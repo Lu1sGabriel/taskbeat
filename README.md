@@ -80,6 +80,10 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   player informa. Aleatório e repetir aparecem sempre (apagados nos players que
   não deixam mudar pelo Windows, como os navegadores; clicar explica o porquê)
   ou só quando o player permite.
+- **Ícones animados** (opcional, ligado por padrão): play e pausa trocam com um
+  pequeno salto, anterior/próximo dão um empurrão para o lado, aleatório pulsa,
+  repetir dá uma volta e o volume chacoalha ao ficar mudo; no card e na barra
+  (Card expandido > Animar ícones).
 - **"A seguir"**: cartão animado com a próxima música (capa, título, artista e
   álbum), só quando o player troca de faixa sozinho (trocas manuais não mostram),
   inclusive quando você pula para o fim da música. Com o card aberto, aparece
@@ -276,7 +280,10 @@ meio** e as barras; abre do mesmo jeito.
 - **Música**: o "Tocando Agora" do macOS, de qualquer player (Spotify, Música,
   YouTube no navegador, Podcasts…), pelo [mediaremote-adapter](https://github.com/ungive/mediaremote-adapter)
   (desde o macOS 15.4 só apps da Apple leem o Tocando Agora diretamente). Sem ele,
-  Spotify e Música são lidos por AppleScript.
+  Spotify e Música são lidos por AppleScript. O Spotify não oferece aleatório e
+  repetir pelo Tocando Agora: no Spotify (e no Música, se faltar) esses dois
+  botões vão por AppleScript, lidos quando o card abre e depois de cada clique.
+  Navegadores (YouTube etc.) não deixam mudar: os botões ficam apagados.
 - **Barras de áudio**: captura do som do sistema com Core Audio taps, só enquanto
   um player toca.
 
@@ -325,8 +332,10 @@ Permissões que o macOS pede:
   barras captam o som, o macOS mostra um ponto roxo na barra de menus; com as barras
   desligadas (Configurações > Visualizador) nada é captado. Nada é gravado nem
   guardado.
-- **Automação** (só na reserva por AppleScript): para ler e controlar o Spotify e
-  o Música.
+- **Automação**: para aleatório e repetir no Spotify (pedida na primeira vez que
+  o card abre com o Spotify tocando) e na reserva por AppleScript (ler e controlar
+  o Spotify e o Música). Se negar, os dois botões ficam apagados; para liberar
+  depois: Ajustes do Sistema > Privacidade e Segurança > Automação > Taskbeat.
 
 Como o app só tem assinatura ad-hoc, cada versão nova é um app "diferente" para o
 macOS e o passo 3 e as permissões podem ser pedidos de novo depois de atualizar.
