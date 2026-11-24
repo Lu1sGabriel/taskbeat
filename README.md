@@ -9,6 +9,34 @@ Fluent do Windows 11 (referências: FluentFlyout, Fluent 2 e cards de "now playi
 
 **[⬇ Baixar o instalador (Windows 10/11)](https://github.com/Lu1sGabriel/taskbeat/releases/latest)**
 
+<p align="center">
+  <img src="docs/screenshots/taskbar-card.png" width="820" alt="Taskbeat na barra de tarefas, com o card de controles aberto">
+</p>
+
+## Capturas de tela
+
+**Card expandido** em três estilos: capa desfocada, cor do álbum e vidro.
+
+<p align="center">
+  <img src="docs/screenshots/card-artwork.png" width="32%" alt="Card com a capa desfocada">
+  <img src="docs/screenshots/card-album-color.png" width="32%" alt="Card na cor do álbum">
+  <img src="docs/screenshots/card-glass.png" width="32%" alt="Card de vidro">
+</p>
+
+**"A seguir"** (quando o player troca de música sozinho) e **aviso de Caps Lock**:
+
+<p align="center">
+  <img src="docs/screenshots/up-next.png" width="404" alt="Cartão A seguir">
+  <img src="docs/screenshots/caps-lock.png" width="288" alt="Aviso de Caps Lock ativado">
+</p>
+
+**Configurações** com prévia ao vivo e **instalador**:
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" width="58%" alt="Tela de configurações do Taskbeat">
+  <img src="docs/screenshots/installer.png" width="39%" alt="Instalador do Taskbeat">
+</p>
+
 ## O que faz
 
 - **Na barra de tarefas** (compacto): capa + título/artista, indicador animado
@@ -118,6 +146,15 @@ Para testar sem esperar: `$env:TV_DEMO_FLYOUT=1` (card), `$env:TV_DEMO_POPUP=1`
 ("A seguir") ou `$env:TV_DEMO_CAPS=1` (Caps Lock) antes de iniciar.
 
 Regenerar o ícone: `python assets/make_icon.py`.
+
+Regenerar as capturas do card, "A seguir" e Caps Lock (desenhadas pelo próprio
+código, com a música de exemplo):
+
+```powershell
+$env:TASKBEAT_LANG="pt"; cargo test --release shots -- --ignored
+```
+
+`$env:TV_DEMO_MEDIA=1` faz as prévias da tela de configurações usarem a música de exemplo.
 
 ## Limitações
 
