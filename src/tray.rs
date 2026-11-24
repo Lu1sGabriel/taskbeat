@@ -2,6 +2,8 @@
 //! rápido. Roda na thread principal (janela oculta + loop de mensagens).
 
 use crate::i18n::tr;
+use crate::menu::{self, Entry, Header};
+use crate::shared::MediaCmd;
 use crate::render::{Canvas, RectF};
 use crate::settings;
 use crate::shared::Shared;
@@ -14,7 +16,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{HSTRING, PCWSTR, w};
+use windows::core::{PCWSTR, w};
 
 pub const WM_APP_TRAY: u32 = WM_APP + 1;
 pub const WM_APP_MEDIA: u32 = WM_APP + 2;
@@ -187,48 +189,72 @@ fn remove_icon(hwnd: HWND) {
     }
 }
 
-fn append(menu: HMENU, id: usize, text: &str, checked: bool) {
-    let flags = MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED };
-    unsafe {
-        let _ = AppendMenuW(menu, flags, id, &HSTRING::from(text));
+/// Itens do menu da bandeja (refeitos a cada clique em um interruptor).
+fn menu_entries() -> Vec<Entry> {
+    let cfg = shared().config();
+    let media = shared().media.lock().unwrap().clone();
+    let mut v = Vec::new();
+    if !media.title.is_empty() {
+        let subtitle = if media.artist.is_empty() { media.app.clone() } else { media.artist.clone() };
+        v.push(Entry::Header(Header {
+            art: media.art.clone(),
+            title: media.title.clone(),
+            subtitle,
+            playing: media.playing,
+            can_prev: media.can_prev,
+            can_next: media.can_next,
+            can_toggle: media.can_toggle,
+        }));
+        v.push(Entry::Separator);
     }
+    v.push(Entry::action(ID_SETTINGS as u32, "\u{E713}", tr("Configurações…")));
+    v.push(Entry::Separator);
+    v.push(Entry::toggle(ID_MEDIA as u32, "\u{E8D6}", tr("Música na barra de tarefas"), cfg.show_media, true));
+    // Sem a música na barra, os botões não têm onde aparecer: desligado e apagado.
+    v.push(Entry::toggle(ID_CONTROLS as u32, "\u{E768}", tr("Botões de controle na barra"), cfg.show_media && cfg.taskbar_controls, cfg.show_media));
+    v.push(Entry::toggle(ID_VIZ as u32, "\u{E9E9}", tr("Barras de áudio dinâmicas"), cfg.show_visualizer, true));
+    v.push(Entry::toggle(ID_POPUP as u32, "\u{E893}", tr("Cartão \"A seguir\""), cfg.next_track_popup, true));
+    v.push(Entry::toggle(ID_CAPS as u32, "\u{E765}", tr("Aviso de Caps Lock"), cfg.caps_lock_osd, true));
+    v.push(Entry::Separator);
+    v.push(Entry::toggle(ID_AUTOSTART as u32, "\u{E7E8}", tr("Iniciar com o Windows"), system::autostart_enabled(), true));
+    v.push(Entry::Separator);
+    v.push(Entry::action(ID_EXIT as u32, "\u{E8BB}", tr("Sair do Taskbeat")));
+    v
 }
 
 fn show_menu(hwnd: HWND) {
-    let cfg = shared().config();
-    let media = shared().media.lock().unwrap().clone();
+    let mut pt = POINT::default();
     unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
-        if !media.title.is_empty() {
-            let state = if media.playing { "▶" } else { "❚❚" };
-            let mut line = format!("{state}  {}", media.title);
-            if !media.artist.is_empty() {
-                line.push_str(&format!(" — {}", media.artist));
-            }
-            let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, &HSTRING::from(line));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        }
-        let _ = AppendMenuW(menu, MF_STRING | MF_DEFAULT, ID_SETTINGS, &HSTRING::from(tr("Configurações…")));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        append(menu, ID_MEDIA, tr("Música na barra de tarefas"), cfg.show_media);
-        append(menu, ID_CONTROLS, tr("Botões de controle na barra"), cfg.taskbar_controls);
-        append(menu, ID_VIZ, tr("Barras de áudio dinâmicas"), cfg.show_visualizer);
-        append(menu, ID_POPUP, tr("Cartão \"A seguir\""), cfg.next_track_popup);
-        append(menu, ID_CAPS, tr("Aviso de Caps Lock"), cfg.caps_lock_osd);
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        append(menu, ID_AUTOSTART, tr("Iniciar com o Windows"), system::autostart_enabled());
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        append(menu, ID_EXIT, tr("Sair do Taskbeat"), false);
-
-        let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
-        let _ = SetForegroundWindow(hwnd);
-        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RIGHTALIGN, pt.x, pt.y, None, hwnd, None);
-        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
-        let _ = DestroyMenu(menu);
-        handle_command(hwnd, cmd.0 as usize);
-        settings::refresh();
     }
+    // Menus da bandeja seguem o tema do sistema (o da barra de tarefas).
+    let dark = !system::taskbar_is_light();
+    let opts = menu::Options { dark, accent: system::app_accent(dark), min_width: 260.0 };
+    let mut playing_override: Option<bool> = None;
+    let cmd = menu::popup(hwnd, menu_entries(), menu::Anchor::Cursor(pt), opts, &mut |id| {
+        let s = shared();
+        match id {
+            menu::ID_PREV => s.send_media(MediaCmd::Previous),
+            menu::ID_NEXT => s.send_media(MediaCmd::Next),
+            menu::ID_PLAY => {
+                // Mostra o novo estado na hora (o player confirma logo depois).
+                let now = playing_override.unwrap_or_else(|| s.media.lock().unwrap().playing);
+                playing_override = Some(!now);
+                s.send_media(MediaCmd::PlayPause);
+            }
+            other => handle_command(hwnd, other as usize),
+        }
+        let mut e = menu_entries();
+        if let (Some(p), Some(Entry::Header(h))) = (playing_override, e.first_mut()) {
+            h.playing = p;
+        }
+        settings::refresh();
+        Some(e)
+    });
+    if let Some(id) = cmd {
+        handle_command(hwnd, id as usize);
+    }
+    settings::refresh();
 }
 
 fn handle_command(hwnd: HWND, cmd: usize) {
@@ -266,6 +292,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_APP_MEDIA => {
             update_icon(hwnd);
+            settings::media_changed();
             LRESULT(0)
         }
         // Comandos vindos de fora (ex.: o instalador pede para fechar com ID_EXIT).

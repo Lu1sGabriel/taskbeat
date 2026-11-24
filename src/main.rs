@@ -30,6 +30,8 @@ mod text;
 mod tray;
 mod ui;
 mod volume;
+mod vsync;
+mod menu;
 
 use shared::Shared;
 use std::sync::Arc;
