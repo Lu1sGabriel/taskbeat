@@ -174,8 +174,10 @@ Gera `dist\Taskbeat-Setup-<versão>.exe` (um arquivo só, ~2 MB). O próprio
 `taskbeat.exe` é o instalador quando tem "setup" no nome (ou com `--install`):
 
 - Janela no visual do app, pasta de instalação escolhível (padrão
-  `%LOCALAPPDATA%\Programs\Taskbeat`), iniciar com o Windows, atalho na área de
-  trabalho e abrir ao terminar.
+  `%LOCALAPPDATA%\Programs\Taskbeat`), iniciar com o Windows (**ligado por
+  padrão**), atalho na área de trabalho e abrir ao terminar. Quem abre o
+  `taskbeat.exe` direto, sem instalar, também já começa com o iniciar com o
+  Windows ligado; dá para desligar em Configurações > Geral.
 - Por usuário, sem administrador. Atalho no Menu Iniciar e registro em
   Configurações > Apps instalados.
 - Rodar de novo detecta a versão instalada e compara com a do instalador: mostra
@@ -313,6 +315,9 @@ barras.
 > qualquer versão: `xattr -dr com.apple.quarantine /Applications/Taskbeat.app`
 
 O Taskbeat não aparece no Dock: ele fica no notch e no ícone ♪ da barra de menus.
+**Abrir ao iniciar a sessão vem ligado**: na primeira vez o macOS pode avisar
+"Itens de Segundo Plano Adicionados" (é o Taskbeat se registrando para abrir
+sozinho). Para desligar: Configurações > Geral > Abrir ao iniciar a sessão.
 
 Permissões que o macOS pede:
 
