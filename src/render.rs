@@ -156,6 +156,56 @@ impl Image {
     }
 }
 
+/// Fundo do acrílico: pega a área `rect` de `px` (pode passar das bordas: a
+/// borda se repete) com folga para o desfoque, reduz, desfoca com raio ~`blur`
+/// pixels e realça um pouco a saturação, como o acrílico do Fluent. Devolve só
+/// a área de `rect`, em resolução menor (o desfoque esconde a ampliação).
+pub fn acrylic_backdrop(px: &[u32], w: usize, h: usize, rect: RectF, blur: f32) -> Image {
+    if w == 0 || h == 0 || px.len() < w * h {
+        return Image::plain(1, 1, vec![0xff00_0000]);
+    }
+    let level = if blur >= 24.0 { 2 } else if blur >= 10.0 { 1 } else { 0 };
+    let k = 1usize << level;
+    let margin = (blur * 1.2).ceil().max(2.0);
+    let (rx, ry) = ((rect.x - margin).floor() as isize, (rect.y - margin).floor() as isize);
+    let rw = ((rect.w + 2.0 * margin) / k as f32).ceil().max(1.0) as usize;
+    let rh = ((rect.h + 2.0 * margin) / k as f32).ceil().max(1.0) as usize;
+    // Média de k×k pixels (borda repetida fora da imagem).
+    let n = (k * k) as u32;
+    let mut small = vec![0u32; rw * rh];
+    for y in 0..rh {
+        for x in 0..rw {
+            let mut acc = [0u32; 3];
+            for dy in 0..k {
+                let sy = (ry + (y * k + dy) as isize).clamp(0, h as isize - 1) as usize;
+                for dx in 0..k {
+                    let sx = (rx + (x * k + dx) as isize).clamp(0, w as isize - 1) as usize;
+                    let p = px[sy * w + sx];
+                    acc[0] += (p >> 16) & 0xff;
+                    acc[1] += (p >> 8) & 0xff;
+                    acc[2] += p & 0xff;
+                }
+            }
+            small[y * rw + x] = 0xff00_0000 | ((acc[0] / n) << 16) | ((acc[1] / n) << 8) | (acc[2] / n);
+        }
+    }
+    let radius = (blur / k as f32 * 0.5).round().max(1.0) as usize;
+    let blurred = Image::plain(rw, rh, small).blurred(radius);
+    let m = ((margin / k as f32).round() as usize).min(rw.saturating_sub(1)).min(rh.saturating_sub(1));
+    let cw = ((rect.w / k as f32).round().max(1.0) as usize).min(rw - m);
+    let ch = ((rect.h / k as f32).round().max(1.0) as usize).min(rh - m);
+    let mut out = Vec::with_capacity(cw * ch);
+    for y in 0..ch {
+        for x in 0..cw {
+            let c = unpack(blurred.px[(y + m) * rw + x + m]);
+            let l = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+            let sat = |v: f32| (l + (v - l) * 1.25).clamp(0.0, 255.0) as u32;
+            out.push(0xff00_0000 | (sat(c[0]) << 16) | (sat(c[1]) << 8) | sat(c[2]));
+        }
+    }
+    Image::new(cw, ch, out)
+}
+
 /// Máscara de cobertura 8 bits (texto e ícones de fonte já rasterizados).
 pub struct Mask {
     pub w: usize,
@@ -455,6 +505,11 @@ impl<'a> Canvas<'a> {
 
     /// Sombra suave de elevação (Fluent "shadow 16/28") ao redor de um retângulo arredondado.
     pub fn drop_shadow(&mut self, r: RectF, radius: f32, blur: f32, dy: f32, alpha: f32) {
+        self.glow(r, radius, blur, dy, [0.0; 3], alpha);
+    }
+
+    /// Sombra colorida (ex.: brilho na cor da capa por baixo dela).
+    pub fn glow(&mut self, r: RectF, radius: f32, blur: f32, dy: f32, color: Rgb, alpha: f32) {
         let r = r.offset(0.0, dy);
         let hx = r.w * 0.5;
         let hy = r.h * 0.5;
@@ -470,10 +525,23 @@ impl<'a> Canvas<'a> {
                 let t = (d / blur).clamp(0.0, 1.0);
                 let a = alpha * (1.0 - t) * (1.0 - t);
                 if a > 0.002 {
-                    self.blend(px, py, [0.0; 3], a);
+                    self.blend(px, py, color, a);
                 }
             }
         }
+    }
+
+    /// Granulado fino (textura do acrílico do Fluent): clareia/escurece cada
+    /// pixel um pouco, sempre igual para a mesma posição (não "ferve").
+    pub fn grain(&mut self, r: RectF, radius: f32, amount: f32) {
+        self.fill_rrect_ca(r.x, r.y, r.right(), r.bottom(), radius, |x, y| {
+            let mut h = (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA77);
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x2C1B_3C6D);
+            h ^= h >> 12;
+            let n = (h & 0xffff) as f32 / 65535.0 * 2.0 - 1.0;
+            (if n > 0.0 { [1.0; 3] } else { [0.0; 3] }, n.abs() * amount)
+        });
     }
 
     /// Desenha uma máscara (texto/ícone) com a cor dada, canto superior esquerdo em (x, y).

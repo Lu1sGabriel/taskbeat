@@ -46,6 +46,8 @@ pub enum Font {
     Hero,
     /// Nota musical no lugar da capa grande.
     IconXl,
+    /// Ícone do aviso de teclas no tamanho "Grande".
+    IconHero,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -67,6 +69,10 @@ pub const G_MUSIC: &str = "\u{E8D6}";
 pub const G_SHUFFLE: &str = "\u{E8B1}";
 pub const G_REPEAT_ALL: &str = "\u{E8EE}";
 pub const G_REPEAT_ONE: &str = "\u{E8ED}";
+pub const G_LOCK: &str = "\u{E72E}";
+pub const G_UNLOCK: &str = "\u{E785}";
+pub const G_KEYBOARD: &str = "\u{E765}";
+pub const G_NUMPAD: &str = "\u{E8EF}";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Face {
@@ -95,10 +101,11 @@ fn spec(f: Font) -> (f32, i32, Face) {
         Font::IconLg => (18.0, 400, Face::Icon),
         Font::Hero => (24.0, 600, Face::Display),
         Font::IconXl => (40.0, 400, Face::Icon),
+        Font::IconHero => (22.0, 400, Face::Icon),
     }
 }
 
-const ALL_FONTS: [Font; 17] = [
+const ALL_FONTS: [Font; 18] = [
     Font::Title,
     Font::Subtitle,
     Font::Icon,
@@ -116,6 +123,7 @@ const ALL_FONTS: [Font; 17] = [
     Font::IconLg,
     Font::Hero,
     Font::IconXl,
+    Font::IconHero,
 ];
 
 type Key = (String, Font, i32, i32, Align);
