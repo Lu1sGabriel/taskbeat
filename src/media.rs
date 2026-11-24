@@ -34,8 +34,9 @@ use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 /// Checagem de segurança; o normal é acordar pelos eventos do Windows.
 const POLL: Duration = Duration::from_millis(2000);
-/// Lado da capa decodificada: nítida no card mesmo em telas com 150%.
-const ART_SIZE: u32 = 192;
+/// Lado máximo da capa decodificada: nítida no card vertical e em telas com
+/// 200% (capas menores que isso ficam no tamanho original, sem esticar).
+const ART_SIZE: u32 = 384;
 /// A faixa anterior precisa estar a menos disso do fim para a troca contar como automática
 /// (folga para o intervalo de consulta e para o crossfade do Spotify).
 const NEAR_END: f64 = 10.0;
@@ -488,7 +489,7 @@ fn timeline(s: &Session, playing: bool) -> (f64, f64) {
     (if dur > 0.0 { p.clamp(0.0, dur) } else { p.max(0.0) }, dur)
 }
 
-/// Decodifica a miniatura (capa) em um quadrado ART_SIZE com recorte central.
+/// Decodifica a miniatura (capa) num quadrado de até ART_SIZE com recorte central.
 fn load_thumbnail(props: &Props) -> Option<Image> {
     let stream = props.Thumbnail().ok()?.OpenReadAsync().ok()?.join().ok()?;
     let dec = BitmapDecoder::CreateAsync(&stream).ok()?.join().ok()?;
@@ -496,14 +497,15 @@ fn load_thumbnail(props: &Props) -> Option<Image> {
     if w == 0 || h == 0 {
         return None;
     }
-    let k = ART_SIZE as f64 / w.min(h) as f64;
-    let sw = ((w as f64 * k).round() as u32).max(ART_SIZE);
-    let sh = ((h as f64 * k).round() as u32).max(ART_SIZE);
+    let side = ART_SIZE.min(w.min(h)).max(64);
+    let k = side as f64 / w.min(h) as f64;
+    let sw = ((w as f64 * k).round() as u32).max(side);
+    let sh = ((h as f64 * k).round() as u32).max(side);
     let t = BitmapTransform::new().ok()?;
     t.SetScaledWidth(sw).ok()?;
     t.SetScaledHeight(sh).ok()?;
     t.SetInterpolationMode(BitmapInterpolationMode::Fant).ok()?;
-    t.SetBounds(BitmapBounds { X: (sw - ART_SIZE) / 2, Y: (sh - ART_SIZE) / 2, Width: ART_SIZE, Height: ART_SIZE }).ok()?;
+    t.SetBounds(BitmapBounds { X: (sw - side) / 2, Y: (sh - side) / 2, Width: side, Height: side }).ok()?;
     let data = dec
         .GetPixelDataTransformedAsync(
             BitmapPixelFormat::Bgra8,
@@ -517,12 +519,12 @@ fn load_thumbnail(props: &Props) -> Option<Image> {
         .ok()?
         .DetachPixelData()
         .ok()?;
-    let n = (ART_SIZE * ART_SIZE) as usize;
+    let n = (side * side) as usize;
     if data.len() < n * 4 {
         return None;
     }
     let px = data.chunks_exact(4).take(n).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-    Some(Image::new(ART_SIZE as usize, ART_SIZE as usize, px))
+    Some(Image::new(side as usize, side as usize, px))
 }
 
 /// Nome amigável + ícone do app da sessão.

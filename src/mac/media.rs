@@ -27,8 +27,9 @@ use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Lado da capa decodificada (nítida no card em telas Retina).
-const ART_SIZE: usize = 192;
+/// Lado máximo da capa decodificada (nítida no card em telas Retina; capas
+/// menores ficam no tamanho original).
+const ART_SIZE: usize = 384;
 /// A faixa anterior precisa estar a menos disso do fim para a troca contar como automática.
 const NEAR_END: f64 = 10.0;
 /// Faixas mais curtas que isso (ou sem linha do tempo) não dão para julgar.

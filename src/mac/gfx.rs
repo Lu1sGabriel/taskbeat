@@ -34,6 +34,8 @@ pub fn cover_square(img: &CGImage, size: usize) -> Option<Image> {
     if iw <= 0.0 || ih <= 0.0 {
         return None;
     }
+    // Nunca estica além do original (capas pequenas ficam no tamanho delas).
+    let size = size.min(iw.min(ih) as usize).max(64);
     let k = (size as f64 / iw).max(size as f64 / ih);
     let (dw, dh) = (iw * k, ih * k);
     let rect = CGRect::new(CGPoint::new((size as f64 - dw) / 2.0, (size as f64 - dh) / 2.0), CGSize::new(dw, dh));
