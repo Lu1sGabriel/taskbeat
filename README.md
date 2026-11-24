@@ -235,9 +235,21 @@ barras de áudio (ou o indicador "tocando agora") do outro. Passando o mouse (ou
 clicando), a ilha cresce para baixo no card: capa grande, título, artista · álbum,
 progresso arrastável, aleatório / anterior / play / próximo / repetir e volume
 (dá para rolar sobre o card para mudar o volume). Quando o player troca de música
-sozinho, a ilha abre pela metade com o **"A seguir"** e fecha sozinha. Em Macs
-sem notch (ou monitor externo) a ilha fica no topo, no meio da barra de menus,
-com o título no centro.
+sozinho, a ilha abre pela metade com o **"A seguir"** e fecha sozinha.
+
+**MacBook com notch** (a "bordinha" preta no topo da tela):
+
+<p align="center">
+  <img src="docs/screenshots/mac-notch.gif" width="720" alt="Animação no MacBook com notch: a ilha preta ao redor do notch abre com o mouse, pausa, volta a tocar e pula a música; depois aparece o A seguir e o aviso de Caps Lock">
+</p>
+
+**Mac sem notch** (iMac, Mac mini com monitor, MacBook antigo ou monitor externo):
+a ilha fica no topo, no meio da barra de menus, com a capa, o **título da música no
+meio** e as barras; abre do mesmo jeito.
+
+<p align="center">
+  <img src="docs/screenshots/mac-sem-notch.gif" width="720" alt="Animação num Mac sem notch: a ilha fica no meio da barra de menus com a capa, o título e as barras, e abre no card do mesmo jeito">
+</p>
 
 <p align="center">
   <img src="docs/screenshots/mac-notch-open.png" width="560" alt="Ilha do Taskbeat aberta no notch do MacBook, com capa, título, progresso, botões e volume">
@@ -248,12 +260,17 @@ com o título no centro.
 </p>
 
 - **Visual do macOS**: mesmos layouts e opções do Windows, com SF Pro, ícones SF
-  Symbols e animações no ritmo da tela (com um quique leve ao abrir).
+  Symbols, tudo em resolução Retina e animações no ritmo da tela (com um quique
+  leve ao abrir).
 - **Configurações nativas** (ícone ♪ na barra de menus > Configurações…, ou ⌘,):
-  janela do próprio AppKit, no estilo dos Ajustes do Sistema, com prévia da ilha.
+  janela do próprio AppKit, no estilo dos Ajustes do Sistema, com prévia ao vivo.
   Fundo do card aberto (preto como o notch, cor do álbum ou capa desfocada),
   abrir ao passar o mouse ou só no clique, ícone na barra de menus (desligado, o
   menu abre com o botão direito no notch), abrir ao iniciar a sessão, idioma.
+- **Aviso de Caps Lock**: o mesmo do Windows (posição embaixo, no centro, no topo
+  ou logo abaixo do notch; sólido, acrílico com o desfoque do macOS ou na cor de
+  destaque; ícone, cantos, tamanho, tema, animação e duração). Só o estado da
+  tecla é lido, sem pedir permissão de Acessibilidade.
 - **Música**: o "Tocando Agora" do macOS, de qualquer player (Spotify, Música,
   YouTube no navegador, Podcasts…), pelo [mediaremote-adapter](https://github.com/ungive/mediaremote-adapter)
   (desde o macOS 15.4 só apps da Apple leem o Tocando Agora diretamente). Sem ele,
@@ -261,25 +278,53 @@ com o título no centro.
 - **Barras de áudio**: captura do som do sistema com Core Audio taps, só enquanto
   um player toca.
 
-Requer **macOS 14.2 ou mais novo** (Apple Silicon ou Intel).
+### Versões do macOS
+
+Funciona no **macOS 12 Monterey ou mais novo**, em Apple Silicon e Intel (app
+universal): Monterey, Ventura, Sonoma, Sequoia e Tahoe.
+
+| | macOS 12 e 13 | macOS 14.0 e 14.1 | macOS 14.2 ou mais novo |
+|---|---|---|---|
+| Ilha, card, "A seguir", Caps Lock, configurações | ✔ | ✔ | ✔ |
+| Barras de áudio com o som do Mac | indicador "tocando agora" no lugar | indicador | ✔ |
+
+Nas versões antes do 14.2 o macOS não deixa apps captarem o som do sistema sem
+gravar a tela; ali o Taskbeat mostra o mini equalizador animado no lugar das
+barras.
 
 ### Instalar
 
-Baixe o `Taskbeat-<versão>.dmg` e arraste o Taskbeat para Aplicativos. O app não
-é notarizado pela Apple (não tem conta paga de desenvolvedor), então na primeira
-vez o macOS bloqueia: abra **Ajustes do Sistema > Privacidade e Segurança** e clique
-em **Abrir Mesmo Assim** (ou, no Terminal, `xattr -dr com.apple.quarantine /Applications/Taskbeat.app`).
+1. Baixe o `Taskbeat-<versão>.dmg` (em [Releases](https://github.com/Lu1sGabriel/taskbeat/releases)),
+   abra e arraste o **Taskbeat** para a pasta **Aplicativos**.
+2. Abra o Taskbeat. Como o app ainda não é notarizado pela Apple (não tem conta
+   paga de desenvolvedor), na primeira vez o macOS bloqueia com um aviso como
+   **"Taskbeat" Não Aberto** (ou **"não pode ser aberto porque a Apple não pode
+   verificá-lo"**). Clique em **Concluído** (ou **OK**); **não** clique em "Mover
+   para o Lixo".
+3. Abra **Ajustes do Sistema → Privacidade e Segurança** e role até o fim, na parte
+   **Segurança**. Lá aparece **"Taskbeat" foi bloqueado para proteger o Mac.**
+   Clique em **Abrir Mesmo Assim**.
+4. Abra o Taskbeat de novo. O macOS pergunta mais uma vez: clique em **Abrir Mesmo
+   Assim** e confirme com a senha do Mac (ou o Touch ID). Pronto: das próximas
+   vezes ele abre direto.
+
+> No macOS 12, 13 e 14 também dá para clicar com o **botão direito** (ou Control +
+> clique) no Taskbeat em Aplicativos → **Abrir** → **Abrir**. Pelo Terminal, em
+> qualquer versão: `xattr -dr com.apple.quarantine /Applications/Taskbeat.app`
+
+O Taskbeat não aparece no Dock: ele fica no notch e no ícone ♪ da barra de menus.
 
 Permissões que o macOS pede:
 
-- **Gravação de áudio do sistema** (barras de áudio). Enquanto as barras captam o
-  som, o macOS mostra um ponto roxo na barra de menus; com as barras desligadas
-  (Configurações > Visualizador) nada é captado. Nada é gravado nem guardado.
+- **Gravação de áudio do sistema** (barras de áudio, macOS 14.2+). Enquanto as
+  barras captam o som, o macOS mostra um ponto roxo na barra de menus; com as barras
+  desligadas (Configurações > Visualizador) nada é captado. Nada é gravado nem
+  guardado.
 - **Automação** (só na reserva por AppleScript): para ler e controlar o Spotify e
   o Música.
 
 Como o app só tem assinatura ad-hoc, cada versão nova é um app "diferente" para o
-macOS e as permissões podem ser pedidas de novo depois de atualizar.
+macOS e o passo 3 e as permissões podem ser pedidos de novo depois de atualizar.
 
 ### Compilar
 
@@ -289,21 +334,23 @@ Num Mac com as Command Line Tools do Xcode, Rust e CMake:
 ./build-macos.sh
 ```
 
-Gera `dist/Taskbeat.app` (universal: Apple Silicon + Intel) e
+Gera `dist/Taskbeat.app` (universal: Apple Silicon + Intel, macOS 12+) e
 `dist/Taskbeat-<versão>.dmg`. O adaptador do Tocando Agora é baixado numa versão
 fixa e compilado junto. Para testar sem esperar: `TV_DEMO_MEDIA=1`,
-`TV_DEMO_FLYOUT=1`, `TV_DEMO_POPUP=1`, `TV_DEMO_SETTINGS=1` e, para simular um
-notch numa tela sem notch, `TASKBEAT_FAKE_NOTCH=196x32`.
+`TV_DEMO_FLYOUT=1`, `TV_DEMO_POPUP=1`, `TV_DEMO_CAPS=1`, `TV_DEMO_SETTINGS=1`;
+para simular um notch numa tela sem notch, `TASKBEAT_FAKE_NOTCH=196x32`; e para
+testar os caminhos dos macOS 12/13 num Mac mais novo, `TASKBEAT_FORCE_LEGACY=1`.
 
 O GitHub Actions ([macos.yml](.github/workflows/macos.yml)) compila, roda os
-testes, gera o `.dmg` e abre o app num macOS de verdade: tira prints da ilha e
-testa de ponta a ponta com um player de teste publicando no Tocando Agora
-([ci-nowplaying.swift](macos/ci-nowplaying.swift)). Configurações no Mac ficam em
+testes, gera o `.dmg`, confere que ele abre a partir do macOS 12 e abre o app num
+macOS de verdade: tira prints da ilha e testa de ponta a ponta com um player de
+teste publicando no Tocando Agora ([ci-nowplaying.swift](macos/ci-nowplaying.swift)).
+Os GIFs e as capturas do Mac são desenhados pelo próprio código, em 2x
+(`cargo test --release mac_gifs -- --ignored`). Configurações no Mac ficam em
 `~/Library/Application Support/Taskbeat/config.toml`.
 
-Limitações no Mac: ainda não há aviso de Caps Lock (o macOS já tem o dele), nem
-selo do app de origem na ilha; os prints do CI são de um Mac virtual sem notch
-físico (o notch é simulado).
+Limitações no Mac: ainda não há selo do app de origem na ilha; os prints do CI são
+de um Mac virtual sem notch físico (o notch é simulado).
 
 ## Licença
 

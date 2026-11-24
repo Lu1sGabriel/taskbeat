@@ -562,7 +562,7 @@ fn mac_gif(name: &str, has_notch: bool) {
             (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.45) * 1.5).clamp(0.0, 1.0) * 0.6), 1.0)
         });
         cv.fill_rrect(0.0, 0.0, MW, band, 0.0, 0.30, [0.0; 3]);
-        let left = if has_notch { "Música   Arquivo   Editar" } else { "Música   Arquivo   Editar   Ver   Janela" };
+        let left = if has_notch { "Música   Arquivo   Editar" } else { "Música   Arquivo   Editar   Ver" };
         ui::glyph(cv, &mut tr, RectF::new(12.0 * S, 0.0, 22.0 * S, band), G_MUSIC, Font::IconSmall, [1.0; 3], 0.95);
         ui::text(cv, &mut tr, left, Font::Body, 42.0 * S, 0.0, 260.0 * S, band, [1.0; 3], 0.95);
         ui::text_right(cv, &mut tr, "Ter 24 nov  12:34", Font::Body, MW - 14.0 * S, 0.0, band, [1.0; 3], 0.95, S);
