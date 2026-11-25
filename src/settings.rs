@@ -85,6 +85,8 @@ enum Key {
     TaskbarPlay,
     WidgetControls,
     WidgetControlsRgb,
+    WidgetSides,
+    WidgetSidesAlpha,
     CardShuffle,
     Marquee,
     TitleWidth,
@@ -100,6 +102,8 @@ enum Key {
     PlayShape,
     CardControls,
     CardControlsRgb,
+    CardSides,
+    CardSidesAlpha,
     CardSeek,
     ShowVolume,
     CardMixer,
@@ -210,6 +214,7 @@ const SIZES: &[&str] = &["Pequeno", "Normal", "Grande"];
 const COVER_SIZES: &[&str] = &["Pequena", "Normal", "Grande"];
 const SECOND_LINES: &[&str] = &["Artista", "Artista · Álbum", "Álbum", "Tempo"];
 const CONTROL_COLORS: &[&str] = &["Branco", "Branco e destaque", "Cor da capa", "Cor de destaque", "Personalizada"];
+const SIDE_COLORS: &[&str] = &["Igual ao botão do meio", "Branco", "Cor da capa", "Cor de destaque"];
 /// Cores prontas do seletor de cor.
 const SWATCHES: [u32; 12] = [0xFFFFFF, 0xC8C8CC, 0xFF6B9A, 0xFF4D4D, 0xFF9F43, 0xFFD93D, 0x4CD964, 0x2ED3B7, 0x4CC9F0, 0x5EB1FF, 0x7C83FD, 0xC77DFF];
 const LAUNCHER_PLACES: &[&str] = &["No card", "Na barra", "Nos dois"];
@@ -237,6 +242,8 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E768}", title: "Botão play", desc: "Preenchido, na cor dos controles, ou só o ícone, como os outros", key: Key::TaskbarPlay, kind: Kind::Segmented(TASKBAR_PLAYS) },
             Row { icon: "\u{E790}", title: "Cor dos controles", desc: "Aleatório, anterior, play, próximo e repetir; o branco fica escuro sobre fundos claros", key: Key::WidgetControls, kind: Kind::Choice(CONTROL_COLORS) },
             Row { icon: "\u{E2B1}", title: "Cor personalizada", desc: "Qualquer cor: amostras, matiz e saturação, brilho ou o código hex", key: Key::WidgetControlsRgb, kind: Kind::Color },
+            Row { icon: "\u{E892}", title: "Botões laterais", desc: "Cor do aleatório, anterior, próximo e repetir", key: Key::WidgetSides, kind: Kind::Choice(SIDE_COLORS) },
+            Row { icon: "\u{E706}", title: "Força dos botões laterais", desc: "100% é tão forte quanto o botão do meio; menos deixa os do lado mais suaves", key: Key::WidgetSidesAlpha, kind: Kind::Slider { min: 20, max: 100, step: 5, unit: "%" } },
             Row { icon: "\u{E7FB}", title: "Separador", desc: "Linha fina entre a música e os botões", key: Key::WidgetDivider, kind: Kind::Toggle },
             Section("Capa e texto"),
             Row { icon: "\u{E91B}", title: "Formato da capa", desc: "Como a capa aparece na barra", key: Key::CoverShape, kind: Kind::Segmented(SHAPES) },
@@ -274,6 +281,8 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E768}", title: "Botão play", desc: "Formato do botão principal", key: Key::PlayShape, kind: Kind::Segmented(PLAY_SHAPES) },
             Row { icon: "\u{E790}", title: "Cor dos controles", desc: "Ícones, play e botões ligados do card; o branco fica escuro sobre fundos claros", key: Key::CardControls, kind: Kind::Choice(CONTROL_COLORS) },
             Row { icon: "\u{E2B1}", title: "Cor personalizada", desc: "Qualquer cor: amostras, matiz e saturação, brilho ou o código hex", key: Key::CardControlsRgb, kind: Kind::Color },
+            Row { icon: "\u{E892}", title: "Botões laterais", desc: "Cor do aleatório, anterior, próximo e repetir", key: Key::CardSides, kind: Kind::Choice(SIDE_COLORS) },
+            Row { icon: "\u{E706}", title: "Força dos botões laterais", desc: "100% é tão forte quanto o botão do meio; menos deixa os do lado mais suaves", key: Key::CardSidesAlpha, kind: Kind::Slider { min: 20, max: 100, step: 5, unit: "%" } },
             Row { icon: "\u{E945}", title: "Animar ícones", desc: "Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar (no card e na barra)", key: Key::IconAnim, kind: Kind::Toggle },
             Row { icon: "\u{E8D3}", title: "Estilo dos ícones", desc: "Formas preenchidas e encorpadas ou o contorno fino do Fluent (no card e na barra)", key: Key::IconStyle, kind: Kind::Segmented(ICON_STYLES) },
             Row { icon: "\u{E9E9}", title: "Barras no card", desc: "Mini visualizador ao lado do título, reagindo ao som", key: Key::CardViz, kind: Kind::Toggle },
@@ -393,6 +402,7 @@ const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbo
 const SIZE_V: &[Size3] = &[Size3::Small, Size3::Normal, Size3::Large];
 const SECOND_V: &[SecondLine] = &[SecondLine::Artist, SecondLine::ArtistAlbum, SecondLine::Album, SecondLine::Time];
 const CONTROL_V: &[ControlColor] = &[ControlColor::White, ControlColor::WhiteAccent, ControlColor::Album, ControlColor::Accent, ControlColor::Custom];
+const SIDE_V: &[SideColor] = &[SideColor::SameAsMiddle, SideColor::White, SideColor::Album, SideColor::Accent];
 const LAUNCHER_PLACE_V: &[LauncherPlace] = &[LauncherPlace::Card, LauncherPlace::Taskbar, LauncherPlace::Both];
 const ICON_STYLE_V: &[IconStyle] = &[IconStyle::Filled, IconStyle::Fluent];
 const TINT_V: &[WidgetTint] = &[WidgetTint::Neutral, WidgetTint::Album, WidgetTint::Accent, WidgetTint::Gradient, WidgetTint::Artwork];
@@ -425,6 +435,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::TaskbarPlay => idx(TASKBAR_PLAY_V, c.taskbar_play),
         Key::WidgetControls => idx(CONTROL_V, c.widget_controls),
         Key::WidgetControlsRgb => rgb_of(&c.widget_controls_rgb) as i32,
+        Key::WidgetSides => idx(SIDE_V, c.widget_sides),
+        Key::WidgetSidesAlpha => c.widget_sides_alpha,
         Key::CardShuffle => idx(SHUFFLE_V, c.card_shuffle_repeat),
         Key::Marquee => c.marquee as i32,
         Key::TitleWidth => c.title_width,
@@ -439,6 +451,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::PlayShape => idx(PLAY_V, c.play_shape),
         Key::CardControls => idx(CONTROL_V, c.card_controls),
         Key::CardControlsRgb => rgb_of(&c.card_controls_rgb) as i32,
+        Key::CardSides => idx(SIDE_V, c.card_sides),
+        Key::CardSidesAlpha => c.card_sides_alpha,
         Key::CardSeek => c.card_seek as i32,
         Key::ShowVolume => c.show_volume as i32,
         Key::CardMixer => c.card_mixer as i32,
@@ -512,6 +526,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::TaskbarPlay => c.taskbar_play = pick(TASKBAR_PLAY_V, i),
         Key::WidgetControls => c.widget_controls = pick(CONTROL_V, i),
         Key::WidgetControlsRgb => c.widget_controls_rgb = hex_of(v as u32),
+        Key::WidgetSides => c.widget_sides = pick(SIDE_V, i),
+        Key::WidgetSidesAlpha => c.widget_sides_alpha = v,
         Key::CardShuffle => c.card_shuffle_repeat = pick(SHUFFLE_V, i),
         Key::Marquee => c.marquee = v != 0,
         Key::TitleWidth => c.title_width = v,
@@ -526,6 +542,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::PlayShape => c.play_shape = pick(PLAY_V, i),
         Key::CardControls => c.card_controls = pick(CONTROL_V, i),
         Key::CardControlsRgb => c.card_controls_rgb = hex_of(v as u32),
+        Key::CardSides => c.card_sides = pick(SIDE_V, i),
+        Key::CardSidesAlpha => c.card_sides_alpha = v,
         Key::CardSeek => c.card_seek = v != 0,
         Key::ShowVolume => c.show_volume = v != 0,
         Key::CardMixer => c.card_mixer = v != 0,
@@ -588,12 +606,12 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     const VIZ: &str = "Ligue \"Mostrar barras dinâmicas\" para usar esta opção";
     let osd_on = c.caps_lock_osd || c.num_lock_osd;
     match key {
-        AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetControls | WidgetControlsRgb | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
+        AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetControls | WidgetControlsRgb | WidgetSides | WidgetSidesAlpha | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
             if !c.show_media =>
         {
             Some(MEDIA)
         }
-        TaskbarShuffle | TaskbarPlay | WidgetDivider | WidgetControls | WidgetControlsRgb if !c.taskbar_controls => Some(CONTROLS),
+        TaskbarShuffle | TaskbarPlay | WidgetDivider | WidgetControls | WidgetControlsRgb | WidgetSides | WidgetSidesAlpha if !c.taskbar_controls => Some(CONTROLS),
         WidgetControlsRgb if c.widget_controls != ControlColor::Custom => Some(CUSTOM),
         CardControlsRgb if c.card_controls != ControlColor::Custom => Some(CUSTOM),
         WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder if !c.widget_pill => Some(PILL),

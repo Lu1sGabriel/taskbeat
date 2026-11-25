@@ -152,6 +152,20 @@ pub enum ControlColor {
     Custom,
 }
 
+/// Cor dos botões laterais (aleatório, anterior, próximo, repetir).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SideColor {
+    /// A mesma cor do botão do meio (play/pausa).
+    SameAsMiddle,
+    /// Branco (escuro sobre fundos claros).
+    White,
+    /// Cor viva da capa.
+    Album,
+    /// Cor de destaque.
+    Accent,
+}
+
 /// Cor "#RRGGBB" (ou "#RGB") em 0..1.
 pub fn parse_hex(s: &str) -> Option<[f32; 3]> {
     let h = s.trim().trim_start_matches('#');
@@ -370,6 +384,10 @@ pub struct Config {
     pub widget_controls: ControlColor,
     /// Cor dos controles do widget na opção "Personalizada" ("#RRGGBB").
     pub widget_controls_rgb: String,
+    /// Cor dos botões laterais do widget (padrão: a do botão do meio).
+    pub widget_sides: SideColor,
+    /// Intensidade (%) dos botões laterais do widget (100 = tão fortes quanto o do meio).
+    pub widget_sides_alpha: i32,
     /// O que aparece embaixo do título (com "Mostrar artista" ligado).
     pub second_line: SecondLine,
     /// Tamanho do título e da segunda linha.
@@ -411,6 +429,9 @@ pub struct Config {
     pub card_controls: ControlColor,
     /// Cor dos controles do card na opção "Personalizada" ("#RRGGBB").
     pub card_controls_rgb: String,
+    /// Cor e intensidade (%) dos botões laterais do card.
+    pub card_sides: SideColor,
+    pub card_sides_alpha: i32,
     pub card_seek: bool,
     /// Mostra de qual app vem a música (nome no card, ícone sobre a capa).
     pub show_source: bool,
@@ -526,6 +547,8 @@ impl Default for Config {
             taskbar_play: TaskbarPlay::Filled,
             widget_controls: ControlColor::White,
             widget_controls_rgb: "#5EB1FF".into(),
+            widget_sides: SideColor::SameAsMiddle,
+            widget_sides_alpha: 100,
             second_line: SecondLine::Artist,
             text_size: Size3::Normal,
             cover_size: Size3::Normal,
@@ -550,6 +573,8 @@ impl Default for Config {
             play_shape: Shape::Rounded,
             card_controls: ControlColor::White,
             card_controls_rgb: "#5EB1FF".into(),
+            card_sides: SideColor::SameAsMiddle,
+            card_sides_alpha: 100,
             card_seek: true,
             show_source: false,
             show_volume: true,
@@ -716,6 +741,8 @@ impl Config {
         self.osd_blur = self.osd_blur.clamp(0, 100);
         self.widget_opacity = self.widget_opacity.clamp(0, 100);
         self.widget_intensity = self.widget_intensity.clamp(10, 100);
+        self.widget_sides_alpha = self.widget_sides_alpha.clamp(20, 100);
+        self.card_sides_alpha = self.card_sides_alpha.clamp(20, 100);
     }
 }
 
@@ -761,6 +788,19 @@ mod tests {
         assert_eq!(parse_hex("12"), None);
         assert_eq!(rgb_of("#5EB1FF"), 0x5EB1FF);
         assert_eq!(hex_of(0x5eb1ff), "#5EB1FF");
+    }
+
+    /// Botões laterais: na cor do botão do meio e tão fortes quanto ele (também
+    /// para quem já tinha config); a intensidade fica entre 20 e 100%.
+    #[test]
+    fn botoes_laterais() {
+        use super::SideColor;
+        let mut c: Config = toml::from_str("widget_controls = \"white\"\ncard_sides_alpha = 5\nversion = 5\n").unwrap();
+        assert_eq!((c.widget_sides, c.card_sides, c.widget_sides_alpha), (SideColor::SameAsMiddle, SideColor::SameAsMiddle, 100));
+        c.sanitize();
+        assert_eq!(c.card_sides_alpha, 20);
+        let c: Config = toml::from_str("widget_sides = \"same_as_middle\"\ncard_sides = \"album\"\n").unwrap();
+        assert_eq!((c.widget_sides, c.card_sides), (SideColor::SameAsMiddle, SideColor::Album));
     }
 
     #[test]

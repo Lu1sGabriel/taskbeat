@@ -890,6 +890,28 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Compõe (source over) um buffer da mesma largura em (0, 0) tirando a
+    /// linha `y` do destino da linha `row(y)` da origem (esticar uma faixa).
+    pub fn composite_rows(&mut self, src: &[u32], sw: usize, sh: usize, row: impl Fn(usize) -> usize) {
+        let (x0, x1) = (self.clip.0, self.clip.2.min(sw));
+        if x1 <= x0 {
+            return;
+        }
+        for y in self.clip.1..self.clip.3 {
+            let sy = row(y);
+            if sy >= sh {
+                continue;
+            }
+            let srow = &src[sy * sw + x0..sy * sw + x1];
+            let drow = &mut self.px[y * self.w + x0..y * self.w + x1];
+            for (d, &s) in drow.iter_mut().zip(srow) {
+                if s != 0 {
+                    *d = over(*d, s);
+                }
+            }
+        }
+    }
+
     /// Máscara recortada em `clip` com bordas laterais esmaecidas de `fade` px (letreiro).
     pub fn blit_mask_faded(&mut self, x: f32, y: i32, m: &Mask, c: Rgb, alpha: f32, clip: RectF, fade_l: f32, fade_r: f32) {
         let xi = x.floor() as i32;

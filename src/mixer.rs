@@ -276,7 +276,7 @@ impl Mixer {
         }
         // Tocando primeiro, depois os outros; os sons do sistema no fim.
         apps.sort_by_key(|a| (a.system, !a.active, a.name.to_lowercase()));
-        MixerState { device, apps }
+        MixerState { device, apps, fill: Vec::new() }
     }
 
     fn icon_of(&mut self, path: &str) -> Option<Arc<Image>> {

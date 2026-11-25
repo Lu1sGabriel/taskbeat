@@ -81,6 +81,9 @@ pub struct Interact {
     pub glow: bool,
     /// Posição x do mouse enquanto um atalho é arrastado (`drag` = `Launch`).
     pub drag_x: f32,
+    /// Volume como a barra mostra agora (sobe e desce suave até o valor);
+    /// `None`: o próprio volume.
+    pub vol_fill: Option<f32>,
 }
 
 impl Interact {
@@ -339,8 +342,6 @@ enum VIcon {
     Vol1,
     Vol2,
     Vol3,
-    /// Setinha para baixo (o mixer do card).
-    Chevron,
     /// Marca de "escolhido".
     Check,
 }
@@ -475,7 +476,6 @@ fn vicon_shape(v: VIcon) -> Shape2 {
             parts.push(path(vec![(0.10, -0.13), (0.36, 0.13)], 0.055));
             parts.push(path(vec![(0.10, 0.13), (0.36, -0.13)], 0.055));
         }
-        VIcon::Chevron => parts.push(path(vec![(-0.34, -0.14), (0.0, 0.18), (0.34, -0.14)], 0.075)),
         VIcon::Check => parts.push(path(vec![(-0.34, 0.02), (-0.1, 0.25), (0.36, -0.24)], 0.08)),
         VIcon::Vol1 | VIcon::Vol2 | VIcon::Vol3 => {
             let n = match v {
@@ -624,14 +624,44 @@ pub fn controls_theme(choice: crate::config::ControlColor, custom: &str, th: &Th
     }
 }
 
-/// Opacidade dos controles indisponíveis.
-const OFF_ALPHA: f32 = 0.9;
+/// Botões laterais (aleatório, anterior, próximo, repetir): cor e força.
+/// Ficam iguais estando ou não disponíveis (pedido do usuário: apagados,
+/// pareciam fracos ao lado do botão do meio); aleatório/repetir ligados
+/// ganham o pontinho embaixo.
+#[derive(Clone, Copy)]
+struct Sides {
+    c: Rgb,
+    a: f32,
+    it: Interact,
+    s: f32,
+}
 
-/// Controle indisponível: a mesma cor dos outros, apagada (misturada a um
-/// cinza neutro) e quase opaca. Translúcida, ela pegava a cor do fundo
-/// (rosado sobre uma capa vermelha).
-fn off_color(c: Rgb, dark: bool) -> Rgb {
-    lerp3(c, if dark { [0.22; 3] } else { [0.86; 3] }, 0.45)
+impl Sides {
+    fn of(choice: crate::config::SideColor, alpha: i32, mid: Rgb, th: &Theme, m: &MediaInfo, it: Interact, s: f32) -> Self {
+        use crate::config::SideColor;
+        let c = match choice {
+            // A cor do botão do meio (o fundo do play preenchido ou o ícone).
+            SideColor::SameAsMiddle => mid,
+            SideColor::White => th.fg,
+            SideColor::Album => m.art.as_ref().map(|a| readable(a.vibrant, th.dark)).unwrap_or(th.accent),
+            SideColor::Accent => th.accent,
+        };
+        // Sobre fundo claro, o branco do play fica escuro (como o próprio play).
+        let c = if !th.dark && luma(c) > 0.85 { th.fg } else { c };
+        Sides { c, a: (alpha as f32 / 100.0).clamp(0.2, 1.0), it, s }
+    }
+
+    fn draw(&self, cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, h: Hit) {
+        ctrl_glyph(cv, tr, r, g, font, self.c, self.a, &self.it, h, self.s);
+    }
+
+    /// Aleatório/repetir: ligado, ganha o pontinho embaixo.
+    fn toggle(&self, cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, h: Hit) {
+        self.draw(cv, tr, r, g, Font::IconSmall, h);
+        if on {
+            cv.fill_circle(r.cx(), r.bottom() - 5.0 * self.s, 1.7 * self.s, self.c, self.a);
+        }
+    }
 }
 
 /// Cor aproximada da barra de tarefas atrás do widget.
@@ -770,6 +800,12 @@ fn rect_bits(r: RectF) -> [u32; 4] {
 /// duas por tipo (a troca de capa anima entre a antiga e a nova).
 fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, draw: impl FnOnce(&mut Canvas)) {
     let (w, h) = (cv.w, cv.h);
+    with_layer(tag, key, w, h, draw, |px, w, h| cv.composite(0, 0, px, w, h, alpha));
+}
+
+/// A camada `key` de `w`×`h` (desenhada antes com `draw` se ainda não
+/// estiver guardada), entregue a `use_it`.
+fn with_layer(tag: LayerTag, key: u64, w: usize, h: usize, draw: impl FnOnce(&mut Canvas), use_it: impl FnOnce(&[u32], usize, usize)) {
     LAYERS.with(|cell| {
         let mut layers = cell.borrow_mut();
         let i = match layers.iter().position(|l| l.tag == tag && l.key == key && l.w == w && l.h == h) {
@@ -786,8 +822,20 @@ fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, draw: impl
             }
         };
         let l = &layers[i];
-        cv.composite(0, 0, &l.px, l.w, l.h, alpha);
+        use_it(&l.px, l.w, l.h);
     });
+}
+
+/// Linha da camada (altura `h0`) que vai na linha `y` de um canvas `grow`
+/// linhas mais alto: em cima e embaixo iguais, a faixa `a..b` esticada.
+fn stretch_row(y: usize, a: usize, b: usize, grow: usize) -> usize {
+    if y < a {
+        y
+    } else if y >= b + grow {
+        y - grow
+    } else {
+        a + (y - a) * (b - a) / (b - a + grow)
+    }
 }
 
 /// Libera as camadas guardadas de um tipo (ex.: o card fechou).
@@ -1440,21 +1488,14 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
     // Controles na cor escolhida (padrão: branco).
     let ct = controls_theme(cfg.widget_controls, &cfg.widget_controls_rgb, th, m);
-    // Indisponível (ex.: pular num vídeo do navegador): cinza neutro apagado.
-    let off = off_color(ct.fg, th.dark);
-    let icon = |cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, h: Hit| {
-        let (c, a) = if on { (ct.fg, 1.0) } else { (off, OFF_ALPHA) };
-        ctrl_glyph(cv, tr, r, g, Font::IconSmall, c, a, &it, h, s);
-    };
-    // Aleatório/repetir: apagados quando o player não deixa mudar pelo Windows.
+    // Botões laterais: por padrão tão fortes quanto o do meio, na mesma cor.
+    let mid = if cfg.taskbar_play == TaskbarPlay::Icon { ct.fg } else { ct.accent };
+    let side = Sides::of(cfg.widget_sides, cfg.widget_sides_alpha, mid, th, m, it, s);
     if let Some(r) = l.shuffle {
-        match m.can_shuffle {
-            true => toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, true, &ct, s, &it, Hit::Shuffle),
-            false => icon(cv, tr, r, G_SHUFFLE, false, Hit::Shuffle),
-        }
+        side.toggle(cv, tr, r, G_SHUFFLE, f.pb.shuffle && m.can_shuffle, Hit::Shuffle);
     }
     if let Some(r) = l.prev {
-        icon(cv, tr, r, G_PREV, m.can_prev, Hit::Prev);
+        side.draw(cv, tr, r, G_PREV, Font::IconSmall, Hit::Prev);
     }
     if let Some(r) = l.play {
         match cfg.taskbar_play {
@@ -1463,14 +1504,11 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         }
     }
     if let Some(r) = l.next {
-        icon(cv, tr, r, G_NEXT, m.can_next, Hit::Next);
+        side.draw(cv, tr, r, G_NEXT, Font::IconSmall, Hit::Next);
     }
     if let Some(r) = l.repeat {
         let g = if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL };
-        match m.can_repeat {
-            true => toggle_glyph(cv, tr, r, g, f.pb.repeat != 0, true, &ct, s, &it, Hit::Repeat),
-            false => icon(cv, tr, r, g, false, Hit::Repeat),
-        }
+        side.toggle(cv, tr, r, g, f.pb.repeat != 0 && m.can_repeat, Hit::Repeat);
     }
     // Atalhos dos apps de música (opção "Na barra").
     if let Some((x, y0, y1)) = l.launch_divider {
@@ -1526,6 +1564,9 @@ pub struct CLayout {
     pub mixer_rows: Vec<(RectF, RectF, RectF)>,
     /// Quanto o mixer está aberto (0..1, já com a curva da animação).
     pub mixer_open: f32,
+    /// Altura (px inteiros) que o mixer aberto acrescenta ao card: o fundo
+    /// guardado é o do card fechado, esticado no meio por esta altura.
+    pub grown: f32,
 }
 
 impl CLayout {
@@ -1629,6 +1670,7 @@ impl CLayout {
             })
             .collect();
         self.mixer_btn = Some(RectF::new(self.card.cx() - 24.0 * s, top + h, 48.0 * s, 20.0 * s));
+        self.grown = h;
         let extra = h + 18.0 * s;
         self.card.h += extra;
         self.h += extra;
@@ -1827,15 +1869,24 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     // camada guardada e os quadros seguintes só a compõem.
     let art_r = (l.radius * 0.6).max(6.0 * s);
     let art_shape = if cfg.cover_shape == Shape::Circle && !l.vertical { Shape::Circle } else { Shape::Rounded };
+    // Com o mixer aberto (ou abrindo) o fundo não é redesenhado na altura
+    // nova a cada quadro (capa desfocada, película e granulado custam ~20 ms):
+    // usa o do card fechado e estica uma faixa do meio, entre a capa e a
+    // borda de baixo (tudo ali são degradês suaves).
+    let grow = l.grown.round().max(0.0) as usize;
+    let base = RectF { h: l.card.h - grow as f32, ..l.card };
+    let band = (((l.art.bottom() + 32.0 * s).ceil().max(0.0) as usize), ((base.bottom() - l.radius.max(8.0 * s) - 4.0 * s).floor().max(0.0) as usize));
+    let grow = if band.1 > band.0 + 4 && grow < cv.h { grow } else { 0 };
+    let base = RectF { h: l.card.h - grow as f32, ..l.card };
     let key = layer_key((
         (cfg.card_style as u8, art_shape as u8, cfg.show_source, l.vertical),
-        (rect_bits(l.card), rect_bits(l.art), l.radius.to_bits()),
+        (rect_bits(base), rect_bits(l.art), l.radius.to_bits()),
         (m.art.as_ref().map(|a| Arc::as_ptr(a) as usize), m.icon.as_ref().map(|a| Arc::as_ptr(a) as usize)),
         (th.dark, th.accent.map(f32::to_bits), th.fg.map(f32::to_bits), f.colors.accent.map(f32::to_bits)),
         f.backdrop.map(|b| b as *const Image as usize),
     ));
-    cached_layer(cv, LayerTag::Card, key, 1.0, |cv| {
-        card_background(cv, l.card, l.radius, cfg, f.colors, m, th, s, f.backdrop);
+    let draw_bg = |cv: &mut Canvas| {
+        card_background(cv, base, l.radius, cfg, f.colors, m, th, s, f.backdrop);
         if let Some(a) = &m.art {
             art_shadow(cv, l.art, art_r, a, th, s);
         }
@@ -1849,7 +1900,13 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
                 None => draw_art(cv, tr, l.art, m, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
             },
         }
-    });
+    };
+    if grow == 0 {
+        cached_layer(cv, LayerTag::Card, key, 1.0, draw_bg);
+    } else {
+        let (w, h0) = (cv.w, cv.h - grow);
+        with_layer(LayerTag::Card, key, w, h0, draw_bg, |px, w, h| cv.composite_rows(px, w, h, |y| stretch_row(y, band.0, band.1, grow)));
+    }
 
     // App, título, artista.
     if cfg.show_source {
@@ -1914,24 +1971,16 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         }
     }
     let ct = controls_theme(cfg.card_controls, &cfg.card_controls_rgb, th, m);
-    let off = off_color(ct.fg, th.dark);
-    let icon = |cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, on: bool, h: Hit| {
-        let (c, a) = if on { (ct.fg, 1.0) } else { (off, OFF_ALPHA) };
-        ctrl_glyph(cv, tr, r, g, font, c, a, &it, h, s);
-    };
-    if m.can_shuffle {
-        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, true, &ct, s, &it, Hit::Shuffle);
-    } else if always {
-        icon(cv, tr, l.shuffle, G_SHUFFLE, Font::IconSmall, false, Hit::Shuffle);
+    let side = Sides::of(cfg.card_sides, cfg.card_sides_alpha, ct.accent, th, m, it, s);
+    if m.can_shuffle || always {
+        side.toggle(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle && m.can_shuffle, Hit::Shuffle);
     }
-    icon(cv, tr, l.prev, G_PREV, Font::Icon, m.can_prev, Hit::Prev);
+    side.draw(cv, tr, l.prev, G_PREV, Font::Icon, Hit::Prev);
     play_button(cv, tr, l.play, l.play_size, cfg.play_shape, &ct, &it, f.pb.playing, m.can_toggle, s);
-    icon(cv, tr, l.next, G_NEXT, Font::Icon, m.can_next, Hit::Next);
+    side.draw(cv, tr, l.next, G_NEXT, Font::Icon, Hit::Next);
     let g = if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL };
-    if m.can_repeat {
-        toggle_glyph(cv, tr, l.repeat, g, f.pb.repeat != 0, true, &ct, s, &it, Hit::Repeat);
-    } else if always {
-        icon(cv, tr, l.repeat, g, Font::IconSmall, false, Hit::Repeat);
+    if m.can_repeat || always {
+        side.toggle(cv, tr, l.repeat, g, f.pb.repeat != 0 && m.can_repeat, Hit::Repeat);
     }
 
     // Progresso com tempos embaixo.
@@ -1962,7 +2011,8 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         };
         ctrl_glyph(cv, tr, b, g, Font::IconSmall, th.fg, 0.9, &it, Hit::VolBtn, s);
         let hot = f.it.hover == Some(Hit::Vol) || f.it.drag == Some(Hit::Vol);
-        slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, true, s);
+        let fill = f.it.vol_fill.unwrap_or(if f.pb.muted { 0.0 } else { v });
+        slider(cv, x0, x1, r.cy(), fill, th, hot, true, s);
     }
 
     // Mixer de volume (setinha embaixo; aberto, uma linha por app).
@@ -1991,9 +2041,27 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
 
 /// Setinha do mixer (para baixo; vira para cima conforme `open` vai a 1).
 pub(crate) fn chevron(cv: &mut Canvas, b: RectF, open: f32, c: Rgb, a: f32, s: f32) {
-    let (w, h) = (b.w.round(), b.h.round());
-    let m = vector_mask(VIcon::Chevron, 15.0 * s, w as i32, h as i32);
-    cv.blit_mask_xform(b.x.round(), b.y.round(), &m, w / 2.0, h / 2.0, 1.0, std::f32::consts::PI * open.clamp(0.0, 1.0), c, a);
+    // Vira como uma dobradiça: as pontas descem enquanto o bico sobe (fica
+    // reta no meio do caminho), em vez de girar de lado.
+    let k = (std::f32::consts::PI * open.clamp(0.0, 1.0)).cos();
+    let em = 15.0 * s;
+    let (w, h) = (b.w.round().max(1.0) as usize, b.h.round().max(1.0) as usize);
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0 + 0.02 * em);
+    let (dx, dy, hw) = (0.34 * em, 0.16 * em * k, 0.075 * em);
+    let pts = [(cx - dx, cy - dy), (cx, cy + dy), (cx + dx, cy - dy)];
+    let mut cov = vec![0u8; w * h];
+    let (y0, y1) = ((cy - 0.16 * em - hw - 1.0).floor().max(0.0) as usize, ((cy + 0.16 * em + hw + 1.0).ceil() as usize).min(h));
+    let (x0, x1) = ((cx - dx - hw - 1.0).floor().max(0.0) as usize, ((cx + dx + hw + 1.0).ceil() as usize).min(w));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let mut acc = 0.0;
+            for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                acc += (0.5 - sd_path((x as f32 + ox, y as f32 + oy), &pts, hw)).clamp(0.0, 1.0);
+            }
+            cov[y * w + x] = (acc / 4.0 * 255.0 + 0.5) as u8;
+        }
+    }
+    cv.blit_mask(b.x.round() as i32, b.y.round() as i32, &Mask { w, h, cov }, c, a);
 }
 
 /// Marca de "escolhido" (✓) centrada em `r`.
@@ -2042,7 +2110,7 @@ fn mixer_section(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
             let hot = matches!(f.it.hover, Some(Hit::MixVol(h)) if h as usize == i) || matches!(f.it.drag, Some(Hit::MixVol(h)) if h as usize == i);
             if let Some((x0, x1)) = l.mix_track(i, s) {
                 // Mesma cor do slider de volume principal, logo acima.
-                let v = if app.muted { 0.0 } else { app.volume };
+                let v = mx.fill.get(i).copied().unwrap_or(if app.muted { 0.0 } else { app.volume });
                 slider(cv, x0, x1, slider_r.cy(), v, th, hot, hot, s);
             }
             let mh = Hit::MixMute(i as u8);

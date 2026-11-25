@@ -530,6 +530,46 @@ fn card_mixer() {
     save_png("card-mixer.png", img.0, img.1, &img.2);
 }
 
+/// Quanto custa um quadro do card enquanto o mixer abre (o fundo muda de
+/// altura a cada quadro). `cargo test --release card_frame_cost -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn card_frame_cost() {
+    let mut mx = crate::shared::MixerState::default();
+    for k in 0..6 {
+        mx.apps.push(crate::shared::MixApp { key: format!("k{k}"), name: format!("App {k}"), icon: None, volume: 0.8, muted: false, active: true, system: false });
+    }
+    let media = ui::sample_media();
+    let mut tr = TextRenderer::new();
+    let s = 1.0;
+    tr.set_scale(s);
+    let cfg = Config::default();
+    let c = colors(&cfg, &media);
+    for style in [CardStyle::Artwork, CardStyle::AlbumColor] {
+        let cfg = Config { card_style: style, ..cfg.clone() };
+        let t = std::time::Instant::now();
+        let n = 15;
+        for i in 0..n {
+            let open = i as f32 / (n - 1) as f32;
+            let cl = CLayout::build(s, &cfg, true).with_mixer(Some(6), open, s);
+            let (w, h) = (cl.w.ceil() as usize, cl.h.ceil() as usize);
+            let mut px = vec![0u32; w * h];
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb: playback(&media), s, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: Some(&mx) };
+            ui::draw_card(&mut Canvas::new(w, h, &mut px), &mut tr, &cl, &f);
+        }
+        println!("{style:?}: {:.2} ms por quadro (altura mudando)", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        let cl = CLayout::build(s, &cfg, true).with_mixer(Some(6), 1.0, s);
+        let (w, h) = (cl.w.ceil() as usize, cl.h.ceil() as usize);
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            let mut px = vec![0u32; w * h];
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb: playback(&media), s, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: Some(&mx) };
+            ui::draw_card(&mut Canvas::new(w, h, &mut px), &mut tr, &cl, &f);
+        }
+        println!("{style:?}: {:.2} ms por quadro (altura parada, fundo guardado)", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
+    }
+}
+
 /// Widget em pílula com cada formato e tamanho de capa (conferir que a capa
 /// fica dentro da ponta arredondada).
 #[test]

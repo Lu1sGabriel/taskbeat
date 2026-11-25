@@ -146,6 +146,9 @@ pub struct MixApp {
 pub struct MixerState {
     pub device: String,
     pub apps: Vec<MixApp>,
+    /// Quanto cada barra aparece cheia agora (animação de subir e descer);
+    /// vazio: o próprio volume.
+    pub fill: Vec<f32>,
 }
 
 /// Pedidos para a thread do mixer (só trabalha com ele aberto).

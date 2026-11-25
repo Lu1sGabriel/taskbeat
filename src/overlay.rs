@@ -579,7 +579,28 @@ struct Overlay {
     /// Mixer de volume do card: aberto (alvo) e quanto já abriu (0..1).
     mixer_open: bool,
     mixer_anim: f32,
+    /// O que o usuário acabou de mudar no mixer, por app: vale por cima do que
+    /// a thread do mixer publica até ela alcançar. Sem isso, arrastando, uma
+    /// leitura de um instante antes voltava o slider ("vai e volta").
+    mix_hold: Vec<MixHold>,
+    /// App cujo slider do mixer está sendo arrastado.
+    mix_drag: Option<String>,
+    /// Barras como aparecem agora: sobem e descem suaves até o volume (e
+    /// enchem ao abrir, esvaziam ao fechar).
+    vol_fill: f32,
+    mix_fill: Vec<(String, f32)>,
 }
+
+/// Volume e/ou mudo que o usuário mudou num app do mixer, e quando.
+struct MixHold {
+    key: String,
+    volume: Option<f32>,
+    muted: Option<bool>,
+    at: Instant,
+}
+
+/// Quanto tempo o valor mudado no mixer vale por cima do publicado.
+const MIX_HOLD: Duration = Duration::from_millis(1200);
 
 /// Arrasto do widget pela barra: começa ao apertar; vira arrasto quando o
 /// mouse anda alguns pixels (antes disso, soltar é um clique normal).
@@ -724,6 +745,10 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         web_probed: None,
         mixer_open: false,
         mixer_anim: 0.0,
+        mix_hold: Vec::new(),
+        mix_drag: None,
+        vol_fill: 0.0,
+        mix_fill: Vec::new(),
         shared,
     };
     ov.refresh_launchers();
@@ -917,29 +942,49 @@ impl Overlay {
         }
     }
 
-    /// Volume (ou mudo) do app `i` do mixer: mostra na hora e manda para a thread.
-    fn set_mix(&mut self, i: usize, volume: Option<f32>, mute: Option<bool>) {
-        let key = {
-            let mut st = self.shared.mixer.lock().unwrap();
-            let Some(a) = st.apps.get_mut(i) else { return };
-            if let Some(v) = volume {
-                a.volume = v.clamp(0.0, 1.0);
-                // Mexer no volume tira o mudo, como no Mixer de Volume do Windows.
-                if a.muted && v > 0.0 {
-                    a.muted = false;
-                    self.shared.send_mixer(MixCmd::Mute(a.key.clone(), false));
-                }
+    /// O mixer como aparece: o publicado pela thread com o que o usuário
+    /// acabou de mudar por cima.
+    fn mixer_view(&self) -> crate::shared::MixerState {
+        let mut st = self.shared.mixer.lock().unwrap().clone();
+        for a in &mut st.apps {
+            if let Some(h) = self.mix_hold.iter().find(|h| h.key == a.key) {
+                a.volume = h.volume.unwrap_or(a.volume);
+                a.muted = h.muted.unwrap_or(a.muted);
             }
-            if let Some(m) = mute {
-                a.muted = m;
+        }
+        st
+    }
+
+    /// Chave, volume e mudo do app da linha `i` do mixer (como aparece).
+    fn mix_row(&self, i: usize) -> Option<(String, f32, bool)> {
+        self.mixer_view().apps.get(i).map(|a| (a.key.clone(), a.volume, a.muted))
+    }
+
+    /// Volume (ou mudo) do app `key`: mostra na hora e manda para a thread.
+    fn set_mix(&mut self, key: &str, volume: Option<f32>, mute: Option<bool>, now: Instant) {
+        let muted_now = self.mixer_view().apps.iter().find(|a| a.key == key).map(|a| a.muted).unwrap_or(false);
+        let i = match self.mix_hold.iter().position(|h| h.key == key) {
+            Some(i) => i,
+            None => {
+                self.mix_hold.push(MixHold { key: key.to_string(), volume: None, muted: None, at: now });
+                self.mix_hold.len() - 1
             }
-            a.key.clone()
         };
+        let h = &mut self.mix_hold[i];
+        h.at = now;
         if let Some(v) = volume {
-            self.shared.send_mixer(MixCmd::Volume(key.clone(), v));
+            let v = v.clamp(0.0, 1.0);
+            h.volume = Some(v);
+            self.shared.send_mixer(MixCmd::Volume(key.to_string(), v));
+            // Mexer no volume tira o mudo, como no Mixer de Volume do Windows.
+            if muted_now && v > 0.0 && mute.is_none() {
+                h.muted = Some(false);
+                self.shared.send_mixer(MixCmd::Mute(key.to_string(), false));
+            }
         }
         if let Some(m) = mute {
-            self.shared.send_mixer(MixCmd::Mute(key, m));
+            h.muted = Some(m);
+            self.shared.send_mixer(MixCmd::Mute(key.to_string(), m));
         }
         self.shared.mixer_version.fetch_add(1, Ordering::Relaxed);
     }
@@ -1423,8 +1468,8 @@ impl Overlay {
                     match self.drag {
                         Some(Hit::Launch(_)) => self.drag_x = x,
                         Some(Hit::MixVol(i)) => {
-                            if let Some(v) = Self::frac(x, cl.mix_track(i as usize, s)) {
-                                self.set_mix(i as usize, Some(v), None);
+                            if let (Some(v), Some(key)) = (Self::frac(x, cl.mix_track(i as usize, s)), self.mix_drag.clone()) {
+                                self.set_mix(&key, Some(v), None, now);
                             }
                         }
                         Some(Hit::Vol) => {
@@ -1467,9 +1512,12 @@ impl Overlay {
                                 self.drag_x = x;
                             }
                             Some(Hit::MixVol(i)) => {
-                                self.drag = Some(Hit::MixVol(i));
-                                if let Some(v) = Self::frac(x, cl.mix_track(i as usize, s)) {
-                                    self.set_mix(i as usize, Some(v), None);
+                                if let Some((key, _, _)) = self.mix_row(i as usize) {
+                                    self.drag = Some(Hit::MixVol(i));
+                                    self.mix_drag = Some(key.clone());
+                                    if let Some(v) = Self::frac(x, cl.mix_track(i as usize, s)) {
+                                        self.set_mix(&key, Some(v), None, now);
+                                    }
                                 }
                             }
                             _ => {}
@@ -1479,6 +1527,12 @@ impl Overlay {
                 Ev::Up(x, y, _) => {
                     let up = hit_at(x, y);
                     self.launch_press = None;
+                    if let Some(key) = self.mix_drag.take() {
+                        // O valor solto vale por mais um tempo, até a thread alcançar.
+                        if let Some(h) = self.mix_hold.iter_mut().find(|h| h.key == key) {
+                            h.at = now;
+                        }
+                    }
                     match self.drag.take() {
                         Some(Hit::Launch(i)) => self.drop_launcher(i, &cl.launch, x),
                         Some(Hit::Seek) => {
@@ -1501,9 +1555,8 @@ impl Overlay {
                 }
                 Ev::Wheel(d) => match self.hover_f {
                     Some(Hit::MixVol(i) | Hit::MixMute(i)) if win == Win::Flyout => {
-                        let cur = self.shared.mixer.lock().unwrap().apps.get(i as usize).map(|a| a.volume);
-                        if let Some(v) = cur {
-                            self.set_mix(i as usize, Some(((v + d as f32 / 120.0 * 0.04) * 50.0).round() / 50.0), None);
+                        if let Some((key, v, _)) = self.mix_row(i as usize) {
+                            self.set_mix(&key, Some(((v + d as f32 / 120.0 * 0.04) * 50.0).round() / 50.0), None, now);
                         }
                     }
                     _ => self.volume.step(d as f32 / 120.0 * 0.02),
@@ -1586,9 +1639,8 @@ impl Overlay {
                 self.flyout_last_hover = now;
             }
             Hit::MixMute(i) => {
-                let muted = self.shared.mixer.lock().unwrap().apps.get(i as usize).map(|a| a.muted);
-                if let Some(m) = muted {
-                    self.set_mix(i as usize, None, Some(!m));
+                if let Some((key, _, m)) = self.mix_row(i as usize) {
+                    self.set_mix(&key, None, Some(!m), now);
                 }
             }
             // Abre o app de música e fecha o card (a janela do app aparece).
@@ -1683,11 +1735,48 @@ impl Overlay {
             // O card fechou: o mixer fecha junto (abre recolhido da próxima vez).
             self.set_mixer(false);
             self.mixer_anim = 0.0;
+            self.vol_fill = 0.0;
+            self.mix_fill.clear();
+            self.mix_hold.clear();
+            self.mix_drag = None;
             return false;
         };
         // Mixer abrindo/fechando: o card cresce ou encolhe junto.
         let target = if self.mixer_open && self.cfg.card_mixer { 1.0 } else { 0.0 };
         self.mixer_anim += (target - self.mixer_anim).clamp(-dt / 0.24, dt / 0.24);
+        // Barras de volume: sobem e descem suaves até o valor (arrastando, na
+        // hora); enchem ao abrir o card ou o mixer e esvaziam ao fechar.
+        let drag_key = self.mix_drag.clone();
+        self.mix_hold.retain(|h| now - h.at < MIX_HOLD || drag_key.as_deref() == Some(&h.key));
+        let k = 1.0 - (-dt / 0.07).exp();
+        let ease = |cur: &mut f32, target: f32, snap: bool| -> bool {
+            if snap || (target - *cur).abs() < 0.002 {
+                *cur = target;
+                false
+            } else {
+                *cur += (target - *cur) * k;
+                true
+            }
+        };
+        let vol_target = if opening && !pb.muted { pb.volume } else { 0.0 };
+        let mut fills_moving = ease(&mut self.vol_fill, vol_target, self.drag == Some(Hit::Vol));
+        let mut mixer = self.mixer_view();
+        let mix_on = opening && self.mixer_open;
+        let mut fill = Vec::with_capacity(mixer.apps.len());
+        for a in &mixer.apps {
+            let target = if mix_on && !a.muted { a.volume } else { 0.0 };
+            let i = match self.mix_fill.iter().position(|(k, _)| *k == a.key) {
+                Some(i) => i,
+                None => {
+                    self.mix_fill.push((a.key.clone(), 0.0));
+                    self.mix_fill.len() - 1
+                }
+            };
+            fills_moving |= ease(&mut self.mix_fill[i].1, target, drag_key.as_deref() == Some(&a.key));
+            fill.push(self.mix_fill[i].1);
+        }
+        self.mix_fill.retain(|(k, _)| mixer.apps.iter().any(|a| &a.key == k));
+        mixer.fill = fill;
         let s = p.scale;
         let l = self.card_layout();
         let m = ui::SHADOW_MARGIN * s;
@@ -1706,7 +1795,7 @@ impl Overlay {
         // Parado (aberto, sem animação): só redesenha se algo mudou.
         let hint_on = self.hint.is_some_and(|(t, _)| (now - t).as_secs_f32() < 2.8);
         let mixer_moving = self.mixer_anim > 0.0 && self.mixer_anim < 1.0;
-        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || mixer_moving || (self.cfg.icon_anim && self.icons.running());
+        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || mixer_moving || fills_moving || (self.cfg.icon_anim && self.icons.running());
         let sig = FlyoutSig {
             place: (x, y, l.w.round() as i32, l.h.round() as i32),
             media: self.media_version,
@@ -1746,13 +1835,12 @@ impl Overlay {
             cv.clear();
             let pressed = self.pressed.filter(|(w, _)| *w == Win::Flyout).map(|(_, h)| h);
             let launchers = self.apps.clone();
-            let mixer = self.shared.mixer.lock().unwrap().clone();
             let f = ui::CardFrame {
                 cfg: &self.cfg,
                 colors: &self.colors,
                 media: &self.media,
                 theme: ui::card_theme(&self.cfg, &self.colors, &self.media),
-                it: Interact { hover: self.hover_f, pressed, drag: self.drag, drag_x: self.drag_x, fx: self.icons.fx(self.cfg.icon_anim), ..Default::default() },
+                it: Interact { hover: self.hover_f, pressed, drag: self.drag, drag_x: self.drag_x, fx: self.icons.fx(self.cfg.icon_anim), vol_fill: Some(self.vol_fill), ..Default::default() },
                 pb,
                 s,
                 backdrop: backdrop.as_deref(),
