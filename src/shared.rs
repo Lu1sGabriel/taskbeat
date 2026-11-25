@@ -182,6 +182,9 @@ pub enum MixCmd {
     DefaultChanged,
     /// Uma saída apareceu, sumiu ou mudou de estado.
     DevicesChanged,
+    /// Lê os apps uma vez em segundo plano (pouco depois de o app abrir),
+    /// para os nomes e ícones já estarem prontos na primeira abertura.
+    Warm,
 }
 
 /// Pedidos para a thread que aperta os botões da página do player.

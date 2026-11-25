@@ -19,8 +19,8 @@ use crate::appicon;
 use crate::audio::log;
 use crate::render::Image;
 use crate::shared::{MixApp, MixCmd, MixerState, OutDevice, Shared};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
@@ -33,7 +33,7 @@ use windows::Win32::Media::Audio::{
     MMDeviceEnumerator, eCommunications, eConsole, eMultimedia, eRender,
 };
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
-use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ};
+use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ};
 use windows::core::{BOOL, GUID, HSTRING, Interface, PCWSTR, Ref, Result, implement};
 
 pub fn spawn(shared: Arc<Shared>) {
@@ -46,7 +46,12 @@ pub fn spawn(shared: Arc<Shared>) {
         crate::system::background_thread();
         // Avisos das saídas (padrão trocada, saída nova ou removida).
         let watch = DeviceWatch::register(tx.clone());
-        let mut m = Mixer { tx, open: None, icons: HashMap::new(), names: HashMap::new() };
+        let mut m = Mixer { names: Names::new(tx.clone()), tx: tx.clone(), open: None };
+        // Pouco depois de o app abrir, lê os apps uma vez (nomes e ícones prontos).
+        let _ = std::thread::Builder::new().name("mixer-warm".into()).spawn(move || {
+            std::thread::sleep(Duration::from_secs(8));
+            let _ = tx.send(MixCmd::Warm);
+        });
         while shared.is_running() {
             // Aberto: confere a cada 10 s (os avisos cobrem o resto); fechado,
             // só espera um pedido.
@@ -81,6 +86,12 @@ pub fn spawn(shared: Arc<Shared>) {
                     }
                     MixCmd::Close => m.close(),
                     MixCmd::Refresh => publish = true,
+                    MixCmd::Warm if m.open.is_none() => {
+                        m.open();
+                        let _ = m.read();
+                        m.close();
+                    }
+                    MixCmd::Warm => {}
                     // Saída padrão trocada ou saídas mudaram: abre de novo nelas.
                     MixCmd::DefaultChanged | MixCmd::DevicesChanged => reopen |= m.open.is_some(),
                     MixCmd::SetDevice(id) => match set_default_output(&id) {
@@ -303,9 +314,88 @@ struct Open {
 struct Mixer {
     tx: Sender<MixCmd>,
     open: Option<Open>,
-    /// Ícones e nomes dos apps já lidos (pela chave do app).
-    icons: HashMap<String, Option<Arc<Image>>>,
-    names: HashMap<String, String>,
+    /// Nomes e ícones dos apps (lidos à parte).
+    names: Names,
+}
+
+/// Nome e ícone de um app.
+type Described = (String, Option<Arc<Image>>);
+
+/// Nomes e ícones dos apps, lidos numa thread STA à parte: o shell (pasta
+/// "Aplicativos", ícones) é lento numa thread MTA como a do mixer, que não
+/// pode esperar. Até chegar, o app aparece com um nome provisório (o do
+/// pacote ou do .exe) e sem ícone; quando chega, o mixer relê.
+struct Names {
+    tx: Sender<(String, String)>,
+    done: Arc<Mutex<HashMap<String, Described>>>,
+    asked: HashSet<String>,
+}
+
+impl Names {
+    fn new(refresh: Sender<MixCmd>) -> Names {
+        let (tx, rx) = channel::<(String, String)>();
+        let done: Arc<Mutex<HashMap<String, Described>>> = Arc::new(Mutex::new(HashMap::new()));
+        let out = done.clone();
+        let _ = std::thread::Builder::new().name("mixer-names".into()).spawn(move || {
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            }
+            crate::system::background_thread();
+            while let Ok((key, shown)) = rx.recv() {
+                let d = describe(&key, &shown);
+                out.lock().unwrap_or_else(|e| e.into_inner()).insert(key, d);
+                let _ = refresh.send(MixCmd::Refresh);
+            }
+        });
+        Names { tx, done, asked: HashSet::new() }
+    }
+
+    /// Nome e ícone do app `key` (provisórios enquanto não foram lidos).
+    fn get(&mut self, key: &str, shown: &str) -> Described {
+        if let Some(d) = self.done.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
+            return d.clone();
+        }
+        if self.asked.insert(key.to_string()) {
+            let _ = self.tx.send((key.to_string(), shown.to_string()));
+        }
+        (provisional_name(key, shown), None)
+    }
+}
+
+/// Nome e ícone do app `key`: o do pacote (pasta "Aplicativos"), o nome que
+/// a própria sessão dá ("RemoteApp Audio") ou a descrição do .exe.
+fn describe(key: &str, shown: &str) -> Described {
+    match key.strip_prefix("app:") {
+        Some(aumid) => {
+            let (n, i) = appicon::from_apps_folder(aumid);
+            (n.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| provisional_name(key, shown)), i.map(Arc::new))
+        }
+        // Só o nome do processo (sem o caminho): sem ícone.
+        None if key.starts_with("exe:") || key.starts_with("pid:") => (provisional_name(key, shown), None),
+        None => {
+            let name = if !shown.is_empty() && !shown.starts_with('@') { shown.to_string() } else { app_name(key) };
+            (name, appicon::exe_icon(key).map(Arc::new))
+        }
+    }
+}
+
+/// Nome sem ler nada: o do pacote ("5319275A.WhatsAppDesktop_…!App" →
+/// "WhatsAppDesktop"), o que a sessão dá ou o do arquivo do .exe.
+fn provisional_name(key: &str, shown: &str) -> String {
+    if let Some(aumid) = key.strip_prefix("app:") {
+        let family = aumid.split('!').next().unwrap_or(aumid);
+        let name = family.split('_').next().unwrap_or(family);
+        return name.rsplit('.').next().unwrap_or(name).to_string();
+    }
+    if !shown.is_empty() && !shown.starts_with('@') {
+        return shown.to_string();
+    }
+    let stem = match key.strip_prefix("exe:") {
+        Some(name) => name.to_string(),
+        None => std::path::Path::new(key).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+    };
+    let mut c = stem.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
 impl Mixer {
@@ -362,6 +452,8 @@ impl Mixer {
         let Some(o) = self.open.as_mut() else { return MixerState::default() };
         // (sessão, volume, tocando, sistema, chave, nome dado pela sessão)
         let mut list: Vec<(IAudioSessionControl2, ISimpleAudioVolume, bool, bool, String, String)> = Vec::new();
+        // Processos (só se algum som vier do WebView2: ver `app_key`).
+        let mut procs: Option<Vec<crate::audio::process::Proc>> = None;
         unsafe {
             for d in &o.devs {
                 let Ok(en) = d.mgr.GetSessionEnumerator() else { continue };
@@ -374,7 +466,7 @@ impl Mixer {
                     let (Ok(ctl2), Ok(vol)) = (ctl.cast::<IAudioSessionControl2>(), ctl.cast::<ISimpleAudioVolume>()) else { continue };
                     let system = ctl2.IsSystemSoundsSession().0 == 0;
                     let pid = ctl2.GetProcessId().unwrap_or(0);
-                    let key = if system { "system".to_string() } else { app_key(pid) };
+                    let key = if system { "system".to_string() } else { app_key(pid, &mut procs) };
                     let shown = if system { String::new() } else { ctl.GetDisplayName().map(|p| take_str(p.0)).unwrap_or_default() };
                     list.push((ctl2, vol, state == AudioSessionStateActive, system, key, shown));
                 }
@@ -415,7 +507,7 @@ impl Mixer {
                     a.active |= *active;
                 }
                 None => {
-                    let (name, icon) = if *system { (String::new(), None) } else { self.describe(key, shown) };
+                    let (name, icon) = if *system { (String::new(), None) } else { self.names.get(key, shown) };
                     apps.push(MixApp { key: key.clone(), name, icon, volume: v, muted: mute, active: *active, system: *system });
                 }
             }
@@ -424,26 +516,6 @@ impl Mixer {
         // tocando e os outros, por nome.
         apps.sort_by_key(|a| (!a.system, !a.active, a.name.to_lowercase()));
         MixerState { device, device_id, devices, apps, fill: Vec::new() }
-    }
-
-    /// Nome e ícone do app `key`: o do pacote (pasta "Aplicativos"), o nome que
-    /// a própria sessão dá ("RemoteApp Audio") ou a descrição do .exe.
-    fn describe(&mut self, key: &str, shown: &str) -> (String, Option<Arc<Image>>) {
-        if !self.names.contains_key(key) {
-            let (name, icon) = match key.strip_prefix("app:") {
-                Some(aumid) => {
-                    let (n, i) = appicon::from_apps_folder(aumid);
-                    (n.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| aumid.split('!').next().unwrap_or(aumid).to_string()), i.map(Arc::new))
-                }
-                None => {
-                    let name = if !shown.is_empty() && !shown.starts_with('@') { shown.to_string() } else { app_name(key) };
-                    (name, appicon::exe_icon(key).map(Arc::new))
-                }
-            };
-            self.names.insert(key.to_string(), name);
-            self.icons.insert(key.to_string(), icon);
-        }
-        (self.names[key].clone(), self.icons.get(key).cloned().flatten())
     }
 }
 
@@ -454,12 +526,53 @@ impl Drop for Mixer {
 }
 
 /// Chave do app de um processo: o pacote dele, se tiver (apps da Store e o
-/// WebView2 que eles abrem), ou o caminho do .exe.
-fn app_key(pid: u32) -> String {
-    if let Some(aumid) = crate::audio::process::package_aumid(pid) {
+/// WebView2 que eles abrem), ou o caminho do .exe. O som de um WebView2 sem
+/// pacote vai para o app dono dele (o primeiro processo acima que não é
+/// WebView2), senão todos esses apps virariam uma linha só.
+fn app_key(pid: u32, procs: &mut Option<Vec<crate::audio::process::Proc>>) -> String {
+    use crate::audio::process;
+    if let Some(aumid) = process::package_aumid(pid) {
         return format!("app:{aumid}");
     }
-    appicon::exe_path(pid).unwrap_or_else(|| format!("pid:{pid}"))
+    let path = appicon::exe_path(pid);
+    if path.as_deref().is_some_and(is_webview) {
+        let owner = webview_owner(pid, procs.get_or_insert_with(process::processes));
+        if owner != pid {
+            if let Some(aumid) = process::package_aumid(owner) {
+                return format!("app:{aumid}");
+            }
+            if let Some(p) = appicon::exe_path(owner) {
+                return p;
+            }
+        }
+    }
+    // Sem o caminho (processo de serviço ou elevado, como o do Parsec): o
+    // nome do processo, que a lista de processos dá sem pedir acesso.
+    path.unwrap_or_else(|| match procs.get_or_insert_with(process::processes).iter().find(|p| p.pid == pid) {
+        Some(p) => format!("exe:{}", p.stem),
+        None => format!("pid:{pid}"),
+    })
+}
+
+/// O .exe é o do WebView2.
+fn is_webview(path: &str) -> bool {
+    std::path::Path::new(path).file_stem().is_some_and(|s| s.eq_ignore_ascii_case("msedgewebview2"))
+}
+
+/// O primeiro processo acima de `pid` que não é WebView2 (o app que o abriu).
+fn webview_owner(pid: u32, procs: &[crate::audio::process::Proc]) -> u32 {
+    let mut cur = pid;
+    for _ in 0..8 {
+        let Some(p) = procs.iter().find(|p| p.pid == cur) else { break };
+        if p.stem != "msedgewebview2" {
+            return cur;
+        }
+        if p.parent == 0 || p.parent == cur {
+            break;
+        }
+        cur = p.parent;
+    }
+    pid
 }
 
 /// Texto de um PWSTR do COM (e libera a memória dele).
@@ -531,13 +644,72 @@ fn file_description(path: &str) -> Option<String> {
 #[cfg(test)]
 pub fn snapshot() -> MixerState {
     let (tx, _rx) = channel();
-    let mut m = Mixer { tx, open: None, icons: HashMap::new(), names: HashMap::new() };
+    let mut m = Mixer { names: Names::new(tx.clone()), tx, open: None };
     m.open();
+    let first = m.read();
+    m.wait_names(&first, Duration::from_secs(3));
     m.read()
 }
 
 #[cfg(test)]
+impl Mixer {
+    /// Espera a thread dos nomes terminar os apps de `st` (testes e capturas).
+    fn wait_names(&self, st: &MixerState, max: Duration) {
+        let t = Instant::now();
+        while t.elapsed() < max {
+            let done = self.names.done.lock().unwrap();
+            if st.apps.iter().filter(|a| !a.system).all(|a| done.contains_key(&a.key)) {
+                return;
+            }
+            drop(done);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use crate::audio::process::Proc;
+
+    fn p(pid: u32, parent: u32, stem: &str) -> Proc {
+        Proc { pid, parent, stem: stem.into() }
+    }
+
+    /// O som de um WebView2 sem pacote vai para o app dono dele (o primeiro
+    /// processo acima que não é WebView2); os outros ficam no próprio .exe.
+    #[test]
+    fn webview2_agrupa_pelo_app_dono() {
+        let procs = [
+            p(10, 1, "meuapp"),
+            p(20, 10, "msedgewebview2"),
+            p(30, 20, "msedgewebview2"),
+            p(40, 1, "outroapp"),
+            p(50, 40, "msedgewebview2"),
+            p(60, 60, "msedgewebview2"),
+        ];
+        assert_eq!(super::webview_owner(30, &procs), 10);
+        assert_eq!(super::webview_owner(20, &procs), 10);
+        assert_eq!(super::webview_owner(50, &procs), 40);
+        // Dois apps com WebView2: linhas diferentes.
+        assert_ne!(super::webview_owner(30, &procs), super::webview_owner(50, &procs));
+        // Não é WebView2: ele mesmo. Sem dono conhecido (ou laço): ele mesmo.
+        assert_eq!(super::webview_owner(10, &procs), 10);
+        assert_eq!(super::webview_owner(60, &procs), 60);
+        assert_eq!(super::webview_owner(99, &procs), 99);
+        assert!(super::is_webview(r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application\158.0\msedgewebview2.exe"));
+        assert!(!super::is_webview(r"C:\Program Files\Brave\brave.exe"));
+    }
+
+    /// Nome provisório (antes de a thread dos nomes ler o de verdade).
+    #[test]
+    fn nome_provisorio() {
+        assert_eq!(super::provisional_name("app:5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App", ""), "WhatsAppDesktop");
+        assert_eq!(super::provisional_name("app:Claude_pzs8sxrjxfjjc!Claude", ""), "Claude");
+        assert_eq!(super::provisional_name(r"C:\Program Files (x86)\Steam\steam.exe", ""), "Steam");
+        assert_eq!(super::provisional_name(r"C:\x\mstsc.exe", "RemoteApp Audio"), "RemoteApp Audio");
+        assert_eq!(super::provisional_name("exe:parsecd", ""), "Parsecd");
+    }
+
     /// Lista os apps do mixer desta máquina (sem mexer em nada).
     /// `cargo test --release mixer_here -- --ignored --nocapture`
     #[test]
@@ -547,11 +719,15 @@ mod tests {
             let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
         }
         let (tx, _rx) = std::sync::mpsc::channel();
-        let mut m = super::Mixer { tx, open: None, icons: Default::default(), names: Default::default() };
+        let mut m = super::Mixer { names: super::Names::new(tx.clone()), tx, open: None };
         let t = std::time::Instant::now();
         m.open();
+        let first = m.read();
+        let t_first = t.elapsed();
+        m.wait_names(&first, std::time::Duration::from_secs(5));
+        let t_names = t.elapsed();
         let st = m.read();
-        println!("dispositivo: {} ({:?})", st.device, t.elapsed());
+        println!("dispositivo: {} (primeira leitura em {t_first:?}; nomes e ícones prontos em {t_names:?})", st.device);
         for a in &st.apps {
             println!("  {:<28} vol={:.2} mudo={} tocando={} sistema={} ícone={} [{}]", a.name, a.volume, a.muted, a.active, a.system, a.icon.is_some(), a.key);
         }
