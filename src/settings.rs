@@ -146,6 +146,8 @@ enum Key {
     Reset,
     Licenses,
     About,
+    /// Situação da extensão do navegador (só texto, muda com a conexão).
+    BrowserExt,
 }
 
 #[derive(Clone, Copy)]
@@ -296,6 +298,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E7C4}", title: "Onde ficam os atalhos", desc: "Embaixo do card, dentro do widget na barra ou nos dois", key: Key::LauncherPlace, kind: Kind::Segmented(LAUNCHER_PLACES) },
             Row { icon: "\u{E8FD}", title: "Apps nos atalhos", desc: "Ligue só os que você quer; arraste para mudar a ordem (no card também dá para arrastar os ícones)", key: Key::LauncherApps, kind: Kind::AppList },
             Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "No YouTube Music do navegador o Taskbeat aperta os botões da própria página e mostra o estado deles (a bolinha embaixo); em outros sites o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
+            Row { icon: "\u{E774}", title: "Extensão do navegador", desc: "", key: Key::BrowserExt, kind: Kind::Info },
         ],
     },
     Page {
@@ -375,6 +378,16 @@ const PAGES: &[Page] = &[
         ],
     },
 ];
+
+/// Texto da linha "Extensão do navegador": conectada (e em quais) ou não.
+fn browser_ext_status() -> String {
+    let on = crate::webext::connected();
+    if on.is_empty() {
+        tr("Não conectada. Opcional: com a extensão do Taskbeat no navegador (pasta extension), o aleatório e o repetir do YouTube Music vêm da própria página").to_string()
+    } else {
+        format!("{} ({}): {}", tr("Conectada"), on.join(", "), tr("o aleatório e o repetir do YouTube Music vêm da própria página"))
+    }
+}
 
 fn idx<T: PartialEq>(list: &[T], v: T) -> i32 {
     list.iter().position(|x| *x == v).unwrap_or(0) as i32
@@ -490,7 +503,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::Autostart => AUTOSTART.with(|a| a.get()) as i32,
         Key::Fullscreen => c.hide_on_fullscreen as i32,
         Key::Language => idx(LANG_V, c.language),
-        Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => 0,
+        Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::BrowserExt => 0,
     }
 }
 
@@ -583,7 +596,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
             c.language = pick(LANG_V, i);
             crate::i18n::apply(c.language);
         }
-        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => {}
+        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::BrowserExt => {}
     }
 }
 
@@ -1349,6 +1362,8 @@ impl Ui {
             extra: match kind {
                 Kind::AppList => self.app_list_sig(ri, cfg),
                 Kind::Color => self.picker_sig(ri, cfg, key),
+                // Redesenha quando a extensão conecta ou desconecta.
+                Kind::Info if key == Key::BrowserExt => crate::webext::connected().join(",").bytes().fold(1u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)),
                 _ => 0,
             },
         }
@@ -1685,7 +1700,14 @@ impl Ui {
         let tx = r.card.x + 60.0 * s;
         let tw = if matches!(kind, Kind::Info | Kind::AppList) { r.card.right() - tx - 20.0 * s } else { r.ctl.x - tx - 24.0 * s };
         self.label(cv, tr(title), Font::Body, tx, r.card.y + 12.0 * s, tw, 21.0 * s, fg, en);
-        self.label(cv, tr(desc), Font::Caption, tx, r.card.y + 34.0 * s, tw, 19.0 * s, fg, 0.62 * en);
+        let ext_desc;
+        let desc = if *key == Key::BrowserExt {
+            ext_desc = browser_ext_status();
+            ext_desc.as_str()
+        } else {
+            tr(desc)
+        };
+        self.label(cv, desc, Font::Caption, tx, r.card.y + 34.0 * s, tw, 19.0 * s, fg, 0.62 * en);
 
         let v = st.v;
         match kind {
