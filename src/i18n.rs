@@ -465,6 +465,8 @@ static T: &[[&str; 4]] = &[
     ["VOLUME POR APP","VOLUME PER APP", "VOLUMEN POR APP", "LAUTSTÄRKE PRO APP"],
     ["Nenhum app com som agora", "No app with sound right now", "Ninguna app con sonido ahora", "Gerade keine App mit Ton"],
     ["Sons do sistema", "System sounds", "Sonidos del sistema", "Systemklänge"],
+    ["Abrir mixer de volume", "Open volume mixer", "Abrir mezclador de volumen", "Lautstärkemixer öffnen"],
+    ["Fechar mixer de volume", "Close volume mixer", "Cerrar mezclador de volumen", "Lautstärkemixer schließen"],
     ["Cor dos controles","Controls color", "Color de los controles", "Farbe der Steuerelemente"],
     ["Aleatório, anterior, play, próximo e repetir; o branco fica escuro sobre fundos claros", "Shuffle, previous, play, next and repeat; white turns dark on light backgrounds", "Aleatorio, anterior, reproducir, siguiente y repetir; el blanco se oscurece sobre fondos claros", "Zufall, Zurück, Wiedergabe, Weiter und Wiederholen; Weiß wird auf hellen Hintergründen dunkel"],
     ["Ícones, play e botões ligados do card; o branco fica escuro sobre fundos claros", "The card's icons, play and active buttons; white turns dark on light backgrounds", "Iconos, reproducir y botones activos de la tarjeta; el blanco se oscurece sobre fondos claros", "Symbole, Wiedergabe und aktive Tasten der Karte; Weiß wird auf hellen Hintergründen dunkel"],

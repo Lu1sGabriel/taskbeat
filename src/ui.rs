@@ -84,6 +84,9 @@ pub struct Interact {
     /// Volume como a barra mostra agora (sobe e desce suave até o valor);
     /// `None`: o próprio volume.
     pub vol_fill: Option<f32>,
+    /// Opacidade da dica (tooltip) do botão sob o mouse: aparece depois de
+    /// um instante parado em cima, como as dicas do Windows.
+    pub tip: f32,
 }
 
 impl Interact {
@@ -2130,7 +2133,30 @@ fn mixer_section(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
             hover_bg(cv, b.inset(2.0 * s), b.h / 2.0, th, f.it.pressed == Some(Hit::MixToggle));
         }
         chevron(cv, b, l.mixer_open, th.fg, if hot { 0.9 } else { 0.55 }, s);
+        if hot && f.it.tip > 0.0 {
+            let msg = crate::i18n::tr(if l.mixer_open > 0.5 { "Fechar mixer de volume" } else { "Abrir mixer de volume" });
+            tooltip(cv, tr, msg, b, th, f.it.tip, s);
+        }
     }
+}
+
+/// Dica no estilo do Windows 11 acima de `anchor` (dentro do canvas), com
+/// opacidade `a`: aparece subindo um pouco.
+fn tooltip(cv: &mut Canvas, tr: &mut TextRenderer, msg: &str, anchor: RectF, th: &Theme, a: f32, s: f32) {
+    let h = 28.0 * s;
+    let cw = cv.w as f32;
+    let tw = tr.mask(msg, Font::Caption, (cw - 60.0 * s) as i32, h as i32, Align::Left).used_width();
+    let w = (tw + 22.0 * s).round().min(cw - 16.0 * s);
+    let x = (anchor.cx() - w / 2.0).clamp(8.0 * s, cw - 8.0 * s - w);
+    let y = anchor.y - h - 4.0 * s + (1.0 - ease_enter(a)) * 4.0 * s;
+    let r = RectF::new(x.round(), y.round(), w, h);
+    let radius = 6.0 * s;
+    cv.drop_shadow(r, radius, 12.0 * s, 3.0 * s, (if th.dark { 0.45 } else { 0.18 }) * a);
+    cv.fill_round(r, radius, if th.dark { [0.17, 0.17, 0.18] } else { [0.985, 0.985, 0.99] }, a);
+    let line: Rgb = if th.dark { [1.0; 3] } else { [0.0; 3] };
+    cv.stroke_round(r, radius, s, line, (if th.dark { 0.12 } else { 0.10 }) * a);
+    let fg: Rgb = if th.dark { [1.0; 3] } else { [0.1, 0.1, 0.1] };
+    text_center(cv, tr, msg, Font::Caption, r, fg, 0.92 * a);
 }
 
 /// Linha de atalhos: ícone de cada app de música; o nome do que está sob o

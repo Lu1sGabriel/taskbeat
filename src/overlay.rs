@@ -589,6 +589,9 @@ struct Overlay {
     /// enchem ao abrir, esvaziam ao fechar).
     vol_fill: f32,
     mix_fill: Vec<(String, f32)>,
+    /// Dica do botão sob o mouse no card: qual, desde quando e se já foi
+    /// clicado (aí some até o mouse sair, como as dicas do Windows).
+    tip: Option<(Hit, Instant, bool)>,
 }
 
 /// Volume e/ou mudo que o usuário mudou num app do mixer, e quando.
@@ -651,6 +654,8 @@ struct FlyoutSig {
     volume: (u16, bool),
     /// Mixer: o que ele mostra e quanto está aberto.
     mixer: (u64, u16),
+    /// Opacidade da dica do botão sob o mouse.
+    tip: u8,
 }
 
 fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
@@ -749,6 +754,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         mix_drag: None,
         vol_fill: 0.0,
         mix_fill: Vec::new(),
+        tip: None,
         shared,
     };
     ov.refresh_launchers();
@@ -1495,6 +1501,10 @@ impl Overlay {
                 Ev::Down(x, y, _) => {
                     let h = hit_at(x, y);
                     self.pressed = h.map(|h| (win, h));
+                    // Apertou: a dica some (e só volta depois de o mouse sair).
+                    if let Some(t) = &mut self.tip {
+                        t.2 = true;
+                    }
                     if win == Win::Flyout {
                         match h {
                             Some(Hit::Vol) => {
@@ -1777,6 +1787,18 @@ impl Overlay {
         }
         self.mix_fill.retain(|(k, _)| mixer.apps.iter().any(|a| &a.key == k));
         mixer.fill = fill;
+        // Dica da setinha do mixer: quase na hora (um quarto de segundo em cima).
+        let tip_hit = self.hover_f.filter(|h| *h == Hit::MixToggle && self.drag.is_none());
+        match (tip_hit, self.tip) {
+            (Some(h), Some((t, _, _))) if t == h => {}
+            (Some(h), _) => self.tip = Some((h, now, false)),
+            (None, _) => self.tip = None,
+        }
+        let tip_a = match self.tip {
+            Some((_, t0, false)) => (((now - t0).as_secs_f32() - 0.25) / 0.12).clamp(0.0, 1.0),
+            _ => 0.0,
+        };
+        let tip_moving = matches!(self.tip, Some((_, _, false))) && tip_a < 1.0;
         let s = p.scale;
         let l = self.card_layout();
         let m = ui::SHADOW_MARGIN * s;
@@ -1795,7 +1817,7 @@ impl Overlay {
         // Parado (aberto, sem animação): só redesenha se algo mudou.
         let hint_on = self.hint.is_some_and(|(t, _)| (now - t).as_secs_f32() < 2.8);
         let mixer_moving = self.mixer_anim > 0.0 && self.mixer_anim < 1.0;
-        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || mixer_moving || fills_moving || (self.cfg.icon_anim && self.icons.running());
+        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || mixer_moving || fills_moving || tip_moving || (self.cfg.icon_anim && self.icons.running());
         let sig = FlyoutSig {
             place: (x, y, l.w.round() as i32, l.h.round() as i32),
             media: self.media_version,
@@ -1812,6 +1834,7 @@ impl Overlay {
             clock: pb.pos as i64,
             volume: ((pb.volume * 1000.0) as u16, pb.muted),
             mixer: (self.shared.mixer_version.load(Ordering::Relaxed), (self.mixer_anim * 1000.0) as u16),
+            tip: (tip_a * 255.0) as u8,
         };
         if !moving && self.flyout.shown && self.flyout_sig == Some(sig) {
             return false;
@@ -1840,7 +1863,7 @@ impl Overlay {
                 colors: &self.colors,
                 media: &self.media,
                 theme: ui::card_theme(&self.cfg, &self.colors, &self.media),
-                it: Interact { hover: self.hover_f, pressed, drag: self.drag, drag_x: self.drag_x, fx: self.icons.fx(self.cfg.icon_anim), vol_fill: Some(self.vol_fill), ..Default::default() },
+                it: Interact { hover: self.hover_f, pressed, drag: self.drag, drag_x: self.drag_x, fx: self.icons.fx(self.cfg.icon_anim), vol_fill: Some(self.vol_fill), tip: tip_a, ..Default::default() },
                 pb,
                 s,
                 backdrop: backdrop.as_deref(),
