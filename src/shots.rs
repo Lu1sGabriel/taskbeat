@@ -742,3 +742,31 @@ fn card_launchers() {
     });
     save_png("widget-launchers.png", img.0, img.1, &img.2);
 }
+
+/// Card e widget para as imagens da Chrome Web Store (aleatório ligado e
+/// repetir "tudo", como a extensão mostra). Fundo transparente; a montagem
+/// fica em `extension/store/images` (ver `extension/store/PUBLICAR.md`).
+/// `$env:TASKBEAT_SHOTS_DIR="…"; cargo test --release store_parts -- --ignored`
+#[test]
+#[ignore]
+fn store_parts() {
+    let cfg = Config { taskbar_shuffle_repeat: true, ..Config::default() };
+    let media = MediaInfo { shuffle: true, repeat: 2, ..ui::sample_media() };
+    let pb = Playback { shuffle: true, repeat: 2, ..playback(&media) };
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let c = colors(&cfg, &media);
+    let cl = CLayout::build(S, &cfg, true);
+    let card = render(cl.w, cl.h, |cv| {
+        let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
+        ui::draw_card(cv, &mut tr, &cl, &f);
+    });
+    save_png("store-card.png", card.0, card.1, &card.2);
+    let wh = 40.0 * S;
+    let wl = WLayout::build(S, wh, &cfg, true, false);
+    let widget = render(wl.width, wh, |cv| {
+        let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
+        ui::draw_widget(cv, &mut tr, &wl, &f);
+    });
+    save_png("store-widget.png", widget.0, widget.1, &widget.2);
+}

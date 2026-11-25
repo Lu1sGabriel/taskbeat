@@ -5,19 +5,24 @@ do YouTube Music no navegador (numa aba ou no app instalado pelo navegador) e
 comanda os dois, lendo a própria página. Sem ela, o Taskbeat continua usando a
 acessibilidade do Windows (UI Automation) e a cor do botão do aleatório.
 
-## Instalar (sem a loja)
+## Instalar
 
-1. Instale ou atualize o Taskbeat pelo `Taskbeat-Setup`: o instalador registra o
-   programa que a extensão chama (Native Messaging).
-2. No navegador, abra `brave://extensions` (ou `chrome://extensions`,
-   `edge://extensions`), ligue o **Modo do desenvolvedor** e clique em
-   **Carregar sem compactação**. Escolha esta pasta `extension`.
-3. Pronto: as abas do YouTube Music já abertas recebem a extensão na hora. Em
-   **Configurações › Card expandido › Extensão do navegador**, o Taskbeat mostra
-   se ela está conectada.
+Primeiro instale ou atualize o Taskbeat pelo `Taskbeat-Setup`: o instalador registra
+o programa que a extensão chama (Native Messaging). Depois, no Taskbeat, abra
+**Configurações › Card expandido › Extensão do navegador** e clique em **Instalar
+extensão**. A mesma linha mostra quando ela conecta. As abas do YouTube Music já
+abertas recebem a extensão na hora.
 
-O ID da extensão é fixo (`abofmfclmpmmbgecemcglhcklnmcapfh`, pela chave pública
-do `manifest.json`), e só ele pode abrir o programa do Taskbeat.
+Enquanto a extensão não está na Chrome Web Store, o botão traz até aqui. Para
+instalar sem a loja:
+
+1. No navegador, abra `brave://extensions` (ou `chrome://extensions`,
+   `edge://extensions`) e ligue o **Modo do desenvolvedor**.
+2. Clique em **Carregar sem compactação** e escolha esta pasta `extension`.
+
+Carregada assim, o ID é fixo (`abofmfclmpmmbgecemcglhcklnmcapfh`, pela chave
+pública do `manifest.json`), e só ele (e, depois de publicada, o da loja) pode abrir
+o programa do Taskbeat. Publicar: [`store/PUBLICAR.md`](store/PUBLICAR.md).
 
 ## Como funciona
 
