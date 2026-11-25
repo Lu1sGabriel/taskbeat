@@ -23,10 +23,11 @@ No Mac, o mesmo app vive no **notch do MacBook** ([veja a seção do Mac](#mac-m
 </p>
 
 **Widget da barra**: tudo dentro do mesmo fundo — capa, música, indicador e, se quiser, os
-botões (aleatório, anterior, play, próximo, repetir), em formato arredondado, pílula ou reto:
+botões (aleatório, anterior, play, próximo, repetir), em formato arredondado, pílula ou reto,
+com fundo discreto ou tomado pela cor da capa (gradiente ou a própria capa desfocada):
 
 <p align="center">
-  <img src="docs/screenshots/taskbar-widgets.png" width="420" alt="Quatro variações do widget da barra: só a música; com os botões (padrão); em pílula com aleatório e repetir; reto e neutro, com o play só no ícone">
+  <img src="docs/screenshots/taskbar-widgets.png" width="420" alt="Seis variações do widget da barra: só a música; com os botões (padrão); em pílula com aleatório e repetir; reto e neutro, com os ícones de contorno; com o gradiente da capa; em pílula com a capa desfocada">
 </p>
 
 **Card expandido** em três estilos: capa desfocada, cor do álbum e acrílico (desfoca o que está atrás).
@@ -66,28 +67,46 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   opcionais), com separador, play preenchido ou só ícone e formato do fundo
   (arredondado, pílula, reto); dá para deixá-los só no card. Dá para escolher a
   segunda linha (artista, artista · álbum, álbum ou tempo), o tamanho da capa e
-  do texto, a cor do fundo (neutra, da capa ou de destaque), a opacidade e o
-  contorno. Ao trocar de música, o título novo desliza e a capa nova aparece
-  suavemente (opcional). Com o botão de Widgets do Windows (o do tempo) na barra,
-  o widget fica ao lado dele em vez de por cima, com a barra centralizada ou
+  do texto, a cor do fundo (neutra, da capa ou de destaque, com opacidade), e
+  dois fundos fortes: **gradiente da capa** (tons profundos na barra escura,
+  pastéis na clara, com brilho atrás da capa) e **capa desfocada**, com
+  intensidade própria; o texto e os ícones se ajustam para ficar legíveis, e o
+  fundo troca suavemente junto com a música. Ao trocar de música, o título novo
+  desliza e a capa nova aparece suavemente (opcional). **Arraste o widget** pela
+  barra para mudar o lugar dele (clique simples continua abrindo o card; nunca
+  passa da bandeja nem fica sobre o botão Iniciar; "Restaurar posição" volta ao
+  lado do relógio). Com o botão de Widgets do Windows (o do tempo) na barra, o
+  widget fica ao lado dele em vez de por cima, com a barra centralizada ou
   alinhada à esquerda. No fundo em pílula, a capa fica sempre dentro da ponta
   arredondada.
+- **Ícones preenchidos**: play, pausa, pular, aleatório, repetir e volume
+  desenhados como formas cheias e arredondadas (no card e na barra), no lugar
+  dos ícones finos de contorno; dá para voltar ao contorno do Fluent (Card
+  expandido > Estilo dos ícones).
 - **Card expandido** (clique na música): capa grande, aleatório / anterior / play /
   próximo / repetir, barra de progresso arrastável e volume. O app de origem
   (Spotify, Brave…) fica escondido por padrão; com a opção "Mostrar app de
   origem", aparece como selo (ícone + nome) no card e no "A seguir", e como um
   selo recortado no canto da capa na barra.
-  Fundo **capa desfocada**, **cor do álbum** ou **acrílico** (vidro fosco que
-  desfoca o que está atrás); layout horizontal ou vertical; tema; cor de destaque
-  (capa ou Windows); cantos; formato do play. Mostra também o álbum, quando o
-  player informa. Aleatório e repetir aparecem sempre (apagados nos players que
-  não deixam mudar pelo Windows, como os navegadores; clicar traz o player para a
-  frente, para usar o botão dele)
-  ou só quando o player permite.
-- **Atalhos dos apps de música** (opcional, ligado por padrão): embaixo do card,
-  o ícone de cada player instalado (Spotify, YouTube Music instalado pelo
-  navegador, Apple Music, Deezer, TIDAL, Amazon Music, Media Player, VLC,
-  foobar2000…) para abrir com um clique, inclusive quando nada está tocando.
+  Fundo **capa desfocada** (com luz da cor da capa, vinheta e granulado), **cor
+  do álbum** ou **acrílico** (vidro fosco que desfoca o que está atrás); play com
+  brilho na cor de destaque; mini **barras de áudio** ao lado do título (Barras
+  no card); layout horizontal ou vertical; tema; cor de destaque (capa ou
+  Windows); cantos; formato do play. Mostra também o álbum, quando o player
+  informa. Aleatório e repetir aparecem sempre ou só quando o player permite. No
+  **YouTube Music do navegador** (app instalado pelo Brave/Chrome/Edge ou aba),
+  que não deixa o Windows mudar isso, o Taskbeat aperta os botões da própria
+  página, sem trazer a janela para a frente, e lê o estado do repetir (desativado
+  → tudo → uma); o aleatório do YouTube Music embaralha a fila de novo a cada
+  clique. Nos outros sites os botões ficam apagados e o clique traz o player para
+  a frente.
+- **Atalhos dos apps de música** (opcional, ligado por padrão): o ícone de cada
+  player instalado (Spotify, YouTube Music instalado pelo navegador, Apple Music,
+  Deezer, TIDAL, Amazon Music, Media Player, VLC, foobar2000…) para abrir com um
+  clique, inclusive quando nada está tocando. Embaixo do card, dentro do widget
+  na barra ou nos dois; em Card expandido > Apps nos atalhos dá para ligar só os
+  que você usa e arrastar para mudar a ordem (no card também dá para arrastar os
+  ícones).
 - **Ícones animados** (opcional, ligado por padrão): play e pausa trocam com um
   pequeno salto, anterior/próximo dão um empurrão para o lado, aleatório pulsa,
   repetir dá uma volta e o volume chacoalha ao ficar mudo; no card e na barra
@@ -120,9 +139,9 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
 
 Funciona com qualquer player que publique no painel de mídia do Windows (SMTC):
 Spotify, YouTube / YouTube Music no navegador, Apple Music, Deezer, TIDAL, VLC,
-Media Player… Aleatório/repetir só aparecem em players que os expõem ao Windows
-(ex.: Spotify, Media Player). Navegadores (Brave, Chrome, Edge, Firefox) não expõem
-esses comandos, então os botões somem nesse caso.
+Media Player… Aleatório/repetir vêm do Windows nos players que os expõem (ex.:
+Spotify, Media Player). Navegadores (Brave, Chrome, Edge, Firefox) não expõem
+esses comandos; no YouTube Music o Taskbeat usa os botões da página (veja acima).
 
 ## Desempenho
 
@@ -131,6 +150,7 @@ Pensado para PCs modestos (medido no build release, i5-10400F):
 | Situação | CPU | RAM (working set) |
 |---|---|---|
 | Música pausada, padrão | ~0,2% de 1 núcleo | ~5 MB após assentar |
+| Card aberto, parado | ~0,6% de 1 núcleo (antes ~78%: era redesenhado a cada quadro) | ~16 MB |
 | Configurações abertas, paradas | ~0,2–2% de 1 núcleo (conforme a prévia; pausada, ~0,2%) | ~30 MB (volta a ~8 MB ao fechar) |
 | Configurações rolando (60 fps) | ~10% de 1 núcleo | — |
 | Barras dinâmicas ligadas | ~0,2–0,5% de 1 núcleo | ~12 MB |
@@ -140,7 +160,8 @@ Como:
 - Captura de áudio (WASAPI) **só com o visualizador ligado**.
 - Mídia **orientada a eventos** do Windows (troca de sessão/música/play-pause), com checagem de segurança a cada 2 s.
 - Threads de segundo plano em **EcoQoS** + prioridade abaixo do normal (Windows 11 usa núcleos/frequências econômicos).
-- O widget **não redesenha quando nada muda**; repouso a 4 fps; 30 fps só para o indicador/letreiro; animações no **ritmo do monitor** (vblank, sem engasgos), e só enquanto animam.
+- O widget e o card **não redesenham quando nada muda**; repouso a 4 fps; 30 fps só para o indicador/letreiro; animações no **ritmo do monitor** (vblank, sem engasgos), e só enquanto animam.
+- Fundos (gradiente da capa, capa desfocada, sombras do card) ficam em **camadas guardadas**: os quadros só copiam a camada e desenham o que muda; os ícones em vetor viram máscaras guardadas por tamanho.
 - Cópias de dados e consultas só quando algo muda (versão da mídia, tema por mensagem do sistema, volume só com o card aberto).
 - Memória de inicialização e da tela de configurações devolvida ao Windows.
 - Configurações: a coluna de opções é desenhada uma vez e só copiada ao rolar;
@@ -157,7 +178,8 @@ Como:
 |---|---|---|
 | Som do player (barras) | WASAPI *loopback* do processo do player (Windows 10 2004+); sem ele, do sistema | `src/audio.rs` |
 | Atalhos dos apps de música | Pasta Aplicativos do shell (`shell:AppsFolder`) | `src/launchers.rs` |
-| Lugar do botão de Widgets na barra | UI Automation (`WidgetsButton`) | `src/taskbar.rs` |
+| Lugar do botão de Widgets na barra (e do Iniciar, ao arrastar o widget) | UI Automation (`WidgetsButton`, `StartButton`) | `src/taskbar.rs` |
+| Aleatório/repetir no YouTube Music do navegador | UI Automation nos botões da página do player (classes `shuffle`/`repeat` da barra do player; estado pelo nome do botão) | `src/webplayer.rs` |
 | Música, capa, controles, linha do tempo, eventos | `GlobalSystemMediaTransportControlsSessionManager` | `src/media.rs` |
 | Nome/ícone do app de origem | Pasta Aplicativos do shell (AUMID) → ícone do .exe | `src/appicon.rs` |
 | Volume | `IAudioEndpointVolume` | `src/volume.rs` |
@@ -245,6 +267,10 @@ antes de abrir o app grava cada leitura do player e cada troca de faixa
 
 - Só a barra do monitor principal.
 - A tela de configurações ainda não tem navegação por teclado.
+- Aleatório/repetir no YouTube Music do navegador dependem dos botões da página:
+  com a janela do player totalmente coberta por outra (ou minimizada), o nome do
+  botão de repetir, de onde o estado é lido, só se atualiza quando a página volta
+  a aparecer; até lá o card mostra o estado esperado.
 
 ## Mac (MacBook)
 
