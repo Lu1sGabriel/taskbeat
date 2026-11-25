@@ -340,3 +340,35 @@ fn icon_frames() {
     }
     save_png("icon-frames.png", iw.ceil() as usize, ih.ceil() as usize, &sheet);
 }
+
+/// Widget em pílula com cada formato e tamanho de capa (conferir que a capa
+/// fica dentro da ponta arredondada).
+#[test]
+#[ignore]
+fn pill_covers() {
+    let media = ui::sample_media();
+    let pb = playback(&media);
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let h = 40.0 * S;
+    let mut rows = Vec::new();
+    for shape in [Shape::Rounded, Shape::Square, Shape::Circle] {
+        for size in [Size3::Normal, Size3::Large] {
+            let cfg = Config { widget_shape: WidgetShape::Pill, widget_pill: true, cover_shape: shape, cover_size: size, widget_opacity: 30, ..Config::default() };
+            let c = colors(&cfg, &media);
+            let wl = WLayout::build(S, h, &cfg, true, false);
+            rows.push(render(wl.width, h, |cv| {
+                let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None };
+                ui::draw_widget(cv, &mut tr, &wl, &f);
+            }));
+        }
+    }
+    let w = rows.iter().map(|r| r.0).max().unwrap() as f32;
+    let img = render(w, h * rows.len() as f32, |cv| {
+        cv.fill_rrect(0.0, 0.0, w, h * rows.len() as f32, 0.0, 1.0, [0.12, 0.10, 0.12]);
+        for (i, r) in rows.into_iter().enumerate() {
+            blit(cv, 0.0, i as f32 * h, r);
+        }
+    });
+    save_png("pill-covers.png", img.0, img.1, &img.2);
+}

@@ -451,11 +451,7 @@ fn source_badge(cv: &mut Canvas, art: RectF, icon: &Image, size: f32, th: &Theme
 pub fn draw_art_a(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, media: &MediaInfo, th: &Theme, shape: Shape, s: f32, source: Option<f32>, alpha: f32) {
     let badge = source.unwrap_or(0.0);
     let icon = if source.is_some() { &media.icon } else { &None };
-    let radius = match shape {
-        Shape::Circle => r.w / 2.0,
-        Shape::Rounded => (r.w * 0.16).max(3.0 * s),
-        Shape::Square => 2.0 * s,
-    };
+    let radius = cover_radius(shape, r.w, s);
     match (&media.art, icon) {
         (Some(a), icon) => {
             cv.draw_image_cover(r, a, radius, alpha);
@@ -592,6 +588,31 @@ pub struct WLayout {
     pub viz: Option<RectF>,
 }
 
+/// Raio dos cantos da capa em cada formato (o mesmo de `draw_art`).
+fn cover_radius(shape: Shape, side: f32, s: f32) -> f32 {
+    match shape {
+        Shape::Circle => side / 2.0,
+        Shape::Rounded => (side * 0.16).max(3.0 * s),
+        Shape::Square => 2.0 * s,
+    }
+}
+
+/// Distância da borda esquerda da pílula (altura `bh`) até a capa (lado `art`,
+/// cantos de raio `rc`) para o canto arredondado da capa ficar dentro da ponta
+/// da pílula, com um respiro. Nunca mais perto que a capa centralizada no
+/// círculo da ponta (o que já serve para a capa redonda).
+fn pill_lead(bh: f32, art: f32, rc: f32, s: f32) -> f32 {
+    let (r, half) = (bh / 2.0, art / 2.0);
+    let centered = r - half;
+    let room = r - 1.5 * s - rc;
+    let dy = (half - rc).max(0.0);
+    if room <= dy {
+        return centered;
+    }
+    // Centro do arco do canto a `room` do centro do círculo da ponta.
+    (r - rc - (room * room - dy * dy).sqrt()).max(centered)
+}
+
 impl WLayout {
     pub fn build(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool) -> Self {
         let mut l = WLayout::default();
@@ -603,13 +624,20 @@ impl WLayout {
         };
         let x0 = 2.0 * s;
         let mut x = x0;
-        let art = match cfg.cover_size {
+        let pill = cfg.widget_shape == WidgetShape::Pill && cfg.widget_pill;
+        let mut art = match cfg.cover_size {
             Size3::Small => (22.0 * s).min(h - 10.0 * s),
             Size3::Normal => (28.0 * s).min(h - 10.0 * s),
             Size3::Large => (32.0 * s).min(h - 8.0 * s),
         };
-        // Na pílula a capa fica concêntrica com a ponta arredondada.
-        let lead = if cfg.widget_shape == WidgetShape::Pill && cfg.widget_pill { (bh - art) / 2.0 } else { 7.0 * s };
+        if pill {
+            // Cabe na altura da pílula com um respiro em cima e embaixo.
+            art = art.min(bh - 3.5 * s);
+        }
+        // Na pílula a capa fica dentro da ponta arredondada: os cantos dela não
+        // podem passar da curva (com a capa quadrada ou de cantos pequenos,
+        // centralizar no círculo da ponta deixava o canto para fora).
+        let lead = if pill { pill_lead(bh, art, cover_radius(cfg.cover_shape, art, s), s) } else { 7.0 * s };
         if panel {
             l.art = Some(RectF::new(x + lead, (h - art) * 0.5, art, art));
             let tx = x + lead + art + 10.0 * s;
@@ -1542,6 +1570,35 @@ fn sample_art() -> Image {
 mod tests {
     use super::*;
     use crate::config::Config;
+
+    /// Na pílula, o canto da capa fica dentro da ponta arredondada em todos os
+    /// formatos e tamanhos de capa, alturas de barra e escalas.
+    #[test]
+    fn pill_keeps_cover_inside() {
+        use crate::config::WidgetShape;
+        for s in [1.0f32, 1.25, 1.5, 2.0] {
+            for bar in [40.0f32, 48.0, 56.0] {
+                for shape in [Shape::Rounded, Shape::Square, Shape::Circle] {
+                    for size in [Size3::Small, Size3::Normal, Size3::Large] {
+                        let cfg = Config { widget_shape: WidgetShape::Pill, widget_pill: true, cover_shape: shape, cover_size: size, ..Config::default() };
+                        let l = WLayout::build(s, bar * s, &cfg, true, false);
+                        let (bg, art) = (l.bg.unwrap(), l.art.unwrap());
+                        let rc = cover_radius(shape, art.w, s);
+                        // Pontos da borda da capa (arcos dos cantos) dentro da pílula.
+                        for k in 0..=32 {
+                            let t = k as f32 / 32.0 * std::f32::consts::FRAC_PI_2;
+                            for (cx, cy, sx, sy) in [(art.x + rc, art.y + rc, -1.0, -1.0), (art.x + rc, art.bottom() - rc, -1.0, 1.0)] {
+                                let (px, py) = (cx + sx * rc * t.cos(), cy + sy * rc * t.sin());
+                                let q = ((px - bg.cx()).abs() - (bg.w / 2.0 - l.radius), (py - bg.cy()).abs() - (bg.h / 2.0 - l.radius));
+                                let d = rrect_sd(q.0, q.1, l.radius);
+                                assert!(d <= 0.01, "{shape:?} {size:?} @{s}x barra {bar}: canto {d:.2} px para fora");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn icon_anims_follow_state_changes() {

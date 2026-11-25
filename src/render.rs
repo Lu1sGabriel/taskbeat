@@ -534,7 +534,7 @@ pub fn over(d: u32, s: u32) -> u32 {
 }
 
 #[inline]
-fn rrect_sd(qx: f32, qy: f32, r: f32) -> f32 {
+pub(crate) fn rrect_sd(qx: f32, qy: f32, r: f32) -> f32 {
     let ox = qx.max(0.0);
     let oy = qy.max(0.0);
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
