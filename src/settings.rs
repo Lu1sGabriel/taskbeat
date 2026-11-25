@@ -298,7 +298,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E7C4}", title: "Onde ficam os atalhos", desc: "Embaixo do card, dentro do widget na barra ou nos dois", key: Key::LauncherPlace, kind: Kind::Segmented(LAUNCHER_PLACES) },
             Row { icon: "\u{E8FD}", title: "Apps nos atalhos", desc: "Ligue só os que você quer; arraste para mudar a ordem (no card também dá para arrastar os ícones)", key: Key::LauncherApps, kind: Kind::AppList },
             Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "No YouTube Music do navegador o Taskbeat aperta os botões da própria página e mostra o estado deles (a bolinha embaixo); em outros sites o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
-            Row { icon: "\u{E774}", title: "Extensão do navegador", desc: "", key: Key::BrowserExt, kind: Kind::Info },
+            Row { icon: "\u{E774}", title: "Extensão do navegador", desc: "", key: Key::BrowserExt, kind: Kind::Button("Instalar extensão") },
         ],
     },
     Page {
@@ -379,11 +379,16 @@ const PAGES: &[Page] = &[
     },
 ];
 
+/// A extensão do navegador está conectada agora?
+fn ext_connected() -> bool {
+    !crate::webext::connected().is_empty()
+}
+
 /// Texto da linha "Extensão do navegador": conectada (e em quais) ou não.
 fn browser_ext_status() -> String {
     let on = crate::webext::connected();
     if on.is_empty() {
-        tr("Não conectada. Opcional: com a extensão do Taskbeat no navegador (pasta extension), o aleatório e o repetir do YouTube Music vêm da própria página").to_string()
+        tr("Não conectada. Opcional: com a extensão do Taskbeat no Chrome, Brave ou Edge, o aleatório e o repetir do YouTube Music vêm da própria página").to_string()
     } else {
         format!("{} ({}): {}", tr("Conectada"), on.join(", "), tr("o aleatório e o repetir do YouTube Music vêm da própria página"))
     }
@@ -1245,7 +1250,7 @@ impl Ui {
                     }
                 }
                 Kind::Choice(_) | Kind::Slider { .. } | Kind::Button(_) => {
-                    if r.ctl.contains(x, y) {
+                    if r.ctl.contains(x, y) && !(*key == Key::BrowserExt && ext_connected()) {
                         return Some(Hit::Row(ri));
                     }
                 }
@@ -1363,7 +1368,7 @@ impl Ui {
                 Kind::AppList => self.app_list_sig(ri, cfg),
                 Kind::Color => self.picker_sig(ri, cfg, key),
                 // Redesenha quando a extensão conecta ou desconecta.
-                Kind::Info if key == Key::BrowserExt => crate::webext::connected().join(",").bytes().fold(1u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)),
+                Kind::Button(_) if key == Key::BrowserExt => crate::webext::connected().join(",").bytes().fold(1u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)),
                 _ => 0,
             },
         }
@@ -1723,6 +1728,8 @@ impl Ui {
                 self.draw_slider(cv, r.ctl, (v - min) as f32 / (max - min) as f32, a.hover, en);
                 self.label_right(cv, &value_label(*kind, *key, v), Font::Caption, r.ctl.x - 12.0 * s, r.ctl.cy(), 20.0 * s, fg, 0.75 * en);
             }
+            // Com a extensão conectada, não há o que instalar: só o texto.
+            Kind::Button(_) if *key == Key::BrowserExt && ext_connected() => {}
             Kind::Button(t) => {
                 self.draw_box(cv, r.ctl, a.hover, en);
                 ui::text_center(cv, &mut self.text, tr(t), Font::Body, r.ctl, fg, en);
@@ -2511,6 +2518,12 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 }
                 Kind::Button(_) if key == Key::Licenses => {
                     crate::licenses::open();
+                    Action::Redraw
+                }
+                Kind::Button(_) if key == Key::BrowserExt => {
+                    if !ext_connected() {
+                        crate::webext::open_install_page();
+                    }
                     Action::Redraw
                 }
                 Kind::Button(_) if key == Key::OsdTest => {

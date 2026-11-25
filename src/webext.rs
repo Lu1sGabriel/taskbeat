@@ -39,9 +39,28 @@ use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 /// Nome do host no registro do navegador (`NativeMessagingHosts\<nome>`).
 pub const HOST_NAME: &str = "com.taskbeat.ytmusic";
-/// IDs da extensão que podem abrir o host (o da pasta `extension/`, fixo pela
-/// chave pública do `manifest.json`).
+/// IDs da extensão que podem abrir o host: o da pasta `extension/` carregada
+/// sem compactação (fixo pela chave pública do `manifest.json`) e, depois de
+/// publicada, o que a Chrome Web Store der (ver `extension/store/PUBLICAR.md`).
 pub const EXTENSION_IDS: &[&str] = &["abofmfclmpmmbgecemcglhcklnmcapfh"];
+/// Página da extensão na Chrome Web Store (vazia até publicar).
+pub const STORE_URL: &str = "";
+/// Sem a loja: as instruções para carregar a extensão sem compactação.
+const GUIDE_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/tree/main/extension#readme");
+
+/// Onde instalar a extensão: a loja, quando publicada; senão, as instruções.
+pub fn install_url() -> &'static str {
+    if STORE_URL.is_empty() { GUIDE_URL } else { STORE_URL }
+}
+
+/// Abre a página de instalação da extensão no navegador padrão.
+pub fn open_install_page() {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    unsafe {
+        ShellExecuteW(None, windows::core::w!("open"), &HSTRING::from(install_url()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+    }
+}
 /// Maior mensagem aceita (o navegador manda no máximo 1 MB ao host; as nossas
 /// têm poucas centenas de bytes).
 pub const MAX_FRAME: usize = 1 << 20;
@@ -862,5 +881,7 @@ mod tests {
         assert_eq!(m["name"], HOST_NAME);
         assert_eq!(m["path"], r"C:\Apps\Taskbeat\Taskbeat.exe");
         assert_eq!(m["allowed_origins"][0], "chrome-extension://abofmfclmpmmbgecemcglhcklnmcapfh/");
+        // Sem a loja, o botão leva às instruções no repositório.
+        assert_eq!(install_url(), "https://github.com/Lu1sGabriel/taskbeat/tree/main/extension#readme");
     }
 }
