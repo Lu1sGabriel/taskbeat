@@ -455,7 +455,6 @@ static T: &[[&str; 4]] = &[
     ["Animar ícones", "Animate icons", "Animar iconos", "Symbole animieren"],
     ["Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar (no card e na barra)", "Play/pause, skip, shuffle, repeat and volume move when they change (in the card and on the taskbar)", "Reproducir/pausa, saltar, aleatorio, repetir y volumen se mueven al cambiar (en la tarjeta y en la barra)", "Wiedergabe/Pause, Überspringen, Zufall, Wiederholen und Lautstärke bewegen sich bei Änderungen (in der Karte und in der Taskleiste)"],
     ["Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar", "Play/pause, skip, shuffle, repeat and volume move when they change", "Reproducir/pausa, saltar, aleatorio, repetir y volumen se mueven al cambiar", "Wiedergabe/Pause, Überspringen, Zufall, Wiederholen und Lautstärke bewegen sich bei Änderungen"],
-    ["Abrir um app de música", "Open a music app", "Abrir una app de música", "Musik-App öffnen"],
     ["Atalhos dos apps de música", "Music app shortcuts", "Accesos a las apps de música", "Verknüpfungen zu Musik-Apps"],
     ["Ícones dos players instalados (Spotify, YouTube Music…) para abrir com um clique", "Icons of the installed players (Spotify, YouTube Music…) to open with one click", "Iconos de los reproductores instalados (Spotify, YouTube Music…) para abrir con un clic", "Symbole der installierten Player (Spotify, YouTube Music…), mit einem Klick zu öffnen"],
     ["Arrastar para mover", "Drag to move", "Arrastrar para mover", "Zum Verschieben ziehen"],

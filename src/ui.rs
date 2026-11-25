@@ -1865,7 +1865,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
 }
 
 /// Linha de atalhos: ícone de cada app de música; o nome do que está sob o
-/// mouse (ou "Abrir um app de música") ao lado.
+/// mouse ao lado.
 fn launcher_row(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFrame) {
     let (s, th) = (f.s, &f.theme);
     // Linha fina separando dos controles.
@@ -1907,8 +1907,10 @@ fn launcher_row(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFra
         cv.drop_shadow(ir, 6.0 * s, 8.0 * s, 3.0 * s, 0.45);
         launcher_icon(cv, tr, ir, app, th, 1.0);
     }
-    let msg = label.unwrap_or(crate::i18n::tr("Abrir um app de música"));
-    text(cv, tr, msg, Font::Small, l.launch_label.x, l.launch_label.y, l.launch_label.w, l.launch_label.h, th.fg, if label.is_some() { 0.85 } else { 0.5 });
+    // Parado, só os ícones; o nome aparece com o mouse em cima (ou arrastando).
+    if let Some(msg) = label {
+        text(cv, tr, msg, Font::Small, l.launch_label.x, l.launch_label.y, l.launch_label.w, l.launch_label.h, th.fg, 0.85);
+    }
 }
 
 /// Em qual posição da linha de atalhos cai um atalho solto no x `x`.
