@@ -342,9 +342,15 @@ fn grab(hwnd: HWND, r: windows::Win32::Foundation::RECT, print: bool) -> Option<
             return None;
         }
         let center = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+        // À vista: na tela, a janela de cima nesses pontos é a do player e
+        // nenhuma janela visível acima dela cruza o botão (o `WindowFromPoint`
+        // não vê as que deixam o clique passar, como o "A seguir" e o aviso de
+        // teclas do próprio Taskbeat, ou overlays do Discord, Steam e NVIDIA:
+        // a tela teria os pixels delas).
         let on_screen = [center, POINT { x: r.left + 2, y: r.top + 2 }, POINT { x: r.right - 3, y: r.bottom - 3 }]
             .iter()
-            .all(|p| GetAncestor(WindowFromPoint(*p), GA_ROOT) == hwnd);
+            .all(|p| GetAncestor(WindowFromPoint(*p), GA_ROOT) == hwnd)
+            && !covered_above(hwnd, r);
         if !on_screen {
             return if print { button_pixels_full(hwnd, r) } else { None };
         }
@@ -368,6 +374,42 @@ fn grab(hwnd: HWND, r: windows::Win32::Foundation::RECT, print: bool) -> Option<
         let _ = DeleteDC(dc);
         ReleaseDC(None, screen);
         out
+    }
+}
+
+/// Alguma janela visível acima de `hwnd` (na ordem das janelas) cruza o
+/// retângulo `r` da tela, inclusive as transparentes ao clique?
+fn covered_above(hwnd: HWND, r: windows::Win32::Foundation::RECT) -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    use windows::Win32::UI::WindowsAndMessaging::{GW_HWNDPREV, GetWindow, GetWindowRect, IsIconic, IsWindowVisible};
+    unsafe {
+        let mut cur = hwnd;
+        for _ in 0..1000 {
+            let Ok(above) = GetWindow(cur, GW_HWNDPREV) else { return false };
+            if above.is_invalid() {
+                return false;
+            }
+            cur = above;
+            if !IsWindowVisible(above).as_bool() || IsIconic(above).as_bool() {
+                continue;
+            }
+            // Escondida pelo DWM (outra área de trabalho, app suspenso): não aparece.
+            let mut cloaked = 0u32;
+            let _ = DwmGetWindowAttribute(above, DWMWA_CLOAKED, &mut cloaked as *mut u32 as _, 4);
+            if cloaked != 0 {
+                continue;
+            }
+            // O retângulo que aparece (sem as bordas invisíveis de redimensionar).
+            let mut wr = RECT::default();
+            if DwmGetWindowAttribute(above, DWMWA_EXTENDED_FRAME_BOUNDS, &mut wr as *mut RECT as _, std::mem::size_of::<RECT>() as u32).is_err() {
+                let _ = GetWindowRect(above, &mut wr);
+            }
+            if wr.left < r.right && wr.right > r.left && wr.top < r.bottom && wr.bottom > r.top {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -574,6 +616,39 @@ mod tests {
             let t = std::time::Instant::now();
             let st = w.run(&crate::shared::WebCmd::Probe { aumid: aumid.clone(), title: title.clone() });
             println!("{aumid} \"{title}\" → {st:?} em {:?}", t.elapsed());
+        }
+    }
+}
+
+#[cfg(test)]
+mod covered {
+    /// Uma janela transparente ao clique (como o "A seguir") por cima do
+    /// botão: o `covered_above` a vê (o `WindowFromPoint` não).
+    /// `cargo test --release covered_by_click_through -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn covered_by_click_through() {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        use windows::core::w;
+        unsafe {
+            let make = |ex: WINDOW_EX_STYLE, x: i32, y: i32, wd: i32, ht: i32| {
+                let h = CreateWindowExW(ex | WS_EX_TOOLWINDOW, w!("STATIC"), w!("teste"), WS_POPUP | WS_VISIBLE, x, y, wd, ht, None, None, None, None).unwrap();
+                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+                h
+            };
+            let target = make(WS_EX_TOPMOST, 100, 100, 300, 200);
+            let button = RECT { left: 200, top: 180, right: 240, bottom: 220 };
+            let free = !super::covered_above(target, button);
+            let overlay = make(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT, 190, 170, 120, 80);
+            let _ = windows::Win32::UI::WindowsAndMessaging::SetLayeredWindowAttributes(overlay, windows::Win32::Foundation::COLORREF(0), 200, LWA_ALPHA);
+            let _ = SetWindowPos(overlay, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            let covered = super::covered_above(target, button);
+            let elsewhere = super::covered_above(target, RECT { left: 110, top: 110, right: 140, bottom: 140 });
+            let _ = DestroyWindow(overlay);
+            let _ = DestroyWindow(target);
+            println!("sem nada por cima: livre={free}; transparente por cima: coberto={covered}, fora dela coberto={elsewhere}");
+            assert!(free && covered && !elsewhere);
         }
     }
 }
