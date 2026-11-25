@@ -368,6 +368,8 @@ pub struct Config {
     pub sensitivity_db: f32,
     /// Só reage quando algum app de mídia (Spotify, navegador...) está tocando.
     pub only_when_media: bool,
+    /// Barras ouvem só o app que está tocando (e não chamadas, jogos, avisos).
+    pub viz_player_only: bool,
     pub show_peaks: bool,
 
     // ---- notch (Mac)
@@ -462,6 +464,7 @@ impl Default for Config {
             bars: 6,
             sensitivity_db: 0.0,
             only_when_media: false,
+            viz_player_only: true,
             show_peaks: true,
 
             notch_hover: true,

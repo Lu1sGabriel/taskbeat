@@ -697,3 +697,29 @@ mod tests {
         assert!(!a.wants_reload(false, t0 + ART_SETTLE + Duration::from_millis(10)));
     }
 }
+
+#[cfg(test)]
+mod probe {
+    use super::*;
+
+    /// O que o Windows informa de cada sessão de mídia agora (diagnóstico).
+    /// `cargo test --release smtc_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn smtc_probe() {
+        let m = Manager::RequestAsync().and_then(|op| op.join()).unwrap();
+        for s in m.GetSessions().unwrap() {
+            let id = s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
+            let c = s.GetPlaybackInfo().and_then(|i| i.Controls()).unwrap();
+            let pi = s.GetPlaybackInfo().unwrap();
+            println!(
+                "{id}: tocando={:?} aleatório={:?}/{:?} repetir={:?}/{:?}",
+                pi.PlaybackStatus().map(|v| v.0),
+                c.IsShuffleEnabled(),
+                pi.IsShuffleActive().ok().and_then(|v| v.Value().ok()),
+                c.IsRepeatEnabled(),
+                pi.AutoRepeatMode().ok().and_then(|v| v.Value().ok()).map(|v| v.0)
+            );
+        }
+    }
+}

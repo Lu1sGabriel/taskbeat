@@ -120,6 +120,7 @@ enum Key {
     Width,
     Sens,
     OnlyMedia,
+    PlayerOnly,
     Peaks,
     Autostart,
     Language,
@@ -307,6 +308,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E9A6}", title: "Largura", desc: "Tamanho do visualizador", key: Key::Width, kind: Kind::Slider { min: 20, max: 160, step: 4, unit: "px" } },
             Row { icon: "\u{E9D9}", title: "Sensibilidade", desc: "Ganho extra aplicado ao espectro", key: Key::Sens, kind: Kind::Slider { min: -12, max: 18, step: 1, unit: "dB" } },
             Row { icon: "\u{E70E}", title: "Picos", desc: "Marcadores que caem devagar", key: Key::Peaks, kind: Kind::Toggle },
+            Row { icon: "\u{E8D6}", title: "Só o som do player", desc: "As barras ouvem só o app que está tocando: chamadas, jogos e avisos não mexem nelas", key: Key::PlayerOnly, kind: Kind::Toggle },
             Row { icon: "\u{E8B1}", title: "Só quando um player estiver tocando", desc: "Ignora jogos, chamadas e notificações", key: Key::OnlyMedia, kind: Kind::Toggle },
         ],
     },
@@ -417,6 +419,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::Width => c.width,
         Key::Sens => c.sensitivity_db.round() as i32,
         Key::OnlyMedia => c.only_when_media as i32,
+        Key::PlayerOnly => c.viz_player_only as i32,
         Key::Peaks => c.show_peaks as i32,
         Key::Autostart => AUTOSTART.with(|a| a.get()) as i32,
         Key::Fullscreen => c.hide_on_fullscreen as i32,
@@ -491,6 +494,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::Width => c.width = v,
         Key::Sens => c.sensitivity_db = v as f32,
         Key::OnlyMedia => c.only_when_media = v != 0,
+        Key::PlayerOnly => c.viz_player_only = v != 0,
         Key::Peaks => c.show_peaks = v != 0,
         Key::Fullscreen => c.hide_on_fullscreen = v != 0,
         Key::Language => {
@@ -527,7 +531,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         PopupSecs if !c.next_track_popup => Some(POPUP),
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdShape | OsdSize | OsdTheme | OsdDuration | OsdSwitch | OsdMaterial | OsdOpacity | OsdBlur | OsdIcon | OsdAnim if !osd_on => Some(OSD),
         OsdBlur if c.osd_material != crate::config::OsdMaterial::Acrylic => Some(BLUR),
-        Style | Palette | Bars | Width | Sens | OnlyMedia | Peaks if !c.show_visualizer => Some(VIZ),
+        Style | Palette | Bars | Width | Sens | OnlyMedia | PlayerOnly | Peaks if !c.show_visualizer => Some(VIZ),
         _ => None,
     }
 }
