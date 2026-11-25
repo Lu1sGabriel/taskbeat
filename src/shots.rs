@@ -530,6 +530,46 @@ fn card_mixer() {
     save_png("card-mixer.png", img.0, img.1, &img.2);
 }
 
+/// Card aberto e parado, só as mini barras tocando: o quadro inteiro contra
+/// só a área das barras (2x, mixer aberto com 7 apps).
+/// `cargo test --release card_bars_cost -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn card_bars_cost() {
+    let mut mx = crate::shared::MixerState::default();
+    for k in 0..7 {
+        mx.apps.push(crate::shared::MixApp { key: format!("k{k}"), name: format!("App {k}"), icon: None, volume: 0.8, muted: false, active: true, system: false });
+    }
+    let media = ui::sample_media();
+    let mut tr = TextRenderer::new();
+    let s = 2.0;
+    tr.set_scale(s);
+    let cfg = Config::default();
+    let c = colors(&cfg, &media);
+    let cl = CLayout::build(s, &cfg, true).with_mixer(Some(7), 1.0, 0.0, crate::shared::MIXER_ROWS, s);
+    let (w, h) = (cl.w.ceil() as usize, cl.h.ceil() as usize);
+    let mut px = vec![0u32; w * h];
+    let th = ui::card_theme(&cfg, &c, &media);
+    let n = 60;
+    let t = std::time::Instant::now();
+    for i in 0..n {
+        let viz: Vec<f32> = (0..32).map(|k| ((i + k) % 10) as f32 / 10.0).collect();
+        let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: th, it: Interact::default(), pb: playback(&media), s, backdrop: None, hint: None, launchers: &[], viz: Some(&viz), mixer: Some(&mx) };
+        let mut cv = Canvas::new(w, h, &mut px);
+        cv.clear();
+        ui::draw_card(&mut cv, &mut tr, &cl, &f);
+    }
+    let full = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    let t = std::time::Instant::now();
+    for i in 0..n {
+        let viz: Vec<f32> = (0..32).map(|k| ((i + k) % 10) as f32 / 10.0).collect();
+        assert!(ui::card_bars_update(&mut Canvas::new(w, h, &mut px), &viz, &th, s));
+    }
+    let bars = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+    println!("quadro inteiro: {full:.2} ms; só as barras: {bars:.3} ms");
+    println!("CPU de um núcleo: antes (inteiro a 60 Hz) {:.1}% / a 144 Hz {:.1}%; agora (barras a 30 fps) {:.2}%", full * 60.0 / 10.0, full * 144.0 / 10.0, bars * 30.0 / 10.0);
+}
+
 /// Quanto custa um quadro do card enquanto o mixer abre (o fundo muda de
 /// altura a cada quadro). `cargo test --release card_frame_cost -- --ignored --nocapture`
 #[test]

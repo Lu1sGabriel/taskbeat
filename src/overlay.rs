@@ -63,7 +63,8 @@ enum Ev {
     Down(f32, f32, i32),
     Up(f32, f32, i32),
     Wheel(i16),
-    Deactivate,
+    /// O card perdeu o foco; a janela que ganhou (0 se o Windows não disse).
+    Deactivate(isize),
     Escape,
     /// Outra janela tomou a captura do mouse no meio de um arrasto (Alt+Tab,
     /// um aviso do sistema): sem o "soltar", o arrasto ficaria preso.
@@ -155,7 +156,7 @@ unsafe extern "system" fn widget_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
 unsafe extern "system" fn flyout_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
-            WM_ACTIVATE if (wp.0 & 0xffff) as u32 == WA_INACTIVE => push(Win::Flyout, Ev::Deactivate),
+            WM_ACTIVATE if (wp.0 & 0xffff) as u32 == WA_INACTIVE => push(Win::Flyout, Ev::Deactivate(lp.0)),
             WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize => push(Win::Flyout, Ev::Escape),
             _ => {
                 if let Some(r) = mouse(Win::Flyout, hwnd, msg, wp, lp) {
@@ -618,6 +619,10 @@ struct Overlay {
     /// o botão da página às vezes dá o primeiro plano ao navegador por um
     /// instante (ele é devolvido em seguida), e isso não pode fechar o card.
     web_click: Option<Instant>,
+    /// Card aberto e parado, só as mini barras mexendo: o ritmo leve (~30 fps)
+    /// basta, e cada quadro refaz só a área delas. Quando foi o último.
+    flyout_decorative: bool,
+    bars_frame: Instant,
 }
 
 /// Linhas do mixer na ordem `order` (a da abertura; os que não estão nela,
@@ -795,6 +800,8 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         mouse_f: (0.0, 0.0),
         out_failed_seen: 0,
         web_click: None,
+        flyout_decorative: false,
+        bars_frame: Instant::now(),
         shared,
     };
     ov.refresh_launchers();
@@ -1024,6 +1031,31 @@ impl Overlay {
         }
     }
 
+    /// Refaz só a área das mini barras do card e mostra. `false` se não deu
+    /// (o quadro precisa ser o inteiro).
+    fn redraw_card_bars(&mut self, x: i32, y: f32, alpha: f32, s: f32) -> bool {
+        let Some(mut surf) = self.flyout.surface.take() else { return false };
+        let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
+        let ok = ui::card_bars_update(&mut surf.canvas(), &self.analyzer.values, &th, s);
+        if ok {
+            surf.present_at(self.flyout.hwnd, x, y, alpha);
+        }
+        self.flyout.surface = Some(surf);
+        ok
+    }
+
+    /// O foco foi para o próprio player (o navegador, ao apertar o botão da
+    /// página): é o clique do card, não a pessoa clicando fora dele.
+    fn player_took_focus(&self, to: isize) -> bool {
+        let h = if to != 0 { HWND(to as _) } else { unsafe { GetForegroundWindow() } };
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        let Some(stem) = (pid != 0).then(|| crate::appicon::exe_path(pid)).flatten().and_then(|p| std::path::Path::new(&p).file_stem().map(|s| s.to_string_lossy().to_lowercase())) else {
+            return false;
+        };
+        crate::audio::process::stems(&self.media.aumid).contains(&stem)
+    }
+
     /// Lista das saídas de áudio (menu do app, embaixo do nome da saída no
     /// mixer); escolher uma a torna a padrão.
     fn pick_output(&mut self, now: Instant) {
@@ -1040,7 +1072,7 @@ impl Overlay {
         let pick = crate::menu::popup(self.flyout.hwnd, entries, crate::menu::Anchor::Below(at), opts, &mut |_| None);
         // O menu é modal e toma o foco: o "card perdeu o foco" que isso gerou
         // não pode fechar o card; o foco volta para ele.
-        EVENTS.with(|e| e.borrow_mut().retain(|(_, ev)| !matches!(ev, Ev::Deactivate)));
+        EVENTS.with(|e| e.borrow_mut().retain(|(_, ev)| !matches!(ev, Ev::Deactivate(_))));
         unsafe {
             let _ = SetForegroundWindow(self.flyout.hwnd);
         }
@@ -1300,7 +1332,7 @@ impl Overlay {
             || now - self.last_input < Duration::from_millis(500);
         let changing = self.change_progress(now).is_some();
         let busy = busy || changing;
-        let decorative = panel && pb.playing && (self.cfg.playing_indicator || self.cfg.marquee || self.cfg.taskbar_progress);
+        let decorative = (panel && pb.playing && (self.cfg.playing_indicator || self.cfg.marquee || self.cfg.taskbar_progress)) || self.flyout_decorative;
         self.set_rate(busy, decorative);
 
         let Some(p) = placement.filter(|_| self.fade > 0.001) else {
@@ -1677,8 +1709,8 @@ impl Overlay {
                 },
                 // O navegador pegou o foco por um instante ao apertar o botão da
                 // página (aleatório/repetir): o card continua aberto.
-                Ev::Deactivate if self.web_click.is_some_and(|t| now - t < Duration::from_secs(3)) => {}
-                Ev::Deactivate | Ev::Escape => {
+                Ev::Deactivate(to) if self.web_click.is_some_and(|t| now - t < Duration::from_secs(3)) && self.player_took_focus(to) => {}
+                Ev::Deactivate(_) | Ev::Escape => {
                     if self.drag.is_none() {
                         self.flyout_open = false;
                     }
@@ -1871,6 +1903,7 @@ impl Overlay {
     /// de quadros seguidos (animação, barras tocando); parado, só é
     /// redesenhado quando algo nele muda.
     fn update_flyout(&mut self, now: Instant, dt: f32, placement: Option<Placement>, pb: Playback, live_bars: bool) -> bool {
+        self.flyout_decorative = false;
         let target = if self.flyout_open && placement.is_some() { 1.0 } else { 0.0 };
         let opening = target > 0.5;
         let speed = if opening { 1.0 / 0.28 } else { 1.0 / 0.16 };
@@ -1979,7 +2012,9 @@ impl Overlay {
         // Parado (aberto, sem animação): só redesenha se algo mudou.
         let hint_on = self.hint.is_some_and(|(t, _)| (now - t).as_secs_f32() < 2.8);
         let mixer_moving = self.mixer_anim > 0.0 && self.mixer_anim < 1.0;
-        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || mixer_moving || fills_moving || tip_moving || (self.cfg.icon_anim && self.icons.running());
+        // O que pede o card inteiro a cada quadro; as mini barras sozinhas não.
+        let moving = self.flyout_anim < 0.999 || hint_on || mixer_moving || fills_moving || tip_moving || (self.cfg.icon_anim && self.icons.running());
+        self.flyout_decorative = live_bars && !moving;
         let sig = FlyoutSig {
             place: (x, y, l.w.round() as i32, l.h.round() as i32),
             media: self.media_version,
@@ -1999,8 +2034,19 @@ impl Overlay {
             tip: (tip_a * 255.0) as u8,
         };
         if !moving && self.flyout.shown && self.flyout_sig == Some(sig) {
-            return false;
+            // Parado, com as barras tocando: até ~30 quadros por segundo, cada
+            // um só com a área delas (o card inteiro custava ~5 ms a 2x).
+            if live_bars && now - self.bars_frame >= Duration::from_millis(33) && self.redraw_card_bars(x, y as f32 + dir as f32 * slide, e, s) {
+                self.bars_frame = now;
+            }
+            if live_bars && now - self.bars_frame < Duration::from_millis(33) {
+                return false;
+            }
+            if !live_bars {
+                return false;
+            }
         }
+        self.bars_frame = now;
         self.flyout_sig = Some(sig);
         // Acrílico: captura antes de o card aparecer (o card tem o foco: escondê-lo
         // para recapturar o fecharia, então mudanças com ele aberto usam a mesma imagem).

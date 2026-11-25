@@ -722,7 +722,17 @@ fn widget_bg_mean(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Rgb {
 
 // ---------------------------------------------------------------- utilidades
 
+/// Onde ficaram as mini barras do último card desenhado e o fundo debaixo
+/// delas: só as barras mexendo, o quadro refaz só essa área (`card_bars_update`).
+struct BarsSpot {
+    rect: RectF,
+    bg: Rc<Vec<u32>>,
+    w: usize,
+    h: usize,
+}
+
 thread_local! {
+    static CARD_BARS: RefCell<Option<BarsSpot>> = const { RefCell::new(None) };
     /// Capas desfocadas mais recentes (a troca de música mostra a antiga e a nova juntas).
     static BLUR_CACHE: RefCell<Vec<(BlurKey, Arc<Image>)>> = const { RefCell::new(Vec::new()) };
     static LAYERS: RefCell<Vec<Layer>> = const { RefCell::new(Vec::new()) };
@@ -864,6 +874,27 @@ fn stretch_row(y: usize, a: usize, b: usize, grow: usize) -> usize {
 /// para a camada final dele).
 pub fn forget_layers(tag: LayerTag) {
     LAYERS.with(|cell| cell.borrow_mut().retain(|l| l.tag != tag && !(tag == LayerTag::Card && l.tag == LayerTag::CardFinal)));
+    if tag == LayerTag::Card {
+        CARD_BARS.with(|c| *c.borrow_mut() = None);
+    }
+}
+
+/// Só as mini barras do card mudaram: refaz a área delas por cima do mesmo
+/// quadro (o fundo guardado debaixo delas e as barras novas), sem redesenhar
+/// o card inteiro. `false`: não há card desenhado com barras nesse tamanho
+/// (então o quadro tem de ser o inteiro).
+pub fn card_bars_update(cv: &mut Canvas, values: &[f32], th: &Theme, s: f32) -> bool {
+    CARD_BARS.with(|c| {
+        let c = c.borrow();
+        let Some(b) = c.as_ref().filter(|b| b.w == cv.w && b.h == cv.h) else { return false };
+        let r = RectF::new(b.rect.x.floor() - 1.0, b.rect.y.floor() - 1.0, b.rect.w.ceil() + 2.0, b.rect.h.ceil() + 2.0);
+        let clip = cv.clip_rect();
+        cv.set_clip(clip.intersect(r));
+        cv.copy_from(0, 0, &b.bg, b.w, b.h, 0);
+        card_bars(cv, b.rect, values, th, s);
+        cv.set_clip(clip);
+        true
+    })
 }
 
 pub fn glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32) {
@@ -1999,6 +2030,8 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     // parado, essa camada é reaproveitada; abrindo, é refeita (é barata).
     let (w, h) = (cv.w, cv.h);
     let h0 = h - grow;
+    // A camada final antiga é solta antes (para a memória dela ser reaproveitada).
+    CARD_BARS.with(|c| *c.borrow_mut() = None);
     let bg = layer(LayerTag::Card, key, w, h0, draw_bg);
     let amount = card_grain(cfg, th, f.backdrop.is_some());
     let fin = layer(LayerTag::CardFinal, layer_key((key, grow, band)), w, h, |fcv| {
@@ -2025,7 +2058,9 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     let title_w = |r: RectF| if bars.is_some() { RectF { w: r.w - bars_w - 10.0 * s, ..r } } else { r };
     let draw_bars = |cv: &mut Canvas, t: RectF| {
         if let Some(v) = bars {
-            card_bars(cv, RectF::new(t.right() - bars_w, t.y + 3.0 * s, bars_w, t.h - 5.0 * s), v, th, s);
+            let rect = RectF::new(t.right() - bars_w, t.y + 3.0 * s, bars_w, t.h - 5.0 * s);
+            card_bars(cv, rect, v, th, s);
+            CARD_BARS.with(|c| *c.borrow_mut() = Some(BarsSpot { rect, bg: fin.clone(), w: cv.w, h: cv.h }));
         }
     };
     if l.vertical {
@@ -2696,6 +2731,32 @@ mod tests {
             let p = b.px[b.px.len() / 2];
             assert!(p & 0xff > (p >> 16) & 0xff, "desfoque da capa antiga: {p:08x}");
         }
+    }
+
+    /// Só as barras mudando: refazer só a área delas dá exatamente o mesmo
+    /// quadro que redesenhar o card inteiro com os valores novos.
+    #[test]
+    fn barras_sozinhas_igual_ao_card_inteiro() {
+        let cfg = Config { card_viz: true, ..Config::default() };
+        let media = sample_media();
+        let colors = Colors { palette: cfg.palette, accent: [0.3, 0.5, 0.9], accent_light: [0.6, 0.8, 1.0], light_taskbar: false, album: None };
+        let mut tr = TextRenderer::new();
+        let l = CLayout::build(1.0, &cfg, true);
+        let (w, h) = (l.w.ceil() as usize, l.h.ceil() as usize);
+        let th = card_theme(&cfg, &colors, &media);
+        let draw = |tr: &mut TextRenderer, px: &mut Vec<u32>, viz: &[f32]| {
+            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: th, it: Interact::default(), pb: Playback::default(), s: 1.0, backdrop: None, hint: None, launchers: &[], viz: Some(viz), mixer: None };
+            let mut cv = Canvas::new(w, h, px);
+            cv.clear();
+            draw_card(&mut cv, tr, &l, &f);
+        };
+        let (a, b): (Vec<f32>, Vec<f32>) = ((0..32).map(|i| (i % 7) as f32 / 7.0).collect(), (0..32).map(|i| 1.0 - (i % 5) as f32 / 5.0).collect());
+        let mut whole = vec![0u32; w * h];
+        draw(&mut tr, &mut whole, &b);
+        let mut quick = vec![0u32; w * h];
+        draw(&mut tr, &mut quick, &a);
+        assert!(card_bars_update(&mut Canvas::new(w, h, &mut quick), &b, &th, 1.0));
+        assert!(quick == whole, "as barras sozinhas deram um quadro diferente do inteiro");
     }
 
     /// Mini barras do card com qualquer quantidade de barras do visualizador
