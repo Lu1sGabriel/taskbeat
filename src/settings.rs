@@ -1061,7 +1061,7 @@ impl Ui {
     /// Card da prévia, com os atalhos dos apps de música desta máquina.
     fn preview_card(&self, s: f32, cfg: &Config) -> ui::CLayout {
         let n = if cfg.card_launchers && cfg.launcher_place.card() { self.shown_launchers(cfg).len() } else { 0 };
-        ui::CLayout::build(s, cfg, true).with_launchers(n, s).with_mixer(cfg.card_mixer.then_some(0), 0.0, s)
+        ui::CLayout::build(s, cfg, true).with_launchers(n, s).with_mixer(cfg.card_mixer.then_some(0), 0.0, 0.0, crate::shared::MIXER_ROWS, s)
     }
 
     /// Atalhos à mostra, na ordem escolhida.

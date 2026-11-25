@@ -55,6 +55,8 @@ pub enum Hit {
     /// Slider e mudo do app `i` no mixer.
     MixVol(u8),
     MixMute(u8),
+    /// Saída de áudio no cabeçalho do mixer (abre a lista para trocar).
+    MixDevice,
 }
 
 /// Cores de um componente já resolvidas (tema + cor de destaque).
@@ -1582,6 +1584,13 @@ pub struct CLayout {
     /// Altura (px inteiros) que o mixer aberto acrescenta ao card: o fundo
     /// guardado é o do card fechado, esticado no meio por esta altura.
     pub grown: f32,
+    /// Faixa das linhas do mixer à vista (com mais apps, a lista rola).
+    pub mixer_list: RectF,
+    /// Seletor da saída de áudio no cabeçalho do mixer.
+    pub mixer_dev: RectF,
+    /// Quanto a lista do mixer rola no máximo (px lógicos) e quanto rolou (px).
+    pub mixer_scroll_max: f32,
+    pub mixer_scroll: f32,
 }
 
 impl CLayout {
@@ -1667,18 +1676,27 @@ impl CLayout {
 
     /// Acrescenta o mixer de volume embaixo do card: a setinha e, aberto
     /// (`open` de 0 a 1), as linhas de `rows` apps. `None`: opção desligada.
-    pub fn with_mixer(mut self, rows: Option<usize>, open: f32, s: f32) -> Self {
+    /// Mixer com `rows` apps (`None`: sem mixer), aberto `open` (0..1), a lista
+    /// rolada `scroll` px lógicos e no máximo `max_rows` linhas à vista.
+    pub fn with_mixer(mut self, rows: Option<usize>, open: f32, scroll: f32, max_rows: usize, s: f32) -> Self {
         let Some(n) = rows else { return self };
         let pad = 16.0 * s;
         let top = self.card.bottom() - 4.0 * s;
-        let full = mixer_height(n, s);
+        let visible = n.clamp(1, max_rows.clamp(1, crate::shared::MIXER_ROWS));
+        let full = mixer_height(visible, s);
         let h = (full * open.clamp(0.0, 1.0)).round();
         self.mixer_open = open.clamp(0.0, 1.0);
         self.mixer_area = RectF::new(self.card.x, top, self.card.w, h);
         self.mixer_head = RectF::new(self.card.x + pad, top + 6.0 * s, self.card.w - 2.0 * pad, 22.0 * s);
-        self.mixer_rows = (0..n.min(crate::shared::MIXER_ROWS))
+        let hd = self.mixer_head;
+        self.mixer_dev = RectF::new(hd.x + hd.w * 0.42, hd.y - 3.0 * s, hd.w * 0.58 + 6.0 * s, hd.h + 6.0 * s);
+        self.mixer_list = RectF::new(self.card.x, top + 30.0 * s, self.card.w, visible as f32 * 36.0 * s + 2.0 * s);
+        self.mixer_scroll_max = n.saturating_sub(visible) as f32 * 36.0;
+        let off = (scroll.clamp(0.0, self.mixer_scroll_max) * s).round();
+        self.mixer_scroll = off;
+        self.mixer_rows = (0..n)
             .map(|i| {
-                let row = RectF::new(self.card.x + pad, top + 32.0 * s + i as f32 * 36.0 * s, self.card.w - 2.0 * pad, 34.0 * s);
+                let row = RectF::new(self.card.x + pad, top + 32.0 * s + i as f32 * 36.0 * s - off, self.card.w - 2.0 * pad, 34.0 * s);
                 let slider = RectF::new(row.x + 140.0 * s, row.y, row.w - 140.0 * s - 40.0 * s, row.h);
                 let mute = RectF::new(row.right() - 34.0 * s, row.y, 34.0 * s, row.h);
                 (row, slider, mute)
@@ -1704,9 +1722,13 @@ impl CLayout {
         if self.mixer_btn.is_some_and(|r| r.contains(x, y)) {
             return Some(Hit::MixToggle);
         }
-        // Linhas do mixer: só a parte que já está à vista (abrindo).
+        // Linhas do mixer: só a parte que já está à vista (abrindo, rolando).
         if self.mixer_open > 0.5 && self.mixer_area.contains(x, y) {
-            for (i, (_, slider, mute)) in self.mixer_rows.iter().enumerate() {
+            if self.mixer_dev.contains(x, y) {
+                return Some(Hit::MixDevice);
+            }
+            let list = self.mixer_list.contains(x, y);
+            for (i, (_, slider, mute)) in self.mixer_rows.iter().enumerate().filter(|_| list) {
                 if mute.contains(x, y) {
                     return Some(Hit::MixMute(i as u8));
                 }
@@ -2139,9 +2161,9 @@ pub(crate) fn chevron(cv: &mut Canvas, b: RectF, open: f32, c: Rgb, a: f32, s: f
     cv.blit_mask(b.x.round() as i32, b.y.round() as i32, &Mask { w, h, cov }, c, a);
 }
 
-/// Altura do mixer aberto com `n` apps.
+/// Altura do mixer aberto com `n` linhas à vista.
 fn mixer_height(n: usize, s: f32) -> f32 {
-    32.0 * s + n.clamp(1, crate::shared::MIXER_ROWS) as f32 * 36.0 * s + 6.0 * s
+    32.0 * s + n.max(1) as f32 * 36.0 * s + 6.0 * s
 }
 
 /// Mixer de volume: cabeçalho com o dispositivo de saída, uma linha por app
@@ -2158,15 +2180,29 @@ fn mixer_section(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let hd = l.mixer_head;
         text(cv, tr, crate::i18n::tr("VOLUME POR APP"), Font::Label, hd.x, hd.y, hd.w * 0.5, hd.h, th.fg, 0.62 * a);
         if !mx.device.is_empty() {
-            let dev_w = tr.mask(&mx.device, Font::Small, (hd.w * 0.55) as i32, hd.h as i32, Align::Left).used_width();
-            text(cv, tr, &mx.device, Font::Small, hd.right() - dev_w, hd.y, hd.w * 0.55, hd.h, th.fg, 0.5 * a);
+            // Saída padrão: clica para escolher outra (seta para baixo ao lado).
+            let hot = f.it.hover == Some(Hit::MixDevice);
+            let max_w = hd.w * 0.55 - 20.0 * s;
+            let dev_w = tr.mask(&mx.device, Font::Small, max_w as i32, hd.h as i32, Align::Left).used_width().min(max_w);
+            let chip = RectF::new(hd.right() - dev_w - 24.0 * s, hd.y - 2.0 * s, dev_w + 28.0 * s, hd.h + 4.0 * s);
+            if hot {
+                hover_bg(cv, chip, 6.0 * s, th, f.it.pressed == Some(Hit::MixDevice));
+            }
+            text(cv, tr, &mx.device, Font::Small, chip.x + 6.0 * s, hd.y, dev_w, hd.h, th.fg, (if hot { 0.85 } else { 0.6 }) * a);
+            let arrow = RectF::new(chip.right() - 21.0 * s, hd.y + 1.0 * s, 18.0 * s, hd.h - 2.0 * s);
+            chevron(cv, arrow, 0.0, th.fg, (if hot { 0.85 } else { 0.55 }) * a, s * 0.75);
         }
         if mx.apps.is_empty() {
             if let Some((row, _, _)) = l.mixer_rows.first().copied().or(Some((RectF::new(hd.x, hd.bottom() + 4.0 * s, hd.w, 34.0 * s), RectF::default(), RectF::default()))) {
                 text(cv, tr, crate::i18n::tr("Nenhum app com som agora"), Font::Caption, row.x, row.y, row.w, row.h, th.fg, 0.55 * a);
             }
         }
+        // Linhas: só as que estão na faixa à vista (a lista rola).
+        cv.set_clip(clip.intersect(l.mixer_area).intersect(l.mixer_list));
         for (i, (app, (row, slider_r, mute_r))) in mx.apps.iter().zip(&l.mixer_rows).enumerate() {
+            if row.bottom() < l.mixer_list.y || row.y > l.mixer_list.bottom() {
+                continue;
+            }
             // Ícone, nome (apagado se o app não está tocando agora) e slider.
             let k = (18.0 * s).round();
             let ir = RectF::new(row.x.round(), (row.cy() - k / 2.0).round(), k, k);
@@ -2189,6 +2225,17 @@ fn mixer_section(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
             }
             let g = if app.muted || app.volume <= 0.0 { G_MUTE } else { G_VOL2 };
             ctrl_glyph(cv, tr, *mute_r, g, Font::IconSmall, th.fg, 0.85 * a, &it, mh, s);
+        }
+        // Barra fina de rolagem, com mais apps do que linhas.
+        if l.mixer_scroll_max > 0.0 {
+            let list = l.mixer_list;
+            let track = RectF::new(l.card.right() - 8.0 * s, list.y + 4.0 * s, 3.0 * s, list.h - 8.0 * s);
+            let n = mx.apps.len().max(1) as f32;
+            let shown = (list.h / (36.0 * s)).floor().max(1.0);
+            let th_h = (track.h * shown / n).max(18.0 * s).min(track.h);
+            let t = l.mixer_scroll / (l.mixer_scroll_max * s).max(1.0);
+            let y = track.y + (track.h - th_h) * t.clamp(0.0, 1.0);
+            cv.fill_rrect(track.x, y, track.right(), y + th_h, 1.5 * s, (if th.dark { 0.30 } else { 0.25 }) * a, th.fg);
         }
         cv.set_clip(clip);
     }

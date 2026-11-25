@@ -1,30 +1,36 @@
-//! Mixer de volume do card: o volume de cada app que usa o dispositivo de
-//! saída padrão, como o Mixer de Volume do Windows.
+//! Mixer de volume do card: o volume de cada app com sessão de áudio, como o
+//! Mixer de Volume do Windows, e a escolha da saída padrão.
 //!
-//! Sessões de áudio do WASAPI (`IAudioSessionManager2`): as do mesmo app
-//! (mesmo .exe, ex.: os vários processos de áudio do navegador) viram uma
-//! linha só; os sons do sistema ficam numa linha própria. O volume de cada
-//! sessão é o `ISimpleAudioVolume` dela.
+//! Sessões do WASAPI (`IAudioSessionManager2`) de TODAS as saídas ativas (um
+//! app pode tocar noutra saída, como o NVIDIA Broadcast): as do mesmo app
+//! viram uma linha só. O app é o pacote dele quando tem um (apps da Store e o
+//! WebView2 que eles usam: o som do WhatsApp sai de um `msedgewebview2.exe`
+//! do pacote do WhatsApp) e o .exe nos outros; os sons do sistema ficam numa
+//! linha própria. O volume de cada sessão é o `ISimpleAudioVolume` dela.
 //!
-//! Uma thread própria só trabalha com o mixer aberto: lê a lista ao abrir e
-//! quando o Windows avisa (sessão nova; volume, mudo ou estado de uma sessão
-//! mudou), além de uma conferida a cada 3 s (troca do dispositivo padrão).
-//! Fechado, ela desliga os avisos e fica parada. Nada roda por quadro.
+//! Uma thread própria só lê sessões com o mixer aberto: ao abrir e quando o
+//! Windows avisa (sessão nova; volume, mudo ou estado de uma sessão mudou),
+//! com uma conferida a cada 10 s. A troca da saída padrão e as saídas que
+//! aparecem e somem chegam pelos avisos do `IMMNotificationClient` (sempre
+//! ligados: parados, não custam nada); a saída padrão é trocada pelo
+//! `IPolicyConfig`, a mesma interface que o EarTrumpet e o SoundSwitch usam.
 
 use crate::appicon;
 use crate::audio::log;
 use crate::render::Image;
-use crate::shared::{MixApp, MixCmd, MixerState, Shared};
+use crate::shared::{MixApp, MixCmd, MixerState, OutDevice, Shared};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
-    AudioSessionDisconnectReason, AudioSessionState, AudioSessionStateExpired, AudioSessionStateActive, IAudioSessionControl, IAudioSessionControl2,
-    IAudioSessionEvents, IAudioSessionEvents_Impl, IAudioSessionManager2, IAudioSessionNotification, IAudioSessionNotification_Impl, IMMDevice,
-    IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator, eConsole, eRender,
+    AudioSessionDisconnectReason, AudioSessionState, AudioSessionStateActive, AudioSessionStateExpired, DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole,
+    IAudioSessionControl, IAudioSessionControl2, IAudioSessionEvents, IAudioSessionEvents_Impl, IAudioSessionManager2, IAudioSessionNotification,
+    IAudioSessionNotification_Impl, IMMDevice, IMMDeviceEnumerator, IMMNotificationClient, IMMNotificationClient_Impl, ISimpleAudioVolume,
+    MMDeviceEnumerator, eCommunications, eConsole, eMultimedia, eRender,
 };
 use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
 use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ};
@@ -38,14 +44,17 @@ pub fn spawn(shared: Arc<Shared>) {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }
         crate::system::background_thread();
+        // Avisos das saídas (padrão trocada, saída nova ou removida).
+        let watch = DeviceWatch::register(tx.clone());
         let mut m = Mixer { tx, open: None, icons: HashMap::new(), names: HashMap::new() };
         while shared.is_running() {
-            // Aberto: confere a cada 3 s; fechado, só espera um pedido.
-            let wait = if m.open.is_some() { Duration::from_secs(3) } else { Duration::from_secs(1) };
+            // Aberto: confere a cada 10 s (os avisos cobrem o resto); fechado,
+            // só espera um pedido.
+            let wait = if m.open.is_some() { Duration::from_secs(10) } else { Duration::from_secs(1) };
             let cmd = match rx.recv_timeout(wait) {
                 Ok(c) => Some(c),
                 Err(RecvTimeoutError::Timeout) => m.open.is_some().then_some(MixCmd::Refresh),
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => break,
             };
             let Some(cmd) = cmd else { continue };
             // Junta rajadas (arrastar o slider manda vários volumes; o Windows
@@ -62,6 +71,7 @@ pub fn spawn(shared: Arc<Shared>) {
                 }
             }
             let mut publish = false;
+            let mut reopen = false;
             let mut last_vol: Vec<(String, f32)> = Vec::new();
             for c in cmds {
                 match c {
@@ -71,6 +81,16 @@ pub fn spawn(shared: Arc<Shared>) {
                     }
                     MixCmd::Close => m.close(),
                     MixCmd::Refresh => publish = true,
+                    // Saída padrão trocada ou saídas mudaram: abre de novo nelas.
+                    MixCmd::DefaultChanged | MixCmd::DevicesChanged => reopen |= m.open.is_some(),
+                    MixCmd::SetDevice(id) => match set_default_output(&id) {
+                        // O aviso de "padrão mudou" chega em seguida e reabre.
+                        Ok(()) => log::info(&format!("mixer: saída padrão trocada para {id}")),
+                        Err(e) => {
+                            log::warn(&format!("mixer: não deu para trocar a saída padrão: {e}"));
+                            shared.output_failed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    },
                     MixCmd::Volume(k, v) => match last_vol.iter_mut().find(|(kk, _)| *kk == k) {
                         Some(e) => e.1 = v,
                         None => last_vol.push((k, v)),
@@ -82,6 +102,10 @@ pub fn spawn(shared: Arc<Shared>) {
                         publish = true;
                     }
                 }
+            }
+            if reopen {
+                m.open();
+                publish = true;
             }
             for (k, v) in last_vol {
                 m.each_volume(&k, |sv| unsafe {
@@ -95,8 +119,121 @@ pub fn spawn(shared: Arc<Shared>) {
                 shared.mixer_version.fetch_add(1, Ordering::Relaxed);
             }
         }
+        drop(watch);
     });
 }
+
+// ---------------------------------------------------------------- saídas
+
+/// Avisos das saídas de áudio: a padrão trocou (pelo app ou por fora dele),
+/// uma saída apareceu, sumiu ou mudou de estado.
+#[implement(IMMNotificationClient)]
+struct DeviceEvents(Sender<MixCmd>);
+
+impl IMMNotificationClient_Impl for DeviceEvents_Impl {
+    fn OnDeviceStateChanged(&self, _: &PCWSTR, _: DEVICE_STATE) -> Result<()> {
+        let _ = self.0.send(MixCmd::DevicesChanged);
+        Ok(())
+    }
+    fn OnDeviceAdded(&self, _: &PCWSTR) -> Result<()> {
+        let _ = self.0.send(MixCmd::DevicesChanged);
+        Ok(())
+    }
+    fn OnDeviceRemoved(&self, _: &PCWSTR) -> Result<()> {
+        let _ = self.0.send(MixCmd::DevicesChanged);
+        Ok(())
+    }
+    fn OnDefaultDeviceChanged(&self, flow: EDataFlow, role: ERole, _: &PCWSTR) -> Result<()> {
+        if flow == eRender && role == eConsole {
+            // O volume do card passa a valer para a saída nova.
+            crate::volume::output_changed();
+            let _ = self.0.send(MixCmd::DefaultChanged);
+        }
+        Ok(())
+    }
+    fn OnPropertyValueChanged(&self, _: &PCWSTR, _: &PROPERTYKEY) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Os avisos das saídas registrados (desregistra ao sair).
+struct DeviceWatch {
+    en: Option<IMMDeviceEnumerator>,
+    client: IMMNotificationClient,
+}
+
+impl DeviceWatch {
+    fn register(tx: Sender<MixCmd>) -> DeviceWatch {
+        let client: IMMNotificationClient = DeviceEvents(tx).into();
+        let en = unsafe { CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) }.ok();
+        let ok = en.as_ref().is_some_and(|e| unsafe { e.RegisterEndpointNotificationCallback(&client) }.is_ok());
+        if !ok {
+            log::warn("mixer: sem os avisos de troca da saída de áudio");
+        }
+        DeviceWatch { en: en.filter(|_| ok), client }
+    }
+}
+
+impl Drop for DeviceWatch {
+    fn drop(&mut self) {
+        if let Some(en) = &self.en {
+            unsafe {
+                let _ = en.UnregisterEndpointNotificationCallback(&self.client);
+            }
+        }
+    }
+}
+
+/// `IPolicyConfig` (Windows 7+): não documentada, mas estável desde o Vista;
+/// é o que o EarTrumpet e o SoundSwitch usam para trocar a saída padrão. Só o
+/// `SetDefaultEndpoint` é usado; os outros métodos estão aqui pela ordem da
+/// tabela da interface (os nomes seguem os do Windows).
+#[allow(non_snake_case, clippy::too_many_arguments)]
+mod policy {
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::Media::Audio::ERole;
+    use windows::core::{HRESULT, IUnknown, IUnknown_Vtbl, PCWSTR, interface};
+
+    #[interface("f8679f50-850a-41cf-9c72-430f290290c8")]
+    pub unsafe trait IPolicyConfig: IUnknown {
+        fn GetMixFormat(&self, id: PCWSTR, format: *mut *mut core::ffi::c_void) -> HRESULT;
+        fn GetDeviceFormat(&self, id: PCWSTR, default: i32, format: *mut *mut core::ffi::c_void) -> HRESULT;
+        fn ResetDeviceFormat(&self, id: PCWSTR) -> HRESULT;
+        fn SetDeviceFormat(&self, id: PCWSTR, endpoint: *const core::ffi::c_void, mix: *const core::ffi::c_void) -> HRESULT;
+        fn GetProcessingPeriod(&self, id: PCWSTR, default: i32, period: *mut i64, min: *mut i64) -> HRESULT;
+        fn SetProcessingPeriod(&self, id: PCWSTR, period: *const i64) -> HRESULT;
+        fn GetShareMode(&self, id: PCWSTR, mode: *mut core::ffi::c_void) -> HRESULT;
+        fn SetShareMode(&self, id: PCWSTR, mode: *const core::ffi::c_void) -> HRESULT;
+        fn GetPropertyValue(&self, id: PCWSTR, store: i32, key: *const PROPERTYKEY, value: *mut core::ffi::c_void) -> HRESULT;
+        fn SetPropertyValue(&self, id: PCWSTR, store: i32, key: *const PROPERTYKEY, value: *const core::ffi::c_void) -> HRESULT;
+        fn SetDefaultEndpoint(&self, id: PCWSTR, role: ERole) -> HRESULT;
+        fn SetEndpointVisibility(&self, id: PCWSTR, visible: i32) -> HRESULT;
+    }
+
+    /// Torna a saída `id` a padrão no papel `role`.
+    pub fn set_default(pc: &IPolicyConfig, id: PCWSTR, role: ERole) -> HRESULT {
+        unsafe { pc.SetDefaultEndpoint(id, role) }
+    }
+}
+use policy::IPolicyConfig;
+
+/// CPolicyConfigClient.
+const POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+
+/// Torna a saída `id` a padrão nos três papéis (o que o Windows faz ao
+/// escolher a saída no menu do volume).
+fn set_default_output(id: &str) -> Result<()> {
+    unsafe {
+        let pc: IPolicyConfig = CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL)?;
+        let id = HSTRING::from(id);
+        for role in [eConsole, eMultimedia, eCommunications] {
+            policy::set_default(&pc, PCWSTR(id.as_ptr()), role).ok()?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- sessões
 
 /// Avisa a thread quando uma sessão nova aparece.
 #[implement(IAudioSessionNotification)]
@@ -148,19 +285,25 @@ struct Session {
     key: String,
 }
 
-/// Mixer aberto: o dispositivo, o gerenciador de sessões e os avisos.
-struct Open {
-    device_id: String,
-    device: String,
+/// Uma saída ativa aberta: o gerenciador de sessões dela e o aviso de sessão nova.
+struct Dev {
+    id: String,
+    name: String,
     mgr: IAudioSessionManager2,
     notify: IAudioSessionNotification,
+}
+
+/// Mixer aberto: as saídas ativas (qual é a padrão) e as sessões delas.
+struct Open {
+    default_id: String,
+    devs: Vec<Dev>,
     sessions: Vec<Session>,
 }
 
 struct Mixer {
     tx: Sender<MixCmd>,
     open: Option<Open>,
-    /// Ícones e nomes dos apps já lidos (pelo .exe).
+    /// Ícones e nomes dos apps já lidos (pela chave do app).
     icons: HashMap<String, Option<Arc<Image>>>,
     names: HashMap<String, String>,
 }
@@ -177,20 +320,26 @@ impl Mixer {
     fn setup(&self) -> Result<Open> {
         unsafe {
             let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-            let dev = en.GetDefaultAudioEndpoint(eRender, eConsole)?;
-            let device_id = device_id(&dev);
-            let device = device_name(&dev);
-            let mgr: IAudioSessionManager2 = dev.Activate(CLSCTX_ALL, None)?;
-            let notify: IAudioSessionNotification = NewSession(self.tx.clone()).into();
-            mgr.RegisterSessionNotification(&notify)?;
-            Ok(Open { device_id, device, mgr, notify, sessions: Vec::new() })
+            let default_id = en.GetDefaultAudioEndpoint(eRender, eConsole).map(|d| device_id(&d)).unwrap_or_default();
+            let col = en.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+            let mut devs = Vec::new();
+            for i in 0..col.GetCount()? {
+                let Ok(dev) = col.Item(i) else { continue };
+                let Ok(mgr) = dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else { continue };
+                let notify: IAudioSessionNotification = NewSession(self.tx.clone()).into();
+                let _ = mgr.RegisterSessionNotification(&notify);
+                devs.push(Dev { id: device_id(&dev), name: device_name(&dev), mgr, notify });
+            }
+            Ok(Open { default_id, devs, sessions: Vec::new() })
         }
     }
 
     fn close(&mut self) {
         if let Some(o) = self.open.take() {
             unsafe {
-                let _ = o.mgr.UnregisterSessionNotification(&o.notify);
+                for d in &o.devs {
+                    let _ = d.mgr.UnregisterSessionNotification(&d.notify);
+                }
                 for s in &o.sessions {
                     let _ = s.ctl.UnregisterAudioSessionNotification(&s.events);
                 }
@@ -198,7 +347,7 @@ impl Mixer {
         }
     }
 
-    /// Chama `f` com o volume de cada sessão do app `key`.
+    /// Chama `f` com o volume de cada sessão do app `key` (em qualquer saída).
     fn each_volume(&self, key: &str, mut f: impl FnMut(&ISimpleAudioVolume)) {
         if let Some(o) = &self.open {
             for s in o.sessions.iter().filter(|s| s.key == key) {
@@ -207,42 +356,33 @@ impl Mixer {
         }
     }
 
-    /// Lê as sessões (e registra os avisos nas novas) e monta a lista por app.
+    /// Lê as sessões de todas as saídas (e registra os avisos nas novas) e
+    /// monta a lista por app.
     fn read(&mut self) -> MixerState {
-        // O dispositivo padrão mudou (fone, HDMI): recomeça nele.
-        let changed = self.open.as_ref().is_some_and(|o| unsafe {
-            CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                .and_then(|en| en.GetDefaultAudioEndpoint(eRender, eConsole))
-                .map(|d| device_id(&d) != o.device_id)
-                .unwrap_or(false)
-        });
-        if changed {
-            self.open();
-        }
         let Some(o) = self.open.as_mut() else { return MixerState::default() };
-        let mut list: Vec<(IAudioSessionControl2, ISimpleAudioVolume, bool, bool, String)> = Vec::new();
+        // (sessão, volume, tocando, sistema, chave, nome dado pela sessão)
+        let mut list: Vec<(IAudioSessionControl2, ISimpleAudioVolume, bool, bool, String, String)> = Vec::new();
         unsafe {
-            let Ok(en) = o.mgr.GetSessionEnumerator() else { return MixerState::default() };
-            for i in 0..en.GetCount().unwrap_or(0) {
-                let Ok(ctl) = en.GetSession(i) else { continue };
-                let state = ctl.GetState().unwrap_or(AudioSessionStateExpired);
-                if state == AudioSessionStateExpired {
-                    continue;
-                }
-                let (Ok(ctl2), Ok(vol)) = (ctl.cast::<IAudioSessionControl2>(), ctl.cast::<ISimpleAudioVolume>()) else { continue };
-                let system = ctl2.IsSystemSoundsSession().0 == 0;
-                let key = if system {
-                    "system".to_string()
-                } else {
+            for d in &o.devs {
+                let Ok(en) = d.mgr.GetSessionEnumerator() else { continue };
+                for i in 0..en.GetCount().unwrap_or(0) {
+                    let Ok(ctl) = en.GetSession(i) else { continue };
+                    let state = ctl.GetState().unwrap_or(AudioSessionStateExpired);
+                    if state == AudioSessionStateExpired {
+                        continue;
+                    }
+                    let (Ok(ctl2), Ok(vol)) = (ctl.cast::<IAudioSessionControl2>(), ctl.cast::<ISimpleAudioVolume>()) else { continue };
+                    let system = ctl2.IsSystemSoundsSession().0 == 0;
                     let pid = ctl2.GetProcessId().unwrap_or(0);
-                    appicon::exe_path(pid).unwrap_or_else(|| format!("pid:{pid}"))
-                };
-                list.push((ctl2, vol, state == AudioSessionStateActive, system, key));
+                    let key = if system { "system".to_string() } else { app_key(pid) };
+                    let shown = if system { String::new() } else { ctl.GetDisplayName().map(|p| take_str(p.0)).unwrap_or_default() };
+                    list.push((ctl2, vol, state == AudioSessionStateActive, system, key, shown));
+                }
             }
         }
         // Avisos: registra nas sessões novas; esquece as que sumiram.
         let mut kept: Vec<Session> = Vec::new();
-        for (ctl, vol, _, _, key) in &list {
+        for (ctl, vol, _, _, key, _) in &list {
             match o.sessions.iter().position(|s| s.ctl.as_raw() == ctl.as_raw()) {
                 Some(i) => kept.push(o.sessions.swap_remove(i)),
                 None => {
@@ -260,11 +400,13 @@ impl Mixer {
             }
         }
         o.sessions = kept;
-        let device = o.device.clone();
+        let device = o.devs.iter().find(|d| d.id == o.default_id).map(|d| d.name.clone()).unwrap_or_default();
+        let device_id = o.default_id.clone();
+        let devices: Vec<OutDevice> = o.devs.iter().map(|d| OutDevice { id: d.id.clone(), name: d.name.clone() }).collect();
 
         // Junta por app: volume = o maior; mudo só se todas estiverem mudas.
         let mut apps: Vec<MixApp> = Vec::new();
-        for (_, vol, active, system, key) in &list {
+        for (_, vol, active, system, key, shown) in &list {
             let (v, mute) = unsafe { (vol.GetMasterVolume().unwrap_or(1.0), vol.GetMute().map(|b| b.as_bool()).unwrap_or(false)) };
             match apps.iter_mut().find(|a| a.key == *key) {
                 Some(a) => {
@@ -273,28 +415,62 @@ impl Mixer {
                     a.active |= *active;
                 }
                 None => {
-                    let (name, icon) = if *system { (String::new(), None) } else { (self.name_of(key), self.icon_of(key)) };
+                    let (name, icon) = if *system { (String::new(), None) } else { self.describe(key, shown) };
                     apps.push(MixApp { key: key.clone(), name, icon, volume: v, muted: mute, active: *active, system: *system });
                 }
             }
         }
-        // Tocando primeiro, depois os outros; os sons do sistema no fim.
-        apps.sort_by_key(|a| (a.system, !a.active, a.name.to_lowercase()));
-        MixerState { device, apps, fill: Vec::new() }
+        // Como no Windows: os sons do sistema primeiro; depois os que estão
+        // tocando e os outros, por nome.
+        apps.sort_by_key(|a| (!a.system, !a.active, a.name.to_lowercase()));
+        MixerState { device, device_id, devices, apps, fill: Vec::new() }
     }
 
-    fn icon_of(&mut self, path: &str) -> Option<Arc<Image>> {
-        self.icons.entry(path.to_string()).or_insert_with(|| appicon::exe_icon(path).map(Arc::new)).clone()
-    }
-
-    fn name_of(&mut self, path: &str) -> String {
-        self.names.entry(path.to_string()).or_insert_with(|| app_name(path)).clone()
+    /// Nome e ícone do app `key`: o do pacote (pasta "Aplicativos"), o nome que
+    /// a própria sessão dá ("RemoteApp Audio") ou a descrição do .exe.
+    fn describe(&mut self, key: &str, shown: &str) -> (String, Option<Arc<Image>>) {
+        if !self.names.contains_key(key) {
+            let (name, icon) = match key.strip_prefix("app:") {
+                Some(aumid) => {
+                    let (n, i) = appicon::from_apps_folder(aumid);
+                    (n.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| aumid.split('!').next().unwrap_or(aumid).to_string()), i.map(Arc::new))
+                }
+                None => {
+                    let name = if !shown.is_empty() && !shown.starts_with('@') { shown.to_string() } else { app_name(key) };
+                    (name, appicon::exe_icon(key).map(Arc::new))
+                }
+            };
+            self.names.insert(key.to_string(), name);
+            self.icons.insert(key.to_string(), icon);
+        }
+        (self.names[key].clone(), self.icons.get(key).cloned().flatten())
     }
 }
 
 impl Drop for Mixer {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+/// Chave do app de um processo: o pacote dele, se tiver (apps da Store e o
+/// WebView2 que eles abrem), ou o caminho do .exe.
+fn app_key(pid: u32) -> String {
+    if let Some(aumid) = crate::audio::process::package_aumid(pid) {
+        return format!("app:{aumid}");
+    }
+    appicon::exe_path(pid).unwrap_or_else(|| format!("pid:{pid}"))
+}
+
+/// Texto de um PWSTR do COM (e libera a memória dele).
+fn take_str(p: *mut u16) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let s = windows::core::PCWSTR(p).to_string().unwrap_or_default();
+        CoTaskMemFree(Some(p as _));
+        s
     }
 }
 
@@ -384,3 +560,45 @@ mod tests {
         println!("releitura: {:?}", t.elapsed());
     }
 }
+
+#[cfg(test)]
+mod probe {
+    /// Sessões de áudio em TODAS as saídas ativas (para comparar com o Mixer
+    /// de Volume do Windows). `cargo test --release mixer_all_devices -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn mixer_all_devices() {
+        use windows::Win32::Media::Audio::*;
+        use windows::Win32::System::Com::*;
+        use windows::core::Interface;
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).unwrap();
+            let def = en.GetDefaultAudioEndpoint(eRender, eConsole).map(|d| super::device_id(&d)).unwrap_or_default();
+            let comm = en.GetDefaultAudioEndpoint(eRender, eCommunications).map(|d| super::device_id(&d)).unwrap_or_default();
+            let col = en.EnumAudioEndpoints(eRender, DEVICE_STATE(DEVICE_STATEMASK_ALL)).unwrap();
+            for i in 0..col.GetCount().unwrap() {
+                let dev = col.Item(i).unwrap();
+                let id = super::device_id(&dev);
+                let state = dev.GetState().map(|s| s.0).unwrap_or(0);
+                println!("== {} estado_disp={state} {}{}", super::device_name(&dev), if id == def { "[padrão]" } else { "" }, if id == comm { "[comunicação]" } else { "" });
+                let Ok(mgr) = dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else { println!("   (sem sessões)"); continue };
+                let Ok(se) = mgr.GetSessionEnumerator() else { println!("   (sem lista)"); continue };
+                for k in 0..se.GetCount().unwrap() {
+                    let ctl = se.GetSession(k).unwrap();
+                    let c2: IAudioSessionControl2 = ctl.cast().unwrap();
+                    let pid = c2.GetProcessId().unwrap_or(0);
+                    let st = ctl.GetState().map(|s| s.0).unwrap_or(-1);
+                    let path = crate::appicon::exe_path(pid).unwrap_or_default();
+                    let dn = ctl.GetDisplayName().map(|p| p.to_string().unwrap_or_default()).unwrap_or_default();
+                    let ic = ctl.GetIconPath().map(|p| p.to_string().unwrap_or_default()).unwrap_or_default();
+                    let sid = c2.GetSessionIdentifier().map(|p| p.to_string().unwrap_or_default()).unwrap_or_default();
+                    let pkg = crate::audio::process::package_aumid(pid).unwrap_or_default();
+                    println!("   pid={pid:<6} estado={st} sistema={} {} | nome='{dn}' ícone='{ic}' pacote='{pkg}'", c2.IsSystemSoundsSession().0 == 0, path);
+                    println!("        id={sid}");
+                }
+            }
+        }
+    }
+}
+

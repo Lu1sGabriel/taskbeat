@@ -104,12 +104,18 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   que não deixa o Windows mudar isso, o Taskbeat aperta os botões da própria
   página, sem trazer a janela para a frente, e lê o estado do repetir (desativado
   → tudo → uma); o aleatório do YouTube Music embaralha a fila de novo a cada
-  clique. Nos outros sites o clique nesses botões traz o player para a frente.
+  clique (não é um modo ligado/desligado). Numa aba, ele só aperta se a aba do
+  YouTube Music estiver na frente da janela dela e a barra do player mostrar a
+  música que está tocando. Nos outros sites o clique nesses botões traz o player
+  para a frente.
 - **Mixer de volume** (Windows; opcional, ligado por padrão): uma setinha embaixo do
-  card abre, com animação, o volume de cada app que usa a saída de áudio (ícone,
-  nome, slider, mudo e a roda do mouse), juntando os processos do mesmo app,
-  mais os sons do sistema e o nome do dispositivo de saída. Atualiza sozinho
-  pelos avisos do Windows (app novo, volume mudado em outro lugar). As barras
+  card abre, com animação, o volume de cada app com som, como no Mixer de
+  Volume do Windows: os de todas as saídas de áudio (ícone, nome, slider, mudo e
+  a roda do mouse), juntando os processos do mesmo app (o WhatsApp, que toca
+  pelo WebView2, aparece como WhatsApp), mais os sons do sistema. Com muitos
+  apps, a lista rola. Clicar no nome da saída abre a lista das saídas para trocar
+  a padrão; o mixer e o volume do card seguem a saída nova, inclusive quando
+  ela muda por fora do app. Atualiza sozinho pelos avisos do Windows. As barras
   de volume (do mixer e a principal) sobem e descem suaves: enchem ao abrir e
   esvaziam ao fechar. Com ele aberto o card não fecha sozinho.
 - **Atalhos dos apps de música** (opcional, ligado por padrão): o ícone de cada
@@ -196,7 +202,7 @@ Como:
 | Música, capa, controles, linha do tempo, eventos | `GlobalSystemMediaTransportControlsSessionManager` | `src/media.rs` |
 | Nome/ícone do app de origem | Pasta Aplicativos do shell (AUMID) → ícone do .exe | `src/appicon.rs` |
 | Volume | `IAudioEndpointVolume` | `src/volume.rs` |
-| Mixer de volume (volume por app) | Sessões do WASAPI (`IAudioSessionManager2`, `ISimpleAudioVolume`) e avisos `IAudioSessionNotification`/`IAudioSessionEvents` | `src/mixer.rs` |
+| Mixer de volume (volume por app, troca da saída) | Sessões do WASAPI em todas as saídas ativas (`IAudioSessionManager2`, `ISimpleAudioVolume`), avisos `IAudioSessionNotification`/`IAudioSessionEvents`/`IMMNotificationClient` e `IPolicyConfig` (não documentada, a mesma do EarTrumpet e do SoundSwitch) para a saída padrão | `src/mixer.rs` |
 | Espectro | Hann + FFT 4096 (`realfft`), bandas log, AGC | `src/dsp.rs` |
 | Desenho (widget, card, "A seguir", Caps Lock) | Renderização própria com anti-aliasing (SDF), desfoque, sombras | `src/ui.rs`, `src/render.rs` |
 | Janelas sobre a barra | Janelas *layered* com alfa por pixel, topmost; o widget pertence à barra (não some atrás dela quando ela é ativada) | `src/overlay.rs` |

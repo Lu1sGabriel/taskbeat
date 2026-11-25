@@ -1,13 +1,24 @@
 //! Volume principal do dispositivo de saída padrão (IAudioEndpointVolume),
 //! o mesmo que o botão de volume da bandeja controla.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender};
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
 
+/// Quantas vezes a saída padrão mudou (aviso do Windows, na thread do mixer).
+static OUTPUT_VERSION: AtomicU64 = AtomicU64::new(0);
+
+/// A saída padrão mudou: o volume do card passa a valer para a nova.
+pub fn output_changed() {
+    OUTPUT_VERSION.fetch_add(1, Ordering::Relaxed);
+}
+
 pub struct Volume {
     ep: Option<IAudioEndpointVolume>,
+    /// `OUTPUT_VERSION` de quando `ep` foi aberto.
+    version: u64,
     last_endpoint: Instant,
     last_read: Instant,
     pub level: f32,
@@ -17,15 +28,18 @@ pub struct Volume {
 impl Volume {
     pub fn new() -> Self {
         let long_ago = Instant::now() - Duration::from_secs(60);
-        let mut v = Self { ep: None, last_endpoint: long_ago, last_read: long_ago, level: 0.0, muted: false };
+        let mut v = Self { ep: None, version: 0, last_endpoint: long_ago, last_read: long_ago, level: 0.0, muted: false };
         v.poll();
         v
     }
 
     fn endpoint(&mut self) -> Option<IAudioEndpointVolume> {
-        // Reabre a cada 3 s: se o dispositivo padrão mudar (fone, HDMI), segue junto.
-        if self.ep.is_none() || self.last_endpoint.elapsed() > Duration::from_secs(3) {
+        // Reabre quando o Windows avisa que a saída padrão mudou (fone, HDMI,
+        // a escolha no mixer do card) e, por garantia, a cada 30 s.
+        let version = OUTPUT_VERSION.load(Ordering::Relaxed);
+        if self.ep.is_none() || self.version != version || self.last_endpoint.elapsed() > Duration::from_secs(30) {
             self.last_endpoint = Instant::now();
+            self.version = version;
             self.ep = unsafe {
                 CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
                     .and_then(|e| e.GetDefaultAudioEndpoint(eRender, eConsole))

@@ -464,6 +464,7 @@ static T: &[[&str; 4]] = &[
     ["Nenhum app com som agora", "No app with sound right now", "Ninguna app con sonido ahora", "Gerade keine App mit Ton"],
     ["Sons do sistema", "System sounds", "Sonidos del sistema", "Systemklänge"],
     ["Abrir mixer de volume", "Open volume mixer", "Abrir mezclador de volumen", "Lautstärkemixer öffnen"],
+    ["Não deu para trocar a saída de áudio", "Couldn't switch the audio output", "No se pudo cambiar la salida de audio", "Audioausgabe konnte nicht gewechselt werden"],
     ["Fechar mixer de volume", "Close volume mixer", "Cerrar mezclador de volumen", "Lautstärkemixer schließen"],
     ["Cor dos controles","Controls color", "Color de los controles", "Farbe der Steuerelemente"],
     ["Aleatório, anterior, play, próximo e repetir; o branco fica escuro sobre fundos claros", "Shuffle, previous, play, next and repeat; white turns dark on light backgrounds", "Aleatorio, anterior, reproducir, siguiente y repetir; el blanco se oscurece sobre fondos claros", "Zufall, Zurück, Wiedergabe, Weiter und Wiederholen; Weiß wird auf hellen Hintergründen dunkel"],

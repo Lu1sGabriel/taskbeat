@@ -603,20 +603,23 @@ struct Overlay {
     /// (tocando primeiro); se as linhas trocassem de lugar com o mouse em
     /// cima, o slider, a roda e o mudo passariam a valer para outro app.
     mix_order: Vec<String>,
+    /// O mixer como aparece, refeito só quando algo muda (a thread publicou,
+    /// o usuário mexeu, a ordem mudou): o card não clona o estado por quadro.
+    mix_view: crate::shared::MixerState,
+    mix_view_key: Option<(u64, usize, usize)>,
+    /// Lista do mixer rolada (px lógicos): alvo e como aparece (anima).
+    mix_scroll_to: f32,
+    mix_scroll: f32,
+    /// Último x, y do mouse no card (a roda rola a lista do mixer embaixo dele).
+    mouse_f: (f32, f32),
+    /// Falhas ao trocar a saída de áudio já avisadas.
+    out_failed_seen: u64,
 }
 
 /// Linhas do mixer na ordem `order` (a da abertura; os que não estão nela,
-/// no fim), os sons do sistema por último e sempre à vista: com mais apps do
-/// que linhas, eles tomam a última linha.
-fn mix_arrange(apps: &mut Vec<crate::shared::MixApp>, order: &[String]) {
-    apps.sort_by_key(|a| (a.system, order.iter().position(|k| *k == a.key).unwrap_or(usize::MAX)));
-    let rows = crate::shared::MIXER_ROWS;
-    if apps.len() > rows
-        && let Some(i) = apps.iter().position(|a| a.system)
-    {
-        let sys = apps.remove(i);
-        apps.insert(rows - 1, sys);
-    }
+/// no fim), com os sons do sistema em cima, como no Mixer do Windows.
+fn mix_arrange(apps: &mut [crate::shared::MixApp], order: &[String]) {
+    apps.sort_by_key(|a| (!a.system, order.iter().position(|k| *k == a.key).unwrap_or(usize::MAX)));
 }
 
 /// Volume e/ou mudo que o usuário mudou num app do mixer, e quando.
@@ -781,6 +784,12 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         mix_fill: Vec::new(),
         tip: None,
         mix_order: Vec::new(),
+        mix_view: Default::default(),
+        mix_view_key: None,
+        mix_scroll_to: 0.0,
+        mix_scroll: 0.0,
+        mouse_f: (0.0, 0.0),
+        out_failed_seen: 0,
         shared,
     };
     ov.refresh_launchers();
@@ -963,13 +972,20 @@ impl Overlay {
     fn card_layout(&self) -> CLayout {
         let s = self.scale();
         let rows = self.cfg.card_mixer.then(|| self.shared.mixer.lock().unwrap().apps.len());
-        CLayout::build(s, &self.cfg, self.media.dur > 0.0).with_launchers(self.card_launchers(), s).with_mixer(rows, ui::ease_move(self.mixer_anim), s)
+        let base = CLayout::build(s, &self.cfg, self.media.dur > 0.0).with_launchers(self.card_launchers(), s);
+        // Linhas à vista: até 7, menos se o card aberto não couber na tela.
+        let room = self.placement.map(|p| (p.mon_bottom - p.mon_top) as f32 - (p.h as f32) - 40.0 * s).unwrap_or(f32::MAX);
+        let max_rows = ((room - base.h - 50.0 * s) / (36.0 * s)).floor().clamp(3.0, crate::shared::MIXER_ROWS as f32) as usize;
+        base.with_mixer(rows, ui::ease_move(self.mixer_anim), self.mix_scroll, max_rows, s)
     }
 
     /// Abre ou fecha o mixer de volume (a thread dele só trabalha aberto).
     fn set_mixer(&mut self, open: bool) {
         if open != self.mixer_open {
             self.mixer_open = open;
+            // Abre sempre do começo da lista.
+            self.mix_scroll_to = 0.0;
+            self.mix_scroll = 0.0;
             self.shared.send_mixer(if open { MixCmd::Open } else { MixCmd::Close });
         }
     }
@@ -1000,6 +1016,34 @@ impl Overlay {
             if !self.mix_order.contains(&a.key) {
                 self.mix_order.push(a.key.clone());
             }
+        }
+    }
+
+    /// Lista das saídas de áudio (menu do app, embaixo do nome da saída no
+    /// mixer); escolher uma a torna a padrão.
+    fn pick_output(&mut self, now: Instant) {
+        let (Some((x, y, _, _)), devices, current) = (self.flyout_box, self.mix_view.devices.clone(), self.mix_view.device_id.clone()) else { return };
+        if devices.is_empty() {
+            return;
+        }
+        let d = self.card_layout().mixer_dev;
+        let at = RECT { left: x + d.x as i32, top: y + d.y as i32, right: x + d.right() as i32, bottom: y + d.bottom() as i32 };
+        let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
+        let entries: Vec<crate::menu::Entry> = devices.iter().enumerate().map(|(k, o)| crate::menu::Entry::radio(k as u32 + 1, &o.name, o.id == current)).collect();
+        // Largo o bastante para os nomes inteiros ("Speakers (Logitech G635/G633s Gaming Headset)").
+        let opts = crate::menu::Options { dark: th.dark, accent: th.accent, min_width: 380.0 };
+        let pick = crate::menu::popup(self.flyout.hwnd, entries, crate::menu::Anchor::Below(at), opts, &mut |_| None);
+        // O menu é modal e toma o foco: o "card perdeu o foco" que isso gerou
+        // não pode fechar o card; o foco volta para ele.
+        EVENTS.with(|e| e.borrow_mut().retain(|(_, ev)| !matches!(ev, Ev::Deactivate)));
+        unsafe {
+            let _ = SetForegroundWindow(self.flyout.hwnd);
+        }
+        self.flyout_last_hover = now;
+        self.pressed = None;
+        if let Some(o) = pick.and_then(|k| devices.get(k as usize - 1)).filter(|o| o.id != current) {
+            log::info(&format!("trocando a saída de áudio para {}", o.name));
+            self.shared.send_mixer(MixCmd::SetDevice(o.id.clone()));
         }
     }
 
@@ -1505,6 +1549,7 @@ impl Overlay {
                 Ev::Move(x, y, _) => {
                     if win == Win::Flyout {
                         self.flyout_last_hover = now;
+                        self.mouse_f = (x, y);
                         // Atalho apertado e o mouse andou: vira arrasto (reordena).
                         if let Some((i, x0)) = self.launch_press
                             && self.drag.is_none()
@@ -1606,10 +1651,14 @@ impl Overlay {
                     self.pressed = None;
                 }
                 Ev::Wheel(d) => match self.hover_f {
-                    Some(Hit::MixVol(i) | Hit::MixMute(i)) if win == Win::Flyout => {
+                    Some(Hit::MixVol(i)) if win == Win::Flyout => {
                         if let Some((key, v, _)) = self.mix_row(i as usize) {
                             self.set_mix(&key, Some(((v + d as f32 / 120.0 * 0.04) * 50.0).round() / 50.0), None, now);
                         }
+                    }
+                    // Sobre a lista do mixer (fora dos sliders): rola, uma linha por "clique".
+                    _ if win == Win::Flyout && cl.mixer_open > 0.5 && cl.mixer_scroll_max > 0.0 && cl.mixer_list.contains(self.mouse_f.0, self.mouse_f.1) => {
+                        self.mix_scroll_to = (self.mix_scroll_to - d as f32 / 120.0 * 36.0).clamp(0.0, cl.mixer_scroll_max);
                     }
                     _ => self.volume.step(d as f32 / 120.0 * 0.02),
                 },
@@ -1705,6 +1754,7 @@ impl Overlay {
                 self.set_mixer(open);
                 self.flyout_last_hover = now;
             }
+            Hit::MixDevice => self.pick_output(now),
             Hit::MixMute(i) => {
                 if let Some((key, _, m)) = self.mix_row(i as usize) {
                     self.set_mix(&key, None, Some(!m), now);
@@ -1821,6 +1871,8 @@ impl Overlay {
             self.mix_fill.clear();
             self.mix_hold.clear();
             self.mix_drag = None;
+            self.mix_view = Default::default();
+            self.mix_view_key = None;
             return false;
         };
         // Mixer abrindo/fechando: o card cresce ou encolhe junto.
@@ -1843,10 +1895,18 @@ impl Overlay {
         };
         let vol_target = if opening && !pb.muted { pb.volume } else { 0.0 };
         let mut fills_moving = ease(&mut self.vol_fill, vol_target, self.drag == Some(Hit::Vol));
-        let mut mixer = self.mixer_view();
+        // O mixer só é copiado quando algo nele muda (e só com ele à vista).
+        if self.cfg.card_mixer && (self.mixer_open || self.mixer_anim > 0.0) {
+            let key = (self.shared.mixer_version.load(Ordering::Relaxed), self.mix_hold.len(), self.mix_order.len());
+            if self.mix_view_key != Some(key) {
+                self.mix_view = self.mixer_view();
+                self.mix_view_key = Some(key);
+            }
+        }
         let mix_on = opening && self.mixer_open;
-        let mut fill = Vec::with_capacity(mixer.apps.len());
-        for a in &mixer.apps {
+        let mut fill = std::mem::take(&mut self.mix_view.fill);
+        fill.clear();
+        for a in &self.mix_view.apps {
             let target = if mix_on && !a.muted { a.volume } else { 0.0 };
             let i = match self.mix_fill.iter().position(|(k, _)| *k == a.key) {
                 Some(i) => i,
@@ -1858,8 +1918,16 @@ impl Overlay {
             fills_moving |= ease(&mut self.mix_fill[i].1, target, drag_key.as_deref() == Some(&a.key));
             fill.push(self.mix_fill[i].1);
         }
-        self.mix_fill.retain(|(k, _)| mixer.apps.iter().any(|a| &a.key == k));
-        mixer.fill = fill;
+        let apps = &self.mix_view.apps;
+        self.mix_fill.retain(|(k, _)| apps.iter().any(|a| &a.key == k));
+        self.mix_view.fill = fill;
+        fills_moving |= ease(&mut self.mix_scroll, self.mix_scroll_to, false);
+        // Trocar a saída de áudio falhou: aviso discreto no card.
+        let failed = self.shared.output_failed.load(Ordering::Relaxed);
+        if failed != self.out_failed_seen {
+            self.out_failed_seen = failed;
+            self.hint = Some((now, tr("Não deu para trocar a saída de áudio")));
+        }
         // Dica da setinha do mixer: quase na hora (um quarto de segundo em cima).
         let tip_hit = self.hover_f.filter(|h| *h == Hit::MixToggle && self.drag.is_none());
         match (tip_hit, self.tip) {
@@ -1946,7 +2014,7 @@ impl Overlay {
                 }),
                 launchers: &launchers,
                 viz: (self.cfg.card_viz && self.viz).then_some(&self.analyzer.values[..]),
-                mixer: self.cfg.card_mixer.then_some(&mixer),
+                mixer: self.cfg.card_mixer.then_some(&self.mix_view),
             };
             ui::draw_card(&mut cv, &mut self.text, &l, &f);
         }
@@ -2064,19 +2132,17 @@ mod tests {
 
     /// Com o mixer aberto, as linhas não trocam de lugar quando a thread
     /// reordena (um app começou a tocar); app novo vai para o fim; os sons do
-    /// sistema ficam sempre à vista.
+    /// sistema ficam em cima. Nenhum app é cortado (a lista rola).
     #[test]
     fn mixer_mantem_a_ordem_das_linhas() {
-        let order: Vec<String> = ["a", "b", "system"].iter().map(|s| s.to_string()).collect();
+        let order: Vec<String> = ["system", "a", "b"].iter().map(|s| s.to_string()).collect();
         // A thread pôs "b" (que começou a tocar) e o novo "n" na frente.
         let mut apps = vec![app("n", false), app("b", false), app("system", true), app("a", false)];
         mix_arrange(&mut apps, &order);
-        assert_eq!(keys(&apps), ["a", "b", "n", "system"]);
-        // Mais apps do que linhas: o sistema toma a última linha à vista.
-        let mut apps: Vec<MixApp> = (0..8).map(|i| app(&format!("p{i}"), false)).collect();
+        assert_eq!(keys(&apps), ["system", "a", "b", "n"]);
+        let mut apps: Vec<MixApp> = (0..12).map(|i| app(&format!("p{i}"), false)).collect();
         apps.push(app("system", true));
         mix_arrange(&mut apps, &[]);
-        assert_eq!(apps[crate::shared::MIXER_ROWS - 1].key, "system");
-        assert_eq!(apps.len(), 9);
+        assert_eq!((apps[0].key.as_str(), apps.len()), ("system", 13));
     }
 }

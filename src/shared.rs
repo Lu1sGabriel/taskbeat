@@ -123,13 +123,16 @@ impl WebState {
     }
 }
 
-/// Linhas do mixer de volume no máximo (o card não cresce sem fim).
-pub const MIXER_ROWS: usize = 6;
+/// Linhas do mixer à vista no máximo: com mais apps, a lista rola (o card
+/// não cresce sem fim; numa tela baixa, menos ainda).
+pub const MIXER_ROWS: usize = 7;
 
 /// Um app no mixer de volume do card (sessões de áudio do mesmo app juntas).
 #[derive(Clone)]
 pub struct MixApp {
-    /// Identifica o app (caminho do .exe; "system" para os sons do sistema).
+    /// Identifica o app: "app:<AUMID>" nos apps de pacote (Store, e o
+    /// WebView2 deles, como o WhatsApp), o caminho do .exe nos outros e
+    /// "system" para os sons do sistema.
     pub key: String,
     pub name: String,
     pub icon: Option<Arc<Image>>,
@@ -141,10 +144,20 @@ pub struct MixApp {
     pub system: bool,
 }
 
-/// O que o mixer mostra: o dispositivo de saída e os apps com som nele.
+/// Uma saída de áudio ativa (para escolher a padrão no mixer).
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutDevice {
+    pub id: String,
+    pub name: String,
+}
+
+/// O que o mixer mostra: a saída padrão, as outras saídas ativas e os apps
+/// com sessão de áudio em qualquer uma delas (como o Mixer do Windows).
 #[derive(Clone, Default)]
 pub struct MixerState {
     pub device: String,
+    pub device_id: String,
+    pub devices: Vec<OutDevice>,
     pub apps: Vec<MixApp>,
     /// Quanto cada barra aparece cheia agora (animação de subir e descer);
     /// vazio: o próprio volume.
@@ -161,6 +174,12 @@ pub enum MixCmd {
     Mute(String, bool),
     /// Algo mudou (aviso do Windows): relê.
     Refresh,
+    /// Torna a saída `id` a padrão (console, multimídia e comunicação).
+    SetDevice(String),
+    /// A saída padrão mudou (pelo app ou por fora dele).
+    DefaultChanged,
+    /// Uma saída apareceu, sumiu ou mudou de estado.
+    DevicesChanged,
 }
 
 /// Pedidos para a thread que aperta os botões da página do player.
@@ -256,6 +275,8 @@ pub struct Shared {
     pub mixer: Mutex<MixerState>,
     pub mixer_version: AtomicU64,
     pub mixer_tx: Mutex<Option<Sender<MixCmd>>>,
+    /// Vezes que trocar a saída de áudio falhou (o card mostra um aviso).
+    pub output_failed: AtomicU64,
 }
 
 impl Shared {
@@ -277,6 +298,7 @@ impl Shared {
             mixer: Mutex::new(MixerState::default()),
             mixer_version: AtomicU64::new(0),
             mixer_tx: Mutex::new(None),
+            output_failed: AtomicU64::new(0),
         }
     }
 

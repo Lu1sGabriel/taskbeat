@@ -509,10 +509,10 @@ fn card_mixer() {
     tr.set_scale(S);
     let cfg = Config::default();
     let c = colors(&cfg, &media);
-    let full = CLayout::build(S, &cfg, true).with_mixer(Some(mx.apps.len()), 1.0, S);
+    let full = CLayout::build(S, &cfg, true).with_mixer(Some(mx.apps.len()), 1.0, 0.0, crate::shared::MIXER_ROWS, S);
     let mut cards = Vec::new();
     for (open, hover) in [(0.0, None), (0.5, None), (1.0, Some(Hit::MixVol(0)))] {
-        let cl = CLayout::build(S, &cfg, true).with_mixer(Some(mx.apps.len()), open, S);
+        let cl = CLayout::build(S, &cfg, true).with_mixer(Some(mx.apps.len()), open, 0.0, crate::shared::MIXER_ROWS, S);
         cards.push(render(cl.w, cl.h, |cv| {
             let it = Interact { hover, ..Interact::default() };
             let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb: playback(&media), s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: Some(&mx) };
@@ -551,14 +551,14 @@ fn card_frame_cost() {
         let n = 15;
         for i in 0..n {
             let open = i as f32 / (n - 1) as f32;
-            let cl = CLayout::build(s, &cfg, true).with_mixer(Some(6), open, s);
+            let cl = CLayout::build(s, &cfg, true).with_mixer(Some(6), open, 0.0, crate::shared::MIXER_ROWS, s);
             let (w, h) = (cl.w.ceil() as usize, cl.h.ceil() as usize);
             let mut px = vec![0u32; w * h];
             let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb: playback(&media), s, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: Some(&mx) };
             ui::draw_card(&mut Canvas::new(w, h, &mut px), &mut tr, &cl, &f);
         }
         println!("{style:?}: {:.2} ms por quadro (altura mudando)", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
-        let cl = CLayout::build(s, &cfg, true).with_mixer(Some(6), 1.0, s);
+        let cl = CLayout::build(s, &cfg, true).with_mixer(Some(6), 1.0, 0.0, crate::shared::MIXER_ROWS, s);
         let (w, h) = (cl.w.ceil() as usize, cl.h.ceil() as usize);
         let t = std::time::Instant::now();
         for _ in 0..n {
