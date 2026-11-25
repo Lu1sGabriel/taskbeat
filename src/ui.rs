@@ -49,6 +49,13 @@ pub enum Hit {
     Vol,
     /// Atalho para abrir um app de música (índice na lista).
     Launch(u8),
+    /// Setinha que abre/fecha o mixer de volume do card.
+    MixToggle,
+    /// Slider e mudo do app `i` no mixer.
+    MixVol(u8),
+    MixMute(u8),
+    /// Mac: escolher a saída de áudio `i` (a lista que a setinha abre).
+    Output(u8),
 }
 
 /// Cores de um componente já resolvidas (tema + cor de destaque).
@@ -332,6 +339,10 @@ enum VIcon {
     Vol1,
     Vol2,
     Vol3,
+    /// Setinha para baixo (o mixer do card).
+    Chevron,
+    /// Marca de "escolhido".
+    Check,
 }
 
 fn vicon_of(g: &str) -> Option<VIcon> {
@@ -464,6 +475,8 @@ fn vicon_shape(v: VIcon) -> Shape2 {
             parts.push(path(vec![(0.10, -0.13), (0.36, 0.13)], 0.055));
             parts.push(path(vec![(0.10, 0.13), (0.36, -0.13)], 0.055));
         }
+        VIcon::Chevron => parts.push(path(vec![(-0.34, -0.14), (0.0, 0.18), (0.34, -0.14)], 0.075)),
+        VIcon::Check => parts.push(path(vec![(-0.34, 0.02), (-0.1, 0.25), (0.36, -0.24)], 0.08)),
         VIcon::Vol1 | VIcon::Vol2 | VIcon::Vol3 => {
             let n = match v {
                 VIcon::Vol1 => 1,
@@ -1505,6 +1518,14 @@ pub struct CLayout {
     /// Atalhos dos apps de música (linha embaixo do card) e o texto ao lado.
     pub launch: Vec<RectF>,
     pub launch_label: RectF,
+    /// Mixer de volume: a setinha (sempre, com a opção ligada), a área que
+    /// abre (altura animada), o cabeçalho e as linhas (linha, slider, mudo).
+    pub mixer_btn: Option<RectF>,
+    pub mixer_area: RectF,
+    pub mixer_head: RectF,
+    pub mixer_rows: Vec<(RectF, RectF, RectF)>,
+    /// Quanto o mixer está aberto (0..1, já com a curva da animação).
+    pub mixer_open: f32,
 }
 
 impl CLayout {
@@ -1588,9 +1609,54 @@ impl CLayout {
         self
     }
 
+    /// Acrescenta o mixer de volume embaixo do card: a setinha e, aberto
+    /// (`open` de 0 a 1), as linhas de `rows` apps. `None`: opção desligada.
+    pub fn with_mixer(mut self, rows: Option<usize>, open: f32, s: f32) -> Self {
+        let Some(n) = rows else { return self };
+        let pad = 16.0 * s;
+        let top = self.card.bottom() - 4.0 * s;
+        let full = mixer_height(n, s);
+        let h = (full * open.clamp(0.0, 1.0)).round();
+        self.mixer_open = open.clamp(0.0, 1.0);
+        self.mixer_area = RectF::new(self.card.x, top, self.card.w, h);
+        self.mixer_head = RectF::new(self.card.x + pad, top + 6.0 * s, self.card.w - 2.0 * pad, 22.0 * s);
+        self.mixer_rows = (0..n.min(crate::shared::MIXER_ROWS))
+            .map(|i| {
+                let row = RectF::new(self.card.x + pad, top + 32.0 * s + i as f32 * 36.0 * s, self.card.w - 2.0 * pad, 34.0 * s);
+                let slider = RectF::new(row.x + 140.0 * s, row.y, row.w - 140.0 * s - 40.0 * s, row.h);
+                let mute = RectF::new(row.right() - 34.0 * s, row.y, 34.0 * s, row.h);
+                (row, slider, mute)
+            })
+            .collect();
+        self.mixer_btn = Some(RectF::new(self.card.cx() - 24.0 * s, top + h, 48.0 * s, 20.0 * s));
+        let extra = h + 18.0 * s;
+        self.card.h += extra;
+        self.h += extra;
+        self
+    }
+
+    /// Trilho do slider do app `i` no mixer.
+    pub fn mix_track(&self, i: usize, s: f32) -> Option<(f32, f32)> {
+        self.mixer_rows.get(i).map(|(_, r, _)| (r.x + 6.0 * s, r.right() - 6.0 * s))
+    }
+
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         if let Some(i) = self.launch.iter().position(|r| r.contains(x, y)) {
             return Some(Hit::Launch(i as u8));
+        }
+        if self.mixer_btn.is_some_and(|r| r.contains(x, y)) {
+            return Some(Hit::MixToggle);
+        }
+        // Linhas do mixer: só a parte que já está à vista (abrindo).
+        if self.mixer_open > 0.5 && self.mixer_area.contains(x, y) {
+            for (i, (_, slider, mute)) in self.mixer_rows.iter().enumerate() {
+                if mute.contains(x, y) {
+                    return Some(Hit::MixMute(i as u8));
+                }
+                if slider.contains(x, y) {
+                    return Some(Hit::MixVol(i as u8));
+                }
+            }
         }
         let all = [
             (Some(self.shuffle), Hit::Shuffle),
@@ -1724,6 +1790,8 @@ pub struct CardFrame<'a> {
     pub launchers: &'a [crate::shared::Launcher],
     /// Barras de áudio (mini visualizador ao lado do título), se ligadas.
     pub viz: Option<&'a [f32]>,
+    /// Mixer de volume (com a opção ligada): dispositivo e apps.
+    pub mixer: Option<&'a crate::shared::MixerState>,
 }
 
 /// Sombra da capa: brilho na cor dela + sombra curta, como capas "flutuando".
@@ -1897,6 +1965,11 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, true, s);
     }
 
+    // Mixer de volume (setinha embaixo; aberto, uma linha por app).
+    if let Some(mx) = f.mixer.filter(|_| l.mixer_btn.is_some()) {
+        mixer_section(cv, tr, l, f, mx);
+    }
+
     // Atalhos para abrir os apps de música.
     if !l.launch.is_empty() {
         launcher_row(cv, tr, l, f);
@@ -1913,6 +1986,82 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         cv.fill_round(r, h / 2.0, [0.10, 0.10, 0.11], 0.92 * a);
         cv.stroke_round(r, h / 2.0, s, [1.0; 3], 0.10 * a);
         text_center(cv, tr, msg, Font::Caption, r, [1.0; 3], a);
+    }
+}
+
+/// Setinha do mixer (para baixo; vira para cima conforme `open` vai a 1).
+pub(crate) fn chevron(cv: &mut Canvas, b: RectF, open: f32, c: Rgb, a: f32, s: f32) {
+    let (w, h) = (b.w.round(), b.h.round());
+    let m = vector_mask(VIcon::Chevron, 15.0 * s, w as i32, h as i32);
+    cv.blit_mask_xform(b.x.round(), b.y.round(), &m, w / 2.0, h / 2.0, 1.0, std::f32::consts::PI * open.clamp(0.0, 1.0), c, a);
+}
+
+/// Marca de "escolhido" (✓) centrada em `r`.
+pub(crate) fn check(cv: &mut Canvas, r: RectF, c: Rgb, a: f32, s: f32) {
+    let m = vector_mask(VIcon::Check, 14.0 * s, r.w.round() as i32, r.h.round() as i32);
+    cv.blit_mask(r.x.round() as i32, r.y.round() as i32, &m, c, a);
+}
+
+/// Altura do mixer aberto com `n` apps.
+fn mixer_height(n: usize, s: f32) -> f32 {
+    32.0 * s + n.clamp(1, crate::shared::MIXER_ROWS) as f32 * 36.0 * s + 6.0 * s
+}
+
+/// Mixer de volume: cabeçalho com o dispositivo de saída, uma linha por app
+/// (ícone, nome, slider, mudo) e a setinha que abre e fecha.
+fn mixer_section(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFrame, mx: &crate::shared::MixerState) {
+    let (s, th) = (f.s, &f.theme);
+    let it = f.it.styled(f.cfg);
+    if l.mixer_area.h > 0.5 {
+        let a = l.mixer_open;
+        let clip = cv.clip_rect();
+        cv.set_clip(clip.intersect(l.mixer_area));
+        let top = l.mixer_area.y;
+        cv.fill_rrect(l.card.x + 16.0 * s, top, l.card.right() - 16.0 * s, top + s, 0.5 * s, (if th.dark { 0.10 } else { 0.08 }) * a, th.fg);
+        let hd = l.mixer_head;
+        text(cv, tr, crate::i18n::tr("VOLUME POR APP"), Font::Label, hd.x, hd.y, hd.w * 0.5, hd.h, th.fg, 0.62 * a);
+        if !mx.device.is_empty() {
+            let dev_w = tr.mask(&mx.device, Font::Small, (hd.w * 0.55) as i32, hd.h as i32, Align::Left).used_width();
+            text(cv, tr, &mx.device, Font::Small, hd.right() - dev_w, hd.y, hd.w * 0.55, hd.h, th.fg, 0.5 * a);
+        }
+        if mx.apps.is_empty() {
+            if let Some((row, _, _)) = l.mixer_rows.first().copied().or(Some((RectF::new(hd.x, hd.bottom() + 4.0 * s, hd.w, 34.0 * s), RectF::default(), RectF::default()))) {
+                text(cv, tr, crate::i18n::tr("Nenhum app com som agora"), Font::Caption, row.x, row.y, row.w, row.h, th.fg, 0.55 * a);
+            }
+        }
+        for (i, (app, (row, slider_r, mute_r))) in mx.apps.iter().zip(&l.mixer_rows).enumerate() {
+            // Ícone, nome (apagado se o app não está tocando agora) e slider.
+            let k = (18.0 * s).round();
+            let ir = RectF::new(row.x.round(), (row.cy() - k / 2.0).round(), k, k);
+            match (&app.icon, app.system) {
+                (Some(img), _) => cv.draw_image(ir, img, 0.0, a),
+                _ => glyph_pose(cv, tr, ir.inset(-2.0 * s), G_VOL3, Font::IconSmall, th.fg, 0.8 * a, Pose::REST, vec_em(&it, Font::IconSmall, s)),
+            }
+            let name = if app.system { crate::i18n::tr("Sons do sistema") } else { app.name.as_str() };
+            text(cv, tr, name, Font::Caption, ir.right() + 10.0 * s, row.y, slider_r.x - ir.right() - 18.0 * s, row.h, th.fg, (if app.active { 0.95 } else { 0.62 }) * a);
+            let hot = matches!(f.it.hover, Some(Hit::MixVol(h)) if h as usize == i) || matches!(f.it.drag, Some(Hit::MixVol(h)) if h as usize == i);
+            if let Some((x0, x1)) = l.mix_track(i, s) {
+                // Mesma cor do slider de volume principal, logo acima.
+                let v = if app.muted { 0.0 } else { app.volume };
+                slider(cv, x0, x1, slider_r.cy(), v, th, hot, hot, s);
+            }
+            let mh = Hit::MixMute(i as u8);
+            if f.it.hover == Some(mh) {
+                let kk = mute_r.h - 6.0 * s;
+                hover_bg(cv, RectF::new(mute_r.cx() - kk / 2.0, mute_r.cy() - kk / 2.0, kk, kk), kk / 2.0, th, f.it.pressed == Some(mh));
+            }
+            let g = if app.muted || app.volume <= 0.0 { G_MUTE } else { G_VOL2 };
+            ctrl_glyph(cv, tr, *mute_r, g, Font::IconSmall, th.fg, 0.85 * a, &it, mh, s);
+        }
+        cv.set_clip(clip);
+    }
+    // Setinha (vira para cima com o mixer aberto).
+    if let Some(b) = l.mixer_btn {
+        let hot = f.it.hover == Some(Hit::MixToggle);
+        if hot {
+            hover_bg(cv, b.inset(2.0 * s), b.h / 2.0, th, f.it.pressed == Some(Hit::MixToggle));
+        }
+        chevron(cv, b, l.mixer_open, th.fg, if hot { 0.9 } else { 0.55 }, s);
     }
 }
 
@@ -2399,7 +2548,7 @@ mod tests {
         let mut px = vec![0u32; w * h];
         {
             let mut cv = Canvas::new(w, h, &mut px);
-            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[], viz: None };
+            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[], viz: None, mixer: None };
             draw_card(&mut cv, &mut tr, &l, &f);
         }
         let mut s = stray(&px, w, h);
@@ -2424,7 +2573,7 @@ mod tests {
             let mut px = vec![0u32; w * h];
             {
                 let mut cv = Canvas::new(w, h, &mut px);
-                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[], viz: None };
+                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[], viz: None, mixer: None };
                 draw_card(&mut cv, &mut tr, &l, &f);
             }
             let st = stray(&px, w, h);

@@ -126,7 +126,7 @@ fn shots() {
         let cl = CLayout::build(S, &cfg, true);
         let wl = WLayout::build(S, 40.0 * S, &cfg, true, false);
         let card = render(cl.w, cl.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
             ui::draw_card(cv, &mut tr, &cl, &f);
         });
         let widget = render(wl.width, 40.0 * S, |cv| {
@@ -173,7 +173,7 @@ fn shots() {
         let c = colors(&cfg, &media);
         let l = CLayout::build(S, &cfg, true);
         let img = render(l.w, l.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
             ui::draw_card(cv, &mut tr, &l, &f);
         });
         save_png(name, img.0, img.1, &img.2);
@@ -187,7 +187,7 @@ fn shots() {
         let bg = render(w, h, |cv| busy_wallpaper(cv, RectF::new(0.0, 0.0, w, h), 14.0 * S));
         let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::GLASS_BLUR * S);
         let card = render(w, h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None, launchers: &[], viz: Some(VIZ) };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
             ui::draw_card(cv, &mut tr, &l, &f);
         });
         let img = render(w, h, |cv| {
@@ -330,7 +330,7 @@ fn icon_frames() {
                 }
                 let card = render(cl.w, cl.h, |cv| {
                     let it = Interact { fx: IconFx::single(*h, age), ..Interact::default() };
-                    let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
+                    let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
                     ui::draw_card(cv, &mut tr, &cl, &f);
                 });
                 let (cw, _, px) = card;
@@ -475,7 +475,7 @@ fn control_colors() {
         let c = colors(&cfg, &media);
         let cl = CLayout::build(S, &cfg, true);
         cards.push(render(cl.w, cl.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb: playback(&media), s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb: playback(&media), s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
             ui::draw_card(cv, &mut tr, &cl, &f);
         }));
     }
@@ -487,6 +487,47 @@ fn control_colors() {
         }
     });
     save_png("control-colors-card.png", img.0, img.1, &img.2);
+}
+
+/// Card com o mixer de volume (apps de verdade desta máquina): fechado, abrindo
+/// e aberto com o mouse sobre um slider.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test --release card_mixer -- --ignored`
+#[test]
+#[ignore]
+fn card_mixer() {
+    use crate::ui::Hit;
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+    let mut mx = crate::mixer::snapshot();
+    // Um app mudo, para ver o ícone.
+    if let Some(a) = mx.apps.get_mut(2) {
+        a.muted = true;
+    }
+    let media = ui::sample_media();
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let cfg = Config::default();
+    let c = colors(&cfg, &media);
+    let full = CLayout::build(S, &cfg, true).with_mixer(Some(mx.apps.len()), 1.0, S);
+    let mut cards = Vec::new();
+    for (open, hover) in [(0.0, None), (0.5, None), (1.0, Some(Hit::MixVol(0)))] {
+        let cl = CLayout::build(S, &cfg, true).with_mixer(Some(mx.apps.len()), open, S);
+        cards.push(render(cl.w, cl.h, |cv| {
+            let it = Interact { hover, ..Interact::default() };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb: playback(&media), s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: Some(&mx) };
+            ui::draw_card(cv, &mut tr, &cl, &f);
+        }));
+    }
+    let n = cards.len() as f32;
+    let img = render(full.w * n, full.h, |cv| {
+        cv.fill_rrect(0.0, 0.0, full.w * n, full.h, 0.0, 1.0, [0.16, 0.18, 0.24]);
+        for (i, card) in cards.into_iter().enumerate() {
+            let y = full.h - card.1 as f32;
+            blit(cv, i as f32 * full.w, y, card);
+        }
+    });
+    save_png("card-mixer.png", img.0, img.1, &img.2);
 }
 
 /// Widget em pílula com cada formato e tamanho de capa (conferir que a capa
@@ -545,7 +586,7 @@ fn card_launchers() {
         for (hover, drag) in [(None, None), (Some(Hit::Launch(0)), None), (None, Some(Hit::Launch(0)))] {
             cards.push(render(cl.w, cl.h, |cv| {
                 let it = Interact { hover, drag, drag_x, ..Interact::default() };
-                let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &launchers, viz: Some(VIZ) };
+                let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &launchers, viz: Some(VIZ), mixer: None };
                 ui::draw_card(cv, &mut tr, &cl, &f);
             }));
         }

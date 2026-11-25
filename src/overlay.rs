@@ -14,7 +14,7 @@ use crate::audio::log;
 use crate::config::{Config, OsdAnim, OsdPosition};
 use crate::dsp::{Analyzer, FFT_SIZE};
 use crate::render::{self, Canvas, Colors, Image, RectF};
-use crate::shared::{Launcher, MediaCmd, MediaInfo, Shared, WebCmd};
+use crate::shared::{Launcher, MediaCmd, MediaInfo, MixCmd, Shared, WebCmd};
 use crate::system;
 use crate::taskbar::{self, Placement};
 use crate::text::TextRenderer;
@@ -576,6 +576,9 @@ struct Overlay {
     /// foram procurados.
     web_needed: bool,
     web_probed: Option<(String, String)>,
+    /// Mixer de volume do card: aberto (alvo) e quanto já abriu (0..1).
+    mixer_open: bool,
+    mixer_anim: f32,
 }
 
 /// Arrasto do widget pela barra: começa ao apertar; vira arrasto quando o
@@ -625,6 +628,8 @@ struct FlyoutSig {
     /// Segundo da música (o tempo e a barra de progresso).
     clock: i64,
     volume: (u16, bool),
+    /// Mixer: o que ele mostra e quanto está aberto.
+    mixer: (u64, u16),
 }
 
 fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
@@ -717,6 +722,8 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         wdrag: None,
         web_needed: false,
         web_probed: None,
+        mixer_open: false,
+        mixer_anim: 0.0,
         shared,
     };
     ov.refresh_launchers();
@@ -897,7 +904,44 @@ impl Overlay {
     }
 
     fn card_layout(&self) -> CLayout {
-        CLayout::build(self.scale(), &self.cfg, self.media.dur > 0.0).with_launchers(self.card_launchers(), self.scale())
+        let s = self.scale();
+        let rows = self.cfg.card_mixer.then(|| self.shared.mixer.lock().unwrap().apps.len());
+        CLayout::build(s, &self.cfg, self.media.dur > 0.0).with_launchers(self.card_launchers(), s).with_mixer(rows, ui::ease_move(self.mixer_anim), s)
+    }
+
+    /// Abre ou fecha o mixer de volume (a thread dele só trabalha aberto).
+    fn set_mixer(&mut self, open: bool) {
+        if open != self.mixer_open {
+            self.mixer_open = open;
+            self.shared.send_mixer(if open { MixCmd::Open } else { MixCmd::Close });
+        }
+    }
+
+    /// Volume (ou mudo) do app `i` do mixer: mostra na hora e manda para a thread.
+    fn set_mix(&mut self, i: usize, volume: Option<f32>, mute: Option<bool>) {
+        let key = {
+            let mut st = self.shared.mixer.lock().unwrap();
+            let Some(a) = st.apps.get_mut(i) else { return };
+            if let Some(v) = volume {
+                a.volume = v.clamp(0.0, 1.0);
+                // Mexer no volume tira o mudo, como no Mixer de Volume do Windows.
+                if a.muted && v > 0.0 {
+                    a.muted = false;
+                    self.shared.send_mixer(MixCmd::Mute(a.key.clone(), false));
+                }
+            }
+            if let Some(m) = mute {
+                a.muted = m;
+            }
+            a.key.clone()
+        };
+        if let Some(v) = volume {
+            self.shared.send_mixer(MixCmd::Volume(key.clone(), v));
+        }
+        if let Some(m) = mute {
+            self.shared.send_mixer(MixCmd::Mute(key, m));
+        }
+        self.shared.mixer_version.fetch_add(1, Ordering::Relaxed);
     }
 
     fn widget_layout(&self) -> Option<WLayout> {
@@ -1073,7 +1117,7 @@ impl Overlay {
         self.fade += (target - self.fade).clamp(-speed * dt, speed * dt);
 
         let idle_close = Duration::from_secs(self.cfg.card_autoclose.max(2) as u64);
-        if self.flyout_open && (!want || (self.hover_f.is_none() && self.drag.is_none() && now - self.flyout_last_hover > idle_close)) {
+        if self.flyout_open && (!want || (self.hover_f.is_none() && self.drag.is_none() && !self.mixer_open && now - self.flyout_last_hover > idle_close)) {
             self.flyout_open = false;
         }
         let pb = self.playback();
@@ -1378,6 +1422,11 @@ impl Overlay {
                     }
                     match self.drag {
                         Some(Hit::Launch(_)) => self.drag_x = x,
+                        Some(Hit::MixVol(i)) => {
+                            if let Some(v) = Self::frac(x, cl.mix_track(i as usize, s)) {
+                                self.set_mix(i as usize, Some(v), None);
+                            }
+                        }
                         Some(Hit::Vol) => {
                             if let Some(v) = Self::frac(x, cl.vol_track(s)) {
                                 self.volume.set(v);
@@ -1417,6 +1466,12 @@ impl Overlay {
                                 self.launch_press = Some((i, x));
                                 self.drag_x = x;
                             }
+                            Some(Hit::MixVol(i)) => {
+                                self.drag = Some(Hit::MixVol(i));
+                                if let Some(v) = Self::frac(x, cl.mix_track(i as usize, s)) {
+                                    self.set_mix(i as usize, Some(v), None);
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1444,7 +1499,15 @@ impl Overlay {
                     }
                     self.pressed = None;
                 }
-                Ev::Wheel(d) => self.volume.step(d as f32 / 120.0 * 0.02),
+                Ev::Wheel(d) => match self.hover_f {
+                    Some(Hit::MixVol(i) | Hit::MixMute(i)) if win == Win::Flyout => {
+                        let cur = self.shared.mixer.lock().unwrap().apps.get(i as usize).map(|a| a.volume);
+                        if let Some(v) = cur {
+                            self.set_mix(i as usize, Some(((v + d as f32 / 120.0 * 0.04) * 50.0).round() / 50.0), None);
+                        }
+                    }
+                    _ => self.volume.step(d as f32 / 120.0 * 0.02),
+                },
                 Ev::Deactivate | Ev::Escape => {
                     if self.drag.is_none() {
                         self.flyout_open = false;
@@ -1517,6 +1580,17 @@ impl Overlay {
                 }
             }
             Hit::VolBtn => self.volume.toggle_mute(),
+            Hit::MixToggle => {
+                let open = !self.mixer_open;
+                self.set_mixer(open);
+                self.flyout_last_hover = now;
+            }
+            Hit::MixMute(i) => {
+                let muted = self.shared.mixer.lock().unwrap().apps.get(i as usize).map(|a| a.muted);
+                if let Some(m) = muted {
+                    self.set_mix(i as usize, None, Some(!m));
+                }
+            }
             // Abre o app de música e fecha o card (a janela do app aparece).
             Hit::Launch(i) => {
                 if let Some(app) = self.apps.get(i as usize) {
@@ -1606,8 +1680,14 @@ impl Overlay {
             self.flyout_open = false;
             self.flyout_box = None;
             self.flyout_sig = None;
+            // O card fechou: o mixer fecha junto (abre recolhido da próxima vez).
+            self.set_mixer(false);
+            self.mixer_anim = 0.0;
             return false;
         };
+        // Mixer abrindo/fechando: o card cresce ou encolhe junto.
+        let target = if self.mixer_open && self.cfg.card_mixer { 1.0 } else { 0.0 };
+        self.mixer_anim += (target - self.mixer_anim).clamp(-dt / 0.24, dt / 0.24);
         let s = p.scale;
         let l = self.card_layout();
         let m = ui::SHADOW_MARGIN * s;
@@ -1625,7 +1705,8 @@ impl Overlay {
         self.flyout_box = Some((x, y, l.w.round() as i32, l.h.round() as i32));
         // Parado (aberto, sem animação): só redesenha se algo mudou.
         let hint_on = self.hint.is_some_and(|(t, _)| (now - t).as_secs_f32() < 2.8);
-        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || (self.cfg.icon_anim && self.icons.running());
+        let mixer_moving = self.mixer_anim > 0.0 && self.mixer_anim < 1.0;
+        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || mixer_moving || (self.cfg.icon_anim && self.icons.running());
         let sig = FlyoutSig {
             place: (x, y, l.w.round() as i32, l.h.round() as i32),
             media: self.media_version,
@@ -1641,6 +1722,7 @@ impl Overlay {
             repeat: pb.repeat,
             clock: pb.pos as i64,
             volume: ((pb.volume * 1000.0) as u16, pb.muted),
+            mixer: (self.shared.mixer_version.load(Ordering::Relaxed), (self.mixer_anim * 1000.0) as u16),
         };
         if !moving && self.flyout.shown && self.flyout_sig == Some(sig) {
             return false;
@@ -1664,6 +1746,7 @@ impl Overlay {
             cv.clear();
             let pressed = self.pressed.filter(|(w, _)| *w == Win::Flyout).map(|(_, h)| h);
             let launchers = self.apps.clone();
+            let mixer = self.shared.mixer.lock().unwrap().clone();
             let f = ui::CardFrame {
                 cfg: &self.cfg,
                 colors: &self.colors,
@@ -1679,6 +1762,7 @@ impl Overlay {
                 }),
                 launchers: &launchers,
                 viz: (self.cfg.card_viz && self.viz).then_some(&self.analyzer.values[..]),
+                mixer: self.cfg.card_mixer.then_some(&mixer),
             };
             ui::draw_card(&mut cv, &mut self.text, &l, &f);
         }

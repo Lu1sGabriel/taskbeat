@@ -134,6 +134,12 @@ struct Notch {
     /// Assinatura do último quadro mostrado (pula quadros iguais).
     last_sig: Option<u64>,
     hidden: bool,
+    /// Lista das saídas de áudio (a setinha embaixo do card): aberta, quanto
+    /// já abriu, as saídas e o que a lista mostra (nome, é a atual).
+    mix_open: bool,
+    mix: Anim,
+    outputs: Vec<super::outputs::Output>,
+    output_rows: Vec<(String, bool)>,
 }
 
 thread_local! {
@@ -270,6 +276,10 @@ pub fn start(mtm: MainThreadMarker) {
         t0: Instant::now(),
         last_frame: Instant::now(),
         last_sig: None,
+        mix_open: false,
+        mix: Anim::new(),
+        outputs: Vec::new(),
+        output_rows: Vec::new(),
         hidden: true,
     };
     n.place(&screen);
@@ -405,7 +415,8 @@ impl Notch {
 
     fn relayout(&mut self) {
         let has_seek = true;
-        self.layout = NLayout::build(self.s, self.geom, &self.cfg, has_seek);
+        let outputs = self.cfg.card_mixer.then_some(self.outputs.len());
+        self.layout = NLayout::build(self.s, self.geom, &self.cfg, has_seek).with_mixer(outputs);
         self.buf = vec![0; (self.layout.w.ceil() * self.layout.h.ceil()) as usize];
         self.last_sig = None;
     }
@@ -471,6 +482,21 @@ impl Notch {
         }
     }
 
+    /// Relê as saídas de áudio (ao abrir a lista e depois de escolher uma).
+    /// Se a quantidade mudou, o tamanho da janela acompanha.
+    fn refresh_outputs(&mut self) {
+        let list = super::outputs::list();
+        let cur = super::outputs::current();
+        let resize = list.len() != self.outputs.len();
+        self.output_rows = list.iter().map(|o| (o.name.clone(), Some(o.id) == cur)).collect();
+        self.outputs = list;
+        if resize {
+            self.relayout();
+            self.reposition();
+        }
+        self.last_sig = None;
+    }
+
     fn set_open(&mut self, open: bool) {
         if open == self.open_target {
             return;
@@ -490,6 +516,9 @@ impl Notch {
         } else {
             self.it = Interact::default();
             self.seek_preview = None;
+            // Abre recolhida da próxima vez.
+            self.mix_open = false;
+            self.mix = Anim::new();
         }
         self.hover_since = None;
         self.leave_since = None;
@@ -547,6 +576,7 @@ impl Notch {
             || self.leave_since.is_some()
             || self.peek_pending.is_some()
             || self.it.drag.is_some()
+            || !self.mix.done(now)
             || (self.cfg.icon_anim && self.icons.running())
     }
 
@@ -593,6 +623,7 @@ impl Notch {
         let open = self.open.value(now).max(0.0);
         let peek = self.peek.value(now).max(0.0);
         let p = open.max(peek);
+        self.layout.mix_p = self.mix.value(now).max(0.0);
 
         // Áudio -> espectro.
         let viz_on = self.cfg.show_visualizer && self.media.present();
@@ -642,6 +673,7 @@ impl Notch {
             ((open * 1000.0) as i32, (peek * 1000.0) as i32, rx0, rx1, ry1).hash(&mut h);
             (self.media_version, self.cfg_version, format!("{:?}", self.it), self.seek_preview.map(|v| (v * 1000.0) as i32)).hash(&mut h);
             (self.volume.level.to_bits(), self.volume.muted, self.hint.map(|h| h.0)).hash(&mut h);
+            ((self.layout.mix_p * 1000.0) as i32, &self.output_rows).hash(&mut h);
             if self.continuous() || self.animating(now) {
                 ((time * 60.0) as u64).hash(&mut h);
             }
@@ -686,6 +718,7 @@ impl Notch {
             peek_total: self.cfg.popup_secs.max(2) as f32,
             hint,
             change,
+            outputs: &self.output_rows,
         };
         {
             let mut cv = Canvas::new(sw, sh_, &mut self.buf);
@@ -848,6 +881,21 @@ impl Notch {
                 }
             }
             Some(Hit::VolBtn) => self.volume.toggle_mute(),
+            Some(Hit::MixToggle) => {
+                self.mix_open = !self.mix_open;
+                if self.mix_open {
+                    self.refresh_outputs();
+                }
+                self.mix.set(if self.mix_open { 1.0 } else { 0.0 }, Instant::now());
+            }
+            Some(Hit::Output(i)) => {
+                if let Some(o) = self.outputs.get(i as usize) {
+                    if !super::outputs::set_default(o.id) {
+                        super::system::log::warn(&format!("saída de áudio: não deu para escolher {}", o.name));
+                    }
+                }
+                self.refresh_outputs();
+            }
             _ => {}
         }
     }

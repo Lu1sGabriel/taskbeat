@@ -456,7 +456,7 @@ fn demo_gif() {
                     };
                     let down = pressed(t, 2.5) || pressed(t, 3.2) || pressed(t, 4.0);
                     let it = Interact { hover, pressed: if down { hover } else { None }, drag: None, ..Default::default() };
-                    let fr = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: ui::card_theme(&cfg, &colors, &media), it, pb, s, backdrop: None, hint: None, launchers: &[], viz: None };
+                    let fr = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: ui::card_theme(&cfg, &colors, &media), it, pb, s, backdrop: None, hint: None, launchers: &[], viz: None, mixer: None };
                     ui::draw_card(c, &mut tr, &cl, &fr);
                 });
                 let slide = ((1.0 - open) * 14.0 * s).round();
@@ -678,6 +678,7 @@ fn mac_gif(name: &str, has_notch: bool) {
             peek_total: peek_off - peek_on + 0.3,
             hint: None,
             change,
+            outputs: &[],
         };
         let mut island = vec![0u32; sw * sh];
         nd::draw(&mut Canvas::new(sw, sh, &mut island), &mut tr, &l, &fr);

@@ -185,7 +185,16 @@ fn process_path(pid: u32) -> Option<String> {
 }
 
 pub fn app_icon(aumid: &str, app: &str) -> Option<Image> {
-    let path = find_exe_path(&exe_candidates(aumid, app))?;
+    exe_icon(&find_exe_path(&exe_candidates(aumid, app))?)
+}
+
+/// Caminho do .exe de um processo.
+pub(crate) fn exe_path(pid: u32) -> Option<String> {
+    process_path(pid)
+}
+
+/// Ícone de um .exe.
+pub(crate) fn exe_icon(path: &str) -> Option<Image> {
     let mut name = [0u16; 260];
     for (d, s) in name.iter_mut().zip(path.encode_utf16().take(259)) {
         *d = s;

@@ -123,6 +123,43 @@ impl WebState {
     }
 }
 
+/// Linhas do mixer de volume no máximo (o card não cresce sem fim).
+pub const MIXER_ROWS: usize = 6;
+
+/// Um app no mixer de volume do card (sessões de áudio do mesmo app juntas).
+#[derive(Clone)]
+pub struct MixApp {
+    /// Identifica o app (caminho do .exe; "system" para os sons do sistema).
+    pub key: String,
+    pub name: String,
+    pub icon: Option<Arc<Image>>,
+    pub volume: f32,
+    pub muted: bool,
+    /// Tocando som agora (as outras sessões estão abertas, mas em silêncio).
+    pub active: bool,
+    /// Sons do sistema (avisos do Windows).
+    pub system: bool,
+}
+
+/// O que o mixer mostra: o dispositivo de saída e os apps com som nele.
+#[derive(Clone, Default)]
+pub struct MixerState {
+    pub device: String,
+    pub apps: Vec<MixApp>,
+}
+
+/// Pedidos para a thread do mixer (só trabalha com ele aberto).
+#[derive(Clone, Debug)]
+pub enum MixCmd {
+    Open,
+    Close,
+    /// Volume (0..1) de um app (`MixApp::key`).
+    Volume(String, f32),
+    Mute(String, bool),
+    /// Algo mudou (aviso do Windows): relê.
+    Refresh,
+}
+
 /// Pedidos para a thread que aperta os botões da página do player.
 #[derive(Clone, Debug)]
 pub enum WebCmd {
@@ -212,6 +249,10 @@ pub struct Shared {
     /// Botões da página do player de navegador (aleatório/repetir).
     pub web: Mutex<WebState>,
     pub web_tx: Mutex<Option<Sender<WebCmd>>>,
+    /// Mixer de volume do card: estado, versão (muda a cada leitura) e canal.
+    pub mixer: Mutex<MixerState>,
+    pub mixer_version: AtomicU64,
+    pub mixer_tx: Mutex<Option<Sender<MixCmd>>>,
 }
 
 impl Shared {
@@ -230,6 +271,15 @@ impl Shared {
             osd_test: AtomicBool::new(false),
             web: Mutex::new(WebState::default()),
             web_tx: Mutex::new(None),
+            mixer: Mutex::new(MixerState::default()),
+            mixer_version: AtomicU64::new(0),
+            mixer_tx: Mutex::new(None),
+        }
+    }
+
+    pub fn send_mixer(&self, cmd: MixCmd) {
+        if let Some(tx) = self.mixer_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(cmd);
         }
     }
 

@@ -43,6 +43,8 @@ mod media;
 #[cfg(windows)]
 mod menu;
 #[cfg(windows)]
+mod mixer;
+#[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod settings;
@@ -131,6 +133,7 @@ fn main() {
         media::spawn(shared.clone());
         launchers::spawn(shared.clone());
         webplayer::spawn(shared.clone());
+        mixer::spawn(shared.clone());
         let overlay = overlay::spawn(shared.clone());
 
         if let Err(e) = tray::run(shared.clone()) {

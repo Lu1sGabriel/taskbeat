@@ -102,6 +102,7 @@ enum Key {
     CardControlsRgb,
     CardSeek,
     ShowVolume,
+    CardMixer,
     Autoclose,
     Launchers,
     LauncherPlace,
@@ -279,6 +280,7 @@ const PAGES: &[Page] = &[
             Section("Conteúdo"),
             Row { icon: "\u{E916}", title: "Barra de progresso", desc: "Tempo decorrido e restante; arraste para pular", key: Key::CardSeek, kind: Kind::Toggle },
             Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e botão de mudo", key: Key::ShowVolume, kind: Kind::Toggle },
+            Row { icon: "\u{E9F5}", title: "Mixer de volume", desc: "Setinha embaixo do card que abre o volume de cada app com som (no Mac, a saída de áudio)", key: Key::CardMixer, kind: Kind::Toggle },
             Row { icon: "\u{E7F4}", title: "Mostrar app de origem", desc: "Selo com o app (Spotify, Brave…) no card, no \"A seguir\" e sobre a capa na barra", key: Key::ShowSource, kind: Kind::Toggle },
             Row { icon: "\u{E916}", title: "Fechar sozinho após", desc: "Tempo sem o mouse em cima do card", key: Key::Autoclose, kind: Kind::Slider { min: 2, max: 20, step: 1, unit: "s" } },
             Row { icon: "\u{E71D}", title: "Atalhos dos apps de música", desc: "Ícones dos players instalados (Spotify, YouTube Music…) para abrir com um clique", key: Key::Launchers, kind: Kind::Toggle },
@@ -439,6 +441,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::CardControlsRgb => rgb_of(&c.card_controls_rgb) as i32,
         Key::CardSeek => c.card_seek as i32,
         Key::ShowVolume => c.show_volume as i32,
+        Key::CardMixer => c.card_mixer as i32,
         Key::Autoclose => c.card_autoclose,
         Key::Launchers => c.card_launchers as i32,
         Key::LauncherPlace => idx(LAUNCHER_PLACE_V, c.launcher_place),
@@ -525,6 +528,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::CardControlsRgb => c.card_controls_rgb = hex_of(v as u32),
         Key::CardSeek => c.card_seek = v != 0,
         Key::ShowVolume => c.show_volume = v != 0,
+        Key::CardMixer => c.card_mixer = v != 0,
         Key::Autoclose => c.card_autoclose = v,
         Key::Launchers => c.card_launchers = v != 0,
         Key::LauncherPlace => c.launcher_place = pick(LAUNCHER_PLACE_V, i),
@@ -1039,7 +1043,7 @@ impl Ui {
     /// Card da prévia, com os atalhos dos apps de música desta máquina.
     fn preview_card(&self, s: f32, cfg: &Config) -> ui::CLayout {
         let n = if cfg.card_launchers && cfg.launcher_place.card() { self.shown_launchers(cfg).len() } else { 0 };
-        ui::CLayout::build(s, cfg, true).with_launchers(n, s)
+        ui::CLayout::build(s, cfg, true).with_launchers(n, s).with_mixer(cfg.card_mixer.then_some(0), 0.0, s)
     }
 
     /// Atalhos à mostra, na ordem escolhida.
@@ -2160,7 +2164,8 @@ impl Ui {
                 // Mini barras paradas num desenho de exemplo (a prévia do card não anima a 60 fps).
                 const BARS: &[f32] = &[0.55, 0.9, 0.62, 0.38, 0.74, 0.5];
                 let viz = cfg.show_visualizer.then_some(if self.media_paused() { &[0.0; 6][..] } else { BARS });
-                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None, launchers: &launchers, viz };
+                let empty_mixer = crate::shared::MixerState::default();
+                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None, launchers: &launchers, viz, mixer: Some(&empty_mixer) };
                 ui::draw_card(&mut sub.canvas(), &mut self.preview_text, &l, &f);
                 sub.commit(cv);
             }
