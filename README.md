@@ -68,7 +68,10 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   segunda linha (artista, artista · álbum, álbum ou tempo), o tamanho da capa e
   do texto, a cor do fundo (neutra, da capa ou de destaque), a opacidade e o
   contorno. Ao trocar de música, o título novo desliza e a capa nova aparece
-  suavemente (opcional).
+  suavemente (opcional). Com o botão de Widgets do Windows (o do tempo) na barra,
+  o widget fica ao lado dele em vez de por cima, com a barra centralizada ou
+  alinhada à esquerda. No fundo em pílula, a capa fica sempre dentro da ponta
+  arredondada.
 - **Card expandido** (clique na música): capa grande, aleatório / anterior / play /
   próximo / repetir, barra de progresso arrastável e volume. O app de origem
   (Spotify, Brave…) fica escondido por padrão; com a opção "Mostrar app de
@@ -78,8 +81,13 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   desfoca o que está atrás); layout horizontal ou vertical; tema; cor de destaque
   (capa ou Windows); cantos; formato do play. Mostra também o álbum, quando o
   player informa. Aleatório e repetir aparecem sempre (apagados nos players que
-  não deixam mudar pelo Windows, como os navegadores; clicar explica o porquê)
+  não deixam mudar pelo Windows, como os navegadores; clicar traz o player para a
+  frente, para usar o botão dele)
   ou só quando o player permite.
+- **Atalhos dos apps de música** (opcional, ligado por padrão): embaixo do card,
+  o ícone de cada player instalado (Spotify, YouTube Music instalado pelo
+  navegador, Apple Music, Deezer, TIDAL, Amazon Music, Media Player, VLC,
+  foobar2000…) para abrir com um clique, inclusive quando nada está tocando.
 - **Ícones animados** (opcional, ligado por padrão): play e pausa trocam com um
   pequeno salto, anterior/próximo dão um empurrão para o lado, aleatório pulsa,
   repetir dá uma volta e o volume chacoalha ao ficar mudo; no card e na barra
@@ -95,7 +103,10 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   esmaecer), cantos, tamanho, tema, duração e botão "Mostrar agora". Só essas duas
   teclas são observadas; nada do que você digita é lido.
 - **Barras de áudio dinâmicas**: mini visualizador ao lado da música, nas cores
-  da capa (dá para desligar; com a música pausada, ficam em repouso).
+  da capa (dá para desligar; com a música pausada, ficam em repouso). Ouvem só o
+  app que está tocando (e os processos dele, como o áudio do navegador): chamadas,
+  jogos e avisos do sistema não mexem nas barras (Visualizador > Só o som do
+  player). Se o player não puder ser identificado, usam o som do sistema.
 - **Configurações** (clique no ícone da bandeja): janela Fluent com fundo Mica,
   abre maximizada (redimensionável), pré-visualização ao vivo de cada componente
   sempre à vista (fica fixa no topo enquanto as opções rolam), rolagem suave no
@@ -144,7 +155,9 @@ Como:
 
 | Parte | API do Windows | Arquivo |
 |---|---|---|
-| Áudio de qualquer app | WASAPI *loopback* | `src/audio.rs` |
+| Som do player (barras) | WASAPI *loopback* do processo do player (Windows 10 2004+); sem ele, do sistema | `src/audio.rs` |
+| Atalhos dos apps de música | Pasta Aplicativos do shell (`shell:AppsFolder`) | `src/launchers.rs` |
+| Lugar do botão de Widgets na barra | UI Automation (`WidgetsButton`) | `src/taskbar.rs` |
 | Música, capa, controles, linha do tempo, eventos | `GlobalSystemMediaTransportControlsSessionManager` | `src/media.rs` |
 | Nome/ícone do app de origem | Pasta Aplicativos do shell (AUMID) → ícone do .exe | `src/appicon.rs` |
 | Volume | `IAudioEndpointVolume` | `src/volume.rs` |
