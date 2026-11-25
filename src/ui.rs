@@ -54,8 +54,6 @@ pub enum Hit {
     /// Slider e mudo do app `i` no mixer.
     MixVol(u8),
     MixMute(u8),
-    /// Mac: escolher a saída de áudio `i` (a lista que a setinha abre).
-    Output(u8),
 }
 
 /// Cores de um componente já resolvidas (tema + cor de destaque).
@@ -345,8 +343,6 @@ enum VIcon {
     Vol1,
     Vol2,
     Vol3,
-    /// Marca de "escolhido".
-    Check,
 }
 
 fn vicon_of(g: &str) -> Option<VIcon> {
@@ -479,7 +475,6 @@ fn vicon_shape(v: VIcon) -> Shape2 {
             parts.push(path(vec![(0.10, -0.13), (0.36, 0.13)], 0.055));
             parts.push(path(vec![(0.10, 0.13), (0.36, -0.13)], 0.055));
         }
-        VIcon::Check => parts.push(path(vec![(-0.34, 0.02), (-0.1, 0.25), (0.36, -0.24)], 0.08)),
         VIcon::Vol1 | VIcon::Vol2 | VIcon::Vol3 => {
             let n = match v {
                 VIcon::Vol1 => 1,
@@ -2071,12 +2066,6 @@ pub(crate) fn chevron(cv: &mut Canvas, b: RectF, open: f32, c: Rgb, a: f32, s: f
         }
     }
     cv.blit_mask(b.x.round() as i32, b.y.round() as i32, &Mask { w, h, cov }, c, a);
-}
-
-/// Marca de "escolhido" (✓) centrada em `r`.
-pub(crate) fn check(cv: &mut Canvas, r: RectF, c: Rgb, a: f32, s: f32) {
-    let m = vector_mask(VIcon::Check, 14.0 * s, r.w.round() as i32, r.h.round() as i32);
-    cv.blit_mask(r.x.round() as i32, r.y.round() as i32, &m, c, a);
 }
 
 /// Altura do mixer aberto com `n` apps.

@@ -14,7 +14,6 @@ mod gfx;
 pub mod media;
 mod notch;
 mod osd;
-mod outputs;
 mod settings;
 mod statusbar;
 pub mod system;

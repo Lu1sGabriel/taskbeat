@@ -67,15 +67,6 @@ pub struct NLayout {
     // ---- "A seguir"
     pub p_art: RectF,
     pub p_text: RectF,
-    // ---- saídas de áudio (setinha embaixo do card aberto)
-    /// Setinha ligada (opção "Mixer de volume").
-    pub mix_on: bool,
-    /// Quanto a lista das saídas está aberta (0..1), atualizado a cada quadro.
-    pub mix_p: f32,
-    /// Onde a lista começa, a altura dela aberta e as linhas.
-    pub mix_top: f32,
-    pub mix_full: f32,
-    pub mix_rows: Vec<RectF>,
 }
 
 impl NLayout {
@@ -156,48 +147,10 @@ impl NLayout {
         l
     }
 
-    /// Acrescenta a setinha embaixo do card aberto, que abre a lista de `n`
-    /// saídas de áudio (`None`: opção desligada). A janela já fica com a
-    /// altura da lista aberta (fora da ilha visível ela deixa o mouse passar).
-    pub fn with_mixer(mut self, n: Option<usize>) -> Self {
-        let Some(n) = n else { return self };
-        let s = self.s;
-        let pad = 20.0 * s;
-        self.mix_on = true;
-        self.mix_top = self.open.h - 8.0 * s;
-        let rows = n.clamp(1, crate::shared::MIXER_ROWS);
-        self.mix_full = (30.0 * s + rows as f32 * 32.0 * s + 6.0 * s).round();
-        self.mix_rows = (0..n.min(crate::shared::MIXER_ROWS))
-            .map(|i| RectF::new(self.open.x + pad - 6.0 * s, self.mix_top + 30.0 * s + i as f32 * 32.0 * s, self.open.w - 2.0 * pad + 12.0 * s, 30.0 * s))
-            .collect();
-        self.open.h += 18.0 * s;
-        self.h = self.h.max(self.open.h + self.mix_full + SHADOW * s);
-        self
-    }
-
-    /// O card aberto com a lista das saídas aberta até `mix_p`.
-    pub fn open_rect(&self) -> RectF {
-        RectF { h: self.open.h + self.mix_full * self.mix_p.clamp(0.0, 1.0), ..self.open }
-    }
-
-    /// A setinha (desce junto com a lista abrindo).
-    pub fn mix_btn(&self) -> Option<RectF> {
-        let s = self.s;
-        self.mix_on.then(|| RectF::new(self.open.cx() - 24.0 * s, self.mix_top + self.mix_full * self.mix_p.clamp(0.0, 1.0) + 2.0 * s, 48.0 * s, 18.0 * s))
-    }
-
     /// O que está sob o mouse. Com a ilha fechada, tudo nela é `Info` (abre).
     pub fn hit(&self, x: f32, y: f32, open: bool) -> Option<Hit> {
         if !open {
             return self.closed.inset(-2.0 * self.s).contains(x, y).then_some(Hit::Info);
-        }
-        if self.mix_btn().is_some_and(|b| b.contains(x, y)) {
-            return Some(Hit::MixToggle);
-        }
-        if self.mix_p > 0.5
-            && let Some(i) = self.mix_rows.iter().position(|r| r.contains(x, y))
-        {
-            return Some(Hit::Output(i as u8));
         }
         let all = [
             (Some(self.shuffle), Hit::Shuffle),
@@ -212,7 +165,7 @@ impl NLayout {
         if let Some(h) = all.iter().find(|(r, _)| r.is_some_and(|r| r.contains(x, y))).map(|(_, h)| *h) {
             return Some(h);
         }
-        self.open_rect().contains(x, y).then_some(Hit::Info)
+        self.open.contains(x, y).then_some(Hit::Info)
     }
 
     pub fn vol_track(&self) -> Option<(f32, f32)> {
@@ -225,7 +178,7 @@ impl NLayout {
 
     /// Forma da ilha para o progresso dado (aberta ou "A seguir").
     pub fn shape(&self, open: f32, peek: f32) -> (RectF, f32) {
-        let (target, p) = if open >= peek { (self.open_rect(), open) } else { (self.peek, peek) };
+        let (target, p) = if open >= peek { (self.open, open) } else { (self.peek, peek) };
         let r = lerp_rect(self.closed, target, p);
         let rc = (self.band * 0.36).round();
         let ro = 22.0 * self.s;
@@ -278,8 +231,6 @@ pub struct NotchFrame<'a> {
     pub hint: Option<(&'a str, f32)>,
     /// Troca de música: (música anterior, progresso 0..1).
     pub change: Option<(&'a MediaInfo, f32)>,
-    /// Saídas de áudio (nome, é a atual) da lista que a setinha abre.
-    pub outputs: &'a [(String, bool)],
 }
 
 pub fn draw(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame) {
@@ -527,43 +478,6 @@ fn draw_open(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, s, a);
     }
 
-    // Saídas de áudio: a setinha embaixo e, aberta, a lista para escolher.
-    if l.mix_on {
-        let mp = l.mix_p.clamp(0.0, 1.0);
-        if mp > 0.01 {
-            let ma = a * ui::ease_enter(mp);
-            let clip = cv.clip_rect();
-            cv.set_clip(clip.intersect(RectF::new(l.open.x, l.mix_top + dy, l.open.w, l.mix_full * mp)));
-            let top = l.mix_top + dy;
-            cv.fill_rrect(l.open.x + 20.0 * s, top, l.open.right() - 20.0 * s, top + s, 0.5 * s, 0.10 * ma, th.fg);
-            ui::text(cv, tr, crate::i18n::tr("SAÍDA DE ÁUDIO"), Font::Label, l.open.x + 20.0 * s, top + 6.0 * s, 200.0 * s, 22.0 * s, th.fg, 0.55 * ma);
-            if f.outputs.is_empty() {
-                ui::text(cv, tr, crate::i18n::tr("Nenhuma saída de áudio"), Font::Caption, l.open.x + 20.0 * s, top + 30.0 * s, 260.0 * s, 30.0 * s, th.fg, 0.55 * ma);
-            }
-            for (i, ((name, cur), r)) in f.outputs.iter().zip(&l.mix_rows).enumerate() {
-                let r = r.offset(0.0, dy);
-                let h = Hit::Output(i as u8);
-                if f.it.hover == Some(h) || *cur {
-                    cv.fill_round(r, 8.0 * s, th.fg, (if *cur { 0.08 } else { 0.06 }) * ma);
-                }
-                ui::glyph(cv, tr, RectF::new(r.x + 6.0 * s, r.y, 22.0 * s, r.h), G_VOL2, Font::IconSmall, if *cur { th.accent } else { th.fg }, 0.85 * ma);
-                ui::text(cv, tr, name, Font::Caption, r.x + 36.0 * s, r.y, r.w - 72.0 * s, r.h, th.fg, (if *cur { 1.0 } else { 0.8 }) * ma);
-                if *cur {
-                    ui::check(cv, RectF::new(r.right() - 30.0 * s, r.y, 24.0 * s, r.h), th.accent, ma, s);
-                }
-            }
-            cv.set_clip(clip);
-        }
-        if let Some(b) = l.mix_btn() {
-            let b = b.offset(0.0, dy);
-            let hot = f.it.hover == Some(Hit::MixToggle);
-            if hot {
-                cv.fill_round(b.inset(2.0 * s), b.h / 2.0, th.fg, 0.10 * a);
-            }
-            ui::chevron(cv, b, mp, th.fg, (if hot { 0.9 } else { 0.55 }) * a, s);
-        }
-    }
-
     // Aviso rápido (ex.: aleatório num player que não deixa).
     if let Some((msg, ha)) = f.hint {
         let ha = ha * a;
@@ -657,7 +571,6 @@ pub fn preview_sized(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, color
         peek_total: 5.0,
         hint: None,
         change: None,
-        outputs: &[],
     };
     let (sw, sh) = (l.w.ceil() as usize, l.h.ceil() as usize);
     let mut layer = vec![0u32; sw * sh];

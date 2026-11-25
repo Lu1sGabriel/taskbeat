@@ -437,8 +437,8 @@ pub struct Config {
     pub show_source: bool,
     /// Volume no card expandido (slider + mudo).
     pub show_volume: bool,
-    /// Setinha embaixo do card que abre o mixer de volume (volume de cada app
-    /// no Windows; no Mac, a saída de áudio).
+    /// Setinha embaixo do card que abre o mixer de volume (volume de cada
+    /// app; só no Windows).
     pub card_mixer: bool,
     /// Quando mostrar aleatório e repetir no card.
     pub card_shuffle_repeat: ShuffleRepeat,
