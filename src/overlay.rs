@@ -1220,7 +1220,12 @@ impl Overlay {
         // Áudio -> espectro: com o visualizador da barra ligado ou com o card
         // aberto com as barras dele (aí a captura roda só enquanto ele está aberto).
         let card_bars = self.cfg.card_viz && self.flyout_open;
-        self.shared.card_bars.store(card_bars, Ordering::Relaxed);
+        if !self.shared.card_bars.swap(card_bars, Ordering::Relaxed) && card_bars {
+            // O card abriu com as barras: a captura começa na hora.
+            if let Some(t) = self.shared.audio_thread.get() {
+                t.unpark();
+            }
+        }
         if viz || card_bars {
             let rate = self.shared.sample_rate.load(Ordering::Relaxed);
             self.analyzer.configure(self.cfg.bars, rate);

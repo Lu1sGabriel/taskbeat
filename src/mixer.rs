@@ -86,7 +86,8 @@ pub fn spawn(shared: Arc<Shared>) {
                     }
                     MixCmd::Close => m.close(),
                     MixCmd::Refresh => publish = true,
-                    MixCmd::Warm if m.open.is_none() => {
+                    // Só com o "Mixer de volume" ligado (desligado, nada a ler).
+                    MixCmd::Warm if m.open.is_none() && shared.config.lock().unwrap().card_mixer => {
                         m.open();
                         let _ = m.read();
                         m.close();

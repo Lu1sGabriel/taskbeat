@@ -295,7 +295,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E71D}", title: "Atalhos dos apps de música", desc: "Ícones dos players instalados (Spotify, YouTube Music…) para abrir com um clique", key: Key::Launchers, kind: Kind::Toggle },
             Row { icon: "\u{E7C4}", title: "Onde ficam os atalhos", desc: "Embaixo do card, dentro do widget na barra ou nos dois", key: Key::LauncherPlace, kind: Kind::Segmented(LAUNCHER_PLACES) },
             Row { icon: "\u{E8FD}", title: "Apps nos atalhos", desc: "Ligue só os que você quer; arraste para mudar a ordem (no card também dá para arrastar os ícones)", key: Key::LauncherApps, kind: Kind::AppList },
-            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "No YouTube Music do navegador o Taskbeat aperta os botões da própria página (o aleatório embaralha a fila de novo); em outros sites ficam apagados e o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
+            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "No YouTube Music do navegador o Taskbeat aperta os botões da própria página e mostra o estado deles (a bolinha embaixo); em outros sites o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
         ],
     },
     Page {

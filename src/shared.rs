@@ -298,6 +298,9 @@ pub struct Shared {
     /// O card está aberto com as barras ligadas: o som é capturado mesmo com
     /// o visualizador da barra desligado (só enquanto o card fica aberto).
     pub card_bars: AtomicBool,
+    /// A thread de captura de áudio (parada, ela é acordada quando o card abre).
+    #[cfg(windows)]
+    pub audio_thread: std::sync::OnceLock<std::thread::Thread>,
 }
 
 impl Shared {
@@ -321,6 +324,8 @@ impl Shared {
             mixer_tx: Mutex::new(None),
             output_failed: AtomicU64::new(0),
             card_bars: AtomicBool::new(false),
+            #[cfg(windows)]
+            audio_thread: std::sync::OnceLock::new(),
         }
     }
 

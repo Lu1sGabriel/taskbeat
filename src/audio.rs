@@ -35,11 +35,13 @@ pub fn spawn(shared: Arc<Shared>) -> std::thread::JoinHandle<()> {
                 let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             }
             crate::system::background_thread();
+            let _ = shared.audio_thread.set(std::thread::current());
             while shared.is_running() {
                 // Visualizador desligado e card fechado (ou sem as barras):
-                // nada de capturar áudio.
+                // nada de capturar áudio. Parada, acorda a cada 400 ms ou na
+                // hora em que o card abre com as barras (o overlay a acorda).
                 if !shared.wants_audio() {
-                    std::thread::sleep(Duration::from_millis(150));
+                    std::thread::park_timeout(Duration::from_millis(400));
                     continue;
                 }
                 match capture_any(&shared) {
