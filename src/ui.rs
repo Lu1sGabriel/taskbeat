@@ -881,19 +881,19 @@ pub fn forget_layers(tag: LayerTag) {
 
 /// Só as mini barras do card mudaram: refaz a área delas por cima do mesmo
 /// quadro (o fundo guardado debaixo delas e as barras novas), sem redesenhar
-/// o card inteiro. `false`: não há card desenhado com barras nesse tamanho
-/// (então o quadro tem de ser o inteiro).
-pub fn card_bars_update(cv: &mut Canvas, values: &[f32], th: &Theme, s: f32) -> bool {
+/// o card inteiro. Devolve a área refeita (para mostrar só ela); `None`: não
+/// há card desenhado com barras nesse tamanho (o quadro tem de ser o inteiro).
+pub fn card_bars_update(cv: &mut Canvas, values: &[f32], th: &Theme, s: f32) -> Option<RectF> {
     CARD_BARS.with(|c| {
         let c = c.borrow();
-        let Some(b) = c.as_ref().filter(|b| b.w == cv.w && b.h == cv.h) else { return false };
+        let b = c.as_ref().filter(|b| b.w == cv.w && b.h == cv.h)?;
         let r = RectF::new(b.rect.x.floor() - 1.0, b.rect.y.floor() - 1.0, b.rect.w.ceil() + 2.0, b.rect.h.ceil() + 2.0);
         let clip = cv.clip_rect();
         cv.set_clip(clip.intersect(r));
         cv.copy_from(0, 0, &b.bg, b.w, b.h, 0);
         card_bars(cv, b.rect, values, th, s);
         cv.set_clip(clip);
-        true
+        Some(r)
     })
 }
 
@@ -2755,7 +2755,7 @@ mod tests {
         draw(&mut tr, &mut whole, &b);
         let mut quick = vec![0u32; w * h];
         draw(&mut tr, &mut quick, &a);
-        assert!(card_bars_update(&mut Canvas::new(w, h, &mut quick), &b, &th, 1.0));
+        assert!(card_bars_update(&mut Canvas::new(w, h, &mut quick), &b, &th, 1.0).is_some());
         assert!(quick == whole, "as barras sozinhas deram um quadro diferente do inteiro");
     }
 

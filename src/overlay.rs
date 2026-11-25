@@ -319,6 +319,36 @@ impl Surface {
         self.present(hwnd, x, yi as i32, alpha);
     }
 
+    /// Mostra só a área `dirty` (coordenadas da janela) do que mudou: o
+    /// Windows copia só ela, não a janela inteira (as barras do card, ~30x
+    /// por segundo, eram ~3 a 5 MB por quadro a 2x).
+    pub(crate) fn present_part(&self, hwnd: HWND, x: i32, y: i32, alpha: f32, dirty: RECT) {
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: (alpha.clamp(0.0, 1.0) * 255.0) as u8,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        let (pos, size, src) = (POINT { x, y }, SIZE { cx: self.w, cy: self.h }, POINT { x: 0, y: 0 });
+        let info = UPDATELAYEREDWINDOWINFO {
+            cbSize: std::mem::size_of::<UPDATELAYEREDWINDOWINFO>() as u32,
+            pptDst: &pos,
+            psize: &size,
+            hdcSrc: self.dc,
+            pptSrc: &src,
+            pblend: &blend,
+            dwFlags: ULW_ALPHA,
+            prcDirty: &dirty,
+            ..Default::default()
+        };
+        unsafe {
+            if !UpdateLayeredWindowIndirect(hwnd, &info).as_bool() {
+                // Sem a área parcial (algum caso do Windows): a janela inteira.
+                self.present(hwnd, x, y, alpha);
+            }
+        }
+    }
+
     fn present(&self, hwnd: HWND, x: i32, y: i32, alpha: f32) {
         let blend = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
@@ -623,6 +653,13 @@ struct Overlay {
     /// basta, e cada quadro refaz só a área delas. Quando foi o último.
     flyout_decorative: bool,
     bars_frame: Instant,
+}
+
+/// Sinal de teste nas barras (variável de ambiente TASKBEAT_TEST_BARS=1):
+/// para medir o card com as barras mexendo sem tocar música.
+fn test_bars() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("TASKBEAT_TEST_BARS").is_some_and(|v| v == "1"))
 }
 
 /// Linhas do mixer na ordem `order` (a da abertura; os que não estão nela,
@@ -1036,12 +1073,14 @@ impl Overlay {
     fn redraw_card_bars(&mut self, x: i32, y: f32, alpha: f32, s: f32) -> bool {
         let Some(mut surf) = self.flyout.surface.take() else { return false };
         let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
-        let ok = ui::card_bars_update(&mut surf.canvas(), &self.analyzer.values, &th, s);
-        if ok {
-            surf.present_at(self.flyout.hwnd, x, y, alpha);
+        let part = ui::card_bars_update(&mut surf.canvas(), &self.analyzer.values, &th, s);
+        if let Some(r) = part {
+            // Parado, o card está em y inteiro (sem o meio pixel da animação).
+            let dirty = RECT { left: r.x.max(0.0) as i32, top: r.y.max(0.0) as i32, right: r.right().ceil() as i32, bottom: r.bottom().ceil() as i32 };
+            surf.present_part(self.flyout.hwnd, x, y.round() as i32, alpha, dirty);
         }
         self.flyout.surface = Some(surf);
-        ok
+        part.is_some()
     }
 
     /// O foco foi para o próprio player (o navegador, ao apertar o botão da
@@ -1268,6 +1307,17 @@ impl Overlay {
                     self.last_audio = now;
                     ring.latest(&mut self.samples);
                 }
+            }
+            // Sinal de teste (TASKBEAT_TEST_BARS=1, só para medir): as barras
+            // mexem sem música tocando.
+            if test_bars() {
+                let t = (now - self.started).as_secs_f32();
+                let n = self.samples.len() as f32;
+                for (i, v) in self.samples.iter_mut().enumerate() {
+                    let x = i as f32 / n;
+                    *v = 0.35 * (x * (40.0 + 30.0 * (t * 1.3).sin()) * std::f32::consts::TAU).sin() + 0.25 * (x * (300.0 + 200.0 * (t * 0.7).cos()) * std::f32::consts::TAU).sin() * (t * 3.0).sin().abs();
+                }
+                self.last_audio = now;
             }
             let media_ok = !self.cfg.only_when_media || self.media.playing;
             if now - self.last_audio > Duration::from_millis(150) || !media_ok {
@@ -2181,6 +2231,53 @@ fn same_art(a: &Option<Arc<Image>>, b: &Option<Arc<Image>>) -> bool {
         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
         (None, None) => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod present_cost {
+    /// Mostrar a janela do card inteira contra só a área das barras (2x, card
+    /// com o mixer aberto), numa janela fora da tela.
+    /// `cargo test --release present_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn present_cost() {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        use windows::core::w;
+        unsafe {
+            let (w, h) = (848, 1164);
+            let hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, w!("STATIC"), w!("teste"), WS_POPUP, -6000, -6000, w, h, None, None, None, None).unwrap();
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let mut surf = super::Surface::new(w, h).unwrap();
+            {
+                let mut cv = surf.canvas();
+                cv.fill_rrect(0.0, 0.0, w as f32, h as f32, 24.0, 0.95, [0.2, 0.1, 0.3]);
+            }
+            let dirty = RECT { left: 700, top: 60, right: 768, bottom: 110 };
+            let n = 300;
+            let cpu = || {
+                let mut c = windows::Win32::Foundation::FILETIME::default();
+                let (mut a, mut b, mut k, mut u) = (c, c, c, c);
+                let _ = windows::Win32::System::Threading::GetThreadTimes(windows::Win32::System::Threading::GetCurrentThread(), &mut a, &mut b, &mut k, &mut u);
+                c = k;
+                ((c.dwHighDateTime as u64) << 32 | c.dwLowDateTime as u64) + ((u.dwHighDateTime as u64) << 32 | u.dwLowDateTime as u64)
+            };
+            surf.present(hwnd, -6000, -6000, 1.0);
+            let (t, c0) = (std::time::Instant::now(), cpu());
+            for _ in 0..n {
+                surf.present(hwnd, -6000, -6000, 1.0);
+            }
+            let (full, full_cpu) = (t.elapsed().as_secs_f64() * 1000.0 / n as f64, (cpu() - c0) as f64 / 10_000.0 / n as f64);
+            let (t, c0) = (std::time::Instant::now(), cpu());
+            for _ in 0..n {
+                surf.present_part(hwnd, -6000, -6000, 1.0, dirty);
+            }
+            let (part, part_cpu) = (t.elapsed().as_secs_f64() * 1000.0 / n as f64, (cpu() - c0) as f64 / 10_000.0 / n as f64);
+            let _ = DestroyWindow(hwnd);
+            println!("janela {w}x{h}: inteira {full:.3} ms (CPU {full_cpu:.3} ms); só as barras {part:.3} ms (CPU {part_cpu:.3} ms)");
+            println!("a 30 quadros/s: inteira {:.1}% de um núcleo; só as barras {:.2}%", full_cpu * 30.0 / 10.0, part_cpu * 30.0 / 10.0);
+        }
     }
 }
 

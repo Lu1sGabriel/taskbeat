@@ -563,7 +563,7 @@ fn card_bars_cost() {
     let t = std::time::Instant::now();
     for i in 0..n {
         let viz: Vec<f32> = (0..32).map(|k| ((i + k) % 10) as f32 / 10.0).collect();
-        assert!(ui::card_bars_update(&mut Canvas::new(w, h, &mut px), &viz, &th, s));
+        assert!(ui::card_bars_update(&mut Canvas::new(w, h, &mut px), &viz, &th, s).is_some());
     }
     let bars = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
     println!("quadro inteiro: {full:.2} ms; só as barras: {bars:.3} ms");
