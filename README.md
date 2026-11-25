@@ -83,6 +83,12 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   desenhados como formas cheias e arredondadas (no card e na barra), no lugar
   dos ícones finos de contorno; dá para voltar ao contorno do Fluent (Card
   expandido > Estilo dos ícones).
+- **Cor dos controles** (na barra e no card, cada um com a sua): branco (padrão;
+  escuro sobre fundos claros), branco e destaque, cor da capa, cor de destaque
+  ou qualquer cor num seletor (amostras, matiz e saturação, brilho, hex). Os
+  **botões laterais** (aleatório, anterior, próximo, repetir) ficam por padrão
+  na mesma cor e tão fortes quanto o do meio; dá para escolher outra cor para
+  eles e deixá-los mais suaves (Força dos botões laterais).
 - **Card expandido** (clique na música): capa grande, aleatório / anterior / play /
   próximo / repetir, barra de progresso arrastável e volume. O app de origem
   (Spotify, Brave…) fica escondido por padrão; com a opção "Mostrar app de
@@ -98,14 +104,14 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   que não deixa o Windows mudar isso, o Taskbeat aperta os botões da própria
   página, sem trazer a janela para a frente, e lê o estado do repetir (desativado
   → tudo → uma); o aleatório do YouTube Music embaralha a fila de novo a cada
-  clique. Nos outros sites os botões ficam apagados e o clique traz o player para
-  a frente.
+  clique. Nos outros sites o clique nesses botões traz o player para a frente.
 - **Mixer de volume** (opcional, ligado por padrão): uma setinha embaixo do
   card abre, com animação, o volume de cada app que usa a saída de áudio (ícone,
   nome, slider, mudo e a roda do mouse), juntando os processos do mesmo app,
   mais os sons do sistema e o nome do dispositivo de saída. Atualiza sozinho
-  pelos avisos do Windows (app novo, volume mudado em outro lugar). Com ele
-  aberto o card não fecha sozinho. No Mac, que não tem volume por app, a
+  pelos avisos do Windows (app novo, volume mudado em outro lugar). As barras
+  de volume (do mixer e a principal) sobem e descem suaves: enchem ao abrir e
+  esvaziam ao fechar. Com ele aberto o card não fecha sozinho. No Mac, que não tem volume por app, a
   setinha abre a lista das saídas de áudio para escolher a padrão.
 - **Atalhos dos apps de música** (opcional, ligado por padrão): o ícone de cada
   player instalado (Spotify, YouTube Music instalado pelo navegador, Apple Music,
