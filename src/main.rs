@@ -63,6 +63,8 @@ mod volume;
 #[cfg(windows)]
 mod vsync;
 #[cfg(windows)]
+mod webext;
+#[cfg(windows)]
 mod webplayer;
 
 // Só macOS.
@@ -97,6 +99,12 @@ use windows::core::w;
 
 #[cfg(windows)]
 fn main() {
+    // Aberto pelo navegador (extensão do Taskbeat): só repassa mensagens ao
+    // Taskbeat em execução e sai quando o navegador fecha a conexão.
+    if webext::host_mode() {
+        webext::run_host();
+        return;
+    }
     unsafe {
         // Instalador (Taskbeat-Setup.exe / --install) ou desinstalador (--uninstall).
         if let Some(mode) = setup::mode_from_args() {
@@ -132,6 +140,7 @@ fn main() {
         let audio = audio::spawn(shared.clone());
         media::spawn(shared.clone());
         launchers::spawn(shared.clone());
+        webext::spawn(shared.clone());
         webplayer::spawn(shared.clone());
         mixer::spawn(shared.clone());
         let overlay = overlay::spawn(shared.clone());

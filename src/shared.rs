@@ -194,6 +194,8 @@ pub enum WebCmd {
     Probe { aumid: String, title: String },
     Shuffle { aumid: String, title: String },
     Repeat { aumid: String, title: String },
+    /// A extensão do navegador mandou um estado novo (`webext.rs`).
+    Ext,
 }
 
 impl MediaInfo {
