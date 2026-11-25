@@ -65,6 +65,9 @@ enum Ev {
     Wheel(i16),
     Deactivate,
     Escape,
+    /// Outra janela tomou a captura do mouse no meio de um arrasto (Alt+Tab,
+    /// um aviso do sistema): sem o "soltar", o arrasto ficaria preso.
+    CaptureLost,
 }
 
 thread_local! {
@@ -123,10 +126,13 @@ unsafe fn mouse(win: Win, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Optio
                 push(win, Ev::Down(x, y, screen_x()));
             }
             WM_LBUTTONUP => {
-                let _ = ReleaseCapture();
+                // O "soltar" vai antes: soltar a captura manda WM_CAPTURECHANGED
+                // na hora, e ele não pode cancelar um arrasto que terminou bem.
                 let (x, y) = xy(lp);
                 push(win, Ev::Up(x, y, screen_x()));
+                let _ = ReleaseCapture();
             }
+            WM_CAPTURECHANGED => push(win, Ev::CaptureLost),
             WM_MOUSEWHEEL => push(win, Ev::Wheel(((wp.0 >> 16) & 0xffff) as i16)),
             _ => return None,
         }
@@ -592,6 +598,25 @@ struct Overlay {
     /// Dica do botão sob o mouse no card: qual, desde quando e se já foi
     /// clicado (aí some até o mouse sair, como as dicas do Windows).
     tip: Option<(Hit, Instant, bool)>,
+    /// Ordem das linhas do mixer enquanto ele está aberto: a da abertura, com
+    /// os apps novos no fim. A thread reordena a lista a cada aviso do Windows
+    /// (tocando primeiro); se as linhas trocassem de lugar com o mouse em
+    /// cima, o slider, a roda e o mudo passariam a valer para outro app.
+    mix_order: Vec<String>,
+}
+
+/// Linhas do mixer na ordem `order` (a da abertura; os que não estão nela,
+/// no fim), os sons do sistema por último e sempre à vista: com mais apps do
+/// que linhas, eles tomam a última linha.
+fn mix_arrange(apps: &mut Vec<crate::shared::MixApp>, order: &[String]) {
+    apps.sort_by_key(|a| (a.system, order.iter().position(|k| *k == a.key).unwrap_or(usize::MAX)));
+    let rows = crate::shared::MIXER_ROWS;
+    if apps.len() > rows
+        && let Some(i) = apps.iter().position(|a| a.system)
+    {
+        let sys = apps.remove(i);
+        apps.insert(rows - 1, sys);
+    }
 }
 
 /// Volume e/ou mudo que o usuário mudou num app do mixer, e quando.
@@ -755,6 +780,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         vol_fill: 0.0,
         mix_fill: Vec::new(),
         tip: None,
+        mix_order: Vec::new(),
         shared,
     };
     ov.refresh_launchers();
@@ -958,7 +984,23 @@ impl Overlay {
                 a.muted = h.muted.unwrap_or(a.muted);
             }
         }
+        mix_arrange(&mut st.apps, &self.mix_order);
         st
+    }
+
+    /// Guarda a ordem das linhas do mixer aberto (e esquece ao fechar).
+    fn keep_mix_order(&mut self) {
+        if !self.mixer_open {
+            self.mix_order.clear();
+            return;
+        }
+        let st = self.shared.mixer.lock().unwrap();
+        self.mix_order.retain(|k| st.apps.iter().any(|a| a.key == *k));
+        for a in &st.apps {
+            if !self.mix_order.contains(&a.key) {
+                self.mix_order.push(a.key.clone());
+            }
+        }
     }
 
     /// Chave, volume e mudo do app da linha `i` do mixer (como aparece).
@@ -1576,6 +1618,21 @@ impl Overlay {
                         self.flyout_open = false;
                     }
                 }
+                // Captura perdida no meio de um arrasto: termina sem aplicar o
+                // que dependia de soltar (pular, mudar a ordem dos atalhos); o
+                // volume já foi aplicado enquanto arrastava.
+                Ev::CaptureLost => {
+                    if self.drag.take().is_some() {
+                        self.seek_preview = None;
+                    }
+                    if let Some(key) = self.mix_drag.take()
+                        && let Some(h) = self.mix_hold.iter_mut().find(|h| h.key == key)
+                    {
+                        h.at = now;
+                    }
+                    self.launch_press = None;
+                    self.pressed = None;
+                }
             }
         }
         true
@@ -1670,7 +1727,9 @@ impl Overlay {
     fn widget_drag_event(&mut self, ev: Ev, s: f32, now: Instant) -> bool {
         match ev {
             Ev::Down(_, _, sx) => {
-                if let Some(p) = self.placement.filter(|_| self.cfg.widget_drag) {
+                // Só com a barra na horizontal: na vertical (Windows 10) não há
+                // limites calculados e o widget pularia para o canto.
+                if let Some(p) = self.placement.filter(|p| self.cfg.widget_drag && p.horizontal) {
                     self.wdrag = Some(WidgetDrag { cursor0: sx, x0: p.x, dx: 0, active: false });
                 }
                 false
@@ -1703,6 +1762,15 @@ impl Overlay {
                 true
             }
             Ev::Leave => self.wdrag.is_some_and(|d| d.active),
+            // Captura perdida: o widget volta para onde estava (nada é gravado).
+            Ev::CaptureLost => {
+                let was = self.wdrag.take().is_some_and(|d| d.active);
+                if was {
+                    self.pressed = None;
+                    self.last_layout = now - Duration::from_secs(10);
+                }
+                was
+            }
             _ => false,
         }
     }
@@ -1754,6 +1822,7 @@ impl Overlay {
         // Mixer abrindo/fechando: o card cresce ou encolhe junto.
         let target = if self.mixer_open && self.cfg.card_mixer { 1.0 } else { 0.0 };
         self.mixer_anim += (target - self.mixer_anim).clamp(-dt / 0.24, dt / 0.24);
+        self.keep_mix_order();
         // Barras de volume: sobem e descem suaves até o valor (arrastando, na
         // hora); enchem ao abrir o card ou o mixer e esvaziam ao fechar.
         let drag_key = self.mix_drag.clone();
@@ -1973,5 +2042,37 @@ fn same_art(a: &Option<Arc<Image>>, b: &Option<Arc<Image>>) -> bool {
         (Some(a), Some(b)) => Arc::ptr_eq(a, b),
         (None, None) => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mix_arrange;
+    use crate::shared::MixApp;
+
+    fn app(key: &str, system: bool) -> MixApp {
+        MixApp { key: key.into(), name: key.into(), icon: None, volume: 1.0, muted: false, active: false, system }
+    }
+
+    fn keys(apps: &[MixApp]) -> Vec<&str> {
+        apps.iter().map(|a| a.key.as_str()).collect()
+    }
+
+    /// Com o mixer aberto, as linhas não trocam de lugar quando a thread
+    /// reordena (um app começou a tocar); app novo vai para o fim; os sons do
+    /// sistema ficam sempre à vista.
+    #[test]
+    fn mixer_mantem_a_ordem_das_linhas() {
+        let order: Vec<String> = ["a", "b", "system"].iter().map(|s| s.to_string()).collect();
+        // A thread pôs "b" (que começou a tocar) e o novo "n" na frente.
+        let mut apps = vec![app("n", false), app("b", false), app("system", true), app("a", false)];
+        mix_arrange(&mut apps, &order);
+        assert_eq!(keys(&apps), ["a", "b", "n", "system"]);
+        // Mais apps do que linhas: o sistema toma a última linha à vista.
+        let mut apps: Vec<MixApp> = (0..8).map(|i| app(&format!("p{i}"), false)).collect();
+        apps.push(app("system", true));
+        mix_arrange(&mut apps, &[]);
+        assert_eq!(apps[crate::shared::MIXER_ROWS - 1].key, "system");
+        assert_eq!(apps.len(), 9);
     }
 }

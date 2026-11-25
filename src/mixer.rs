@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
     AudioSessionDisconnectReason, AudioSessionState, AudioSessionStateExpired, AudioSessionStateActive, IAudioSessionControl, IAudioSessionControl2,
@@ -49,12 +49,16 @@ pub fn spawn(shared: Arc<Shared>) {
             };
             let Some(cmd) = cmd else { continue };
             // Junta rajadas (arrastar o slider manda vários volumes; o Windows
-            // avisa de cada mudança): vale o último de cada.
+            // avisa de cada mudança): vale o último de cada. Janela fixa de
+            // 30 ms a partir do primeiro: esperar "até parar de chegar" fazia,
+            // em telas de 120 Hz ou mais (um volume a cada ~8 ms), o volume só
+            // ser aplicado a cada ~0,4 s durante o arrasto.
             let mut cmds = vec![cmd];
-            while let Ok(c) = rx.recv_timeout(Duration::from_millis(15)) {
-                cmds.push(c);
-                if cmds.len() > 64 {
-                    break;
+            let until = Instant::now() + Duration::from_millis(30);
+            while let Some(left) = until.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(c) => cmds.push(c),
+                    Err(_) => break,
                 }
             }
             let mut publish = false;

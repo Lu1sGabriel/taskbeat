@@ -726,7 +726,7 @@ fn widget_bg_mean(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Rgb {
 
 thread_local! {
     /// Capas desfocadas mais recentes (a troca de música mostra a antiga e a nova juntas).
-    static BLUR_CACHE: RefCell<Vec<(usize, Arc<Image>)>> = const { RefCell::new(Vec::new()) };
+    static BLUR_CACHE: RefCell<Vec<(BlurKey, Arc<Image>)>> = const { RefCell::new(Vec::new()) };
     static LAYERS: RefCell<Vec<Layer>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -741,8 +741,11 @@ fn color_wash(img: &Arc<Image>) -> Arc<Image> {
     blurred_cached(img, true)
 }
 
+/// Chave do cache de desfoque: a identidade da capa e se é o "borrão de cor".
+type BlurKey = (u64, bool);
+
 fn blurred_cached(img: &Arc<Image>, wash: bool) -> Arc<Image> {
-    let key = Arc::as_ptr(img) as usize ^ wash as usize;
+    let key = (img.id, wash);
     BLUR_CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if let Some(i) = c.iter().position(|(k, _)| *k == key) {
@@ -1335,7 +1338,7 @@ fn rich_widget_bg(cv: &mut Canvas, l: &WLayout, f: &WidgetFrame, m: &MediaInfo, 
     let glow_at = l.art.map(|r| (r.cx(), r.cy())).unwrap_or((bg.x + bg.h, bg.cy()));
     let key = layer_key((
         cfg.widget_tint as u8,
-        art.as_ref().map(|a| Arc::as_ptr(a) as usize),
+        art.as_ref().map(|a| a.id),
         base.map(f32::to_bits),
         rect_bits(bg),
         l.radius.to_bits(),
@@ -1850,14 +1853,17 @@ fn card_bars(cv: &mut Canvas, r: RectF, values: &[f32], th: &Theme, s: f32) {
     if values.is_empty() {
         return;
     }
+    // Até 7 barras; cada uma pega a maior de uma faixa dos valores. As faixas
+    // dividem o total por igual (com 10 valores: 1,1,2,1,2,1,2), sem passar
+    // do fim (com "div_ceil" por faixa, 8 a 11 valores estouravam).
     let n = values.len().min(7);
-    let chunk = values.len().div_ceil(n);
     let slot = r.w / n as f32;
     let bw = (slot * 0.58).max(2.0 * s);
     let top = lerp3(th.accent, [1.0; 3], if th.dark { 0.35 } else { 0.0 });
     let (y1, h) = (r.bottom(), r.h);
     for i in 0..n {
-        let v = values[i * chunk..((i + 1) * chunk).min(values.len())].iter().copied().fold(0.0f32, f32::max);
+        let (a, b) = (i * values.len() / n, (i + 1) * values.len() / n);
+        let v = values[a..b.max(a + 1)].iter().copied().fold(0.0f32, f32::max);
         let bh = (3.0 * s + v.clamp(0.0, 1.0) * (h - 3.0 * s)).round();
         let x = r.x + i as f32 * slot + (slot - bw) / 2.0;
         cv.fill_rrect_ca(x, y1 - bh, x + bw, y1, bw / 2.0, |_, y| (lerp3(th.accent, top, ((y1 - y) / h).clamp(0.0, 1.0)), 1.0));
@@ -1884,9 +1890,9 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     let key = layer_key((
         (cfg.card_style as u8, art_shape as u8, cfg.show_source, l.vertical),
         (rect_bits(base), rect_bits(l.art), l.radius.to_bits()),
-        (m.art.as_ref().map(|a| Arc::as_ptr(a) as usize), m.icon.as_ref().map(|a| Arc::as_ptr(a) as usize)),
+        (m.art.as_ref().map(|a| a.id), m.icon.as_ref().map(|a| a.id)),
         (th.dark, th.accent.map(f32::to_bits), th.fg.map(f32::to_bits), f.colors.accent.map(f32::to_bits)),
-        f.backdrop.map(|b| b as *const Image as usize),
+        f.backdrop.map(|b| b.id),
     ));
     let draw_bg = |cv: &mut Canvas| {
         card_background(cv, base, l.radius, cfg, f.colors, m, th, s, f.backdrop);
@@ -2249,9 +2255,9 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
     let radius = cfg.corners.radius() * s;
     let key = layer_key((
         (cfg.card_style as u8, rect_bits(card), radius.to_bits()),
-        media.art.as_ref().map(|a| Arc::as_ptr(a) as usize),
+        media.art.as_ref().map(|a| a.id),
         (th.dark, th.accent.map(f32::to_bits), colors.accent.map(f32::to_bits)),
-        backdrop.map(|b| b as *const Image as usize),
+        backdrop.map(|b| b.id),
     ));
     cached_layer(cv, LayerTag::UpNext, key, 1.0, |cv| card_background(cv, card, radius, cfg, colors, media, th, s, backdrop));
 
@@ -2563,6 +2569,46 @@ fn sample_art() -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Capa nova no mesmo endereço de uma já liberada não herda o desfoque
+    /// dela (o cache era pelo endereço).
+    #[test]
+    fn desfoque_nao_herda_a_capa_liberada() {
+        for _ in 0..20 {
+            let red = Arc::new(Image::new(64, 64, vec![0xffff_0000; 64 * 64]));
+            let _ = blurred(&red);
+            drop(red);
+            let blue = Arc::new(Image::new(64, 64, vec![0xff00_00ff; 64 * 64]));
+            let b = blurred(&blue);
+            let p = b.px[b.px.len() / 2];
+            assert!(p & 0xff > (p >> 16) & 0xff, "desfoque da capa antiga: {p:08x}");
+        }
+    }
+
+    /// Mini barras do card com qualquer quantidade de barras do visualizador
+    /// (8 a 11, 15, 16... davam pânico ao cortar a faixa).
+    #[test]
+    fn barras_do_card_com_qualquer_quantidade() {
+        let th = Theme { fg: [1.0; 3], accent: [1.0, 0.4, 0.6], on_accent: [0.0; 3], dark: true };
+        let mut px = vec![0u32; 60 * 30];
+        for n in 1..=128 {
+            let values: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+            card_bars(&mut Canvas::new(60, 30, &mut px), RectF::new(5.0, 5.0, 40.0, 20.0), &values, &th, 1.0);
+        }
+        // E pelo card inteiro, com cada opção de barras das configurações.
+        let cfg = Config { card_viz: true, ..Config::default() };
+        let media = sample_media();
+        let colors = Colors { palette: cfg.palette, accent: [0.3, 0.5, 0.9], accent_light: [0.6, 0.8, 1.0], light_taskbar: false, album: None };
+        let mut tr = TextRenderer::new();
+        let l = CLayout::build(1.0, &cfg, true);
+        let (w, h) = (l.w.ceil() as usize, l.h.ceil() as usize);
+        let mut px = vec![0u32; w * h];
+        for n in [6usize, 8, 10, 12, 16, 24, 32] {
+            let viz = vec![0.7; n];
+            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback::default(), s: 1.0, backdrop: None, hint: None, launchers: &[], viz: Some(&viz), mixer: None };
+            draw_card(&mut Canvas::new(w, h, &mut px), &mut tr, &l, &f);
+        }
+    }
     use crate::config::Config;
 
     /// Na pílula, o canto da capa fica dentro da ponta arredondada em todos os

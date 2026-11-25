@@ -155,14 +155,25 @@ impl Worker {
     /// elementos continuam valendo).
     fn find(&mut self, aumid: &str, title: &str) -> Option<&Found> {
         let alive = |f: &Found| unsafe { IsWindow(Some(f.hwnd)).as_bool() } && f.repeat.as_ref().or(f.shuffle.as_ref()).is_some_and(|e| unsafe { e.CurrentName() }.is_ok());
-        if self.found.as_ref().is_some_and(|f| f.aumid == aumid && alive(f)) {
+        // Numa aba (a sessão é o navegador), a janela guardada só vale enquanto
+        // ainda mostra a música atual: outra aba pode ter começado a tocar.
+        let same_song = |f: &Found| is_ytm_app(aumid) || (!title.is_empty() && window_title(f.hwnd).to_lowercase().contains(&title.to_lowercase()));
+        if self.found.as_ref().is_some_and(|f| f.aumid == aumid && alive(f) && same_song(f)) {
             return self.found.as_ref();
         }
         self.found = None;
         if self.miss.as_ref().is_some_and(|(a, t)| a == aumid && t.elapsed() < MISS_TTL) {
             return None;
         }
-        let hwnd = crate::launchers::player_window(aumid, title)?;
+        // Só a janela da própria sessão: o app do YouTube Music (mesmo id) ou a
+        // janela cujo título mostra a música que está tocando. Com uma aba de
+        // outro site tocando e o YouTube Music aberto noutra janela do mesmo
+        // navegador, "a primeira janela do navegador" podia ser o YouTube
+        // Music, e o clique mexia na fila dele.
+        let Some(hwnd) = crate::launchers::player_window_exact(aumid, title) else {
+            self.miss = Some((aumid.into(), Instant::now()));
+            return None;
+        };
         // Só o YouTube Music tem esses botões: em outras páginas (um vídeo numa
         // aba, por exemplo) nem procura, para não ligar a acessibilidade do
         // navegador à toa.
@@ -214,7 +225,12 @@ fn window_title(hwnd: HWND) -> String {
 /// A sessão é o YouTube Music: o app instalado pelo navegador (mesmo id no
 /// Brave, Chrome e Edge) ou uma aba com ele aberto.
 fn is_youtube_music(aumid: &str, window_title: &str) -> bool {
-    aumid.to_lowercase().contains("cinhimbnkkghhklpknlkffjgod") || window_title.contains("YouTube Music")
+    is_ytm_app(aumid) || window_title.contains("YouTube Music")
+}
+
+/// A sessão é o app do YouTube Music instalado pelo navegador.
+fn is_ytm_app(aumid: &str) -> bool {
+    aumid.to_lowercase().contains("cinhimbnkkghhklpknlkffjgod")
 }
 
 fn name(e: &IUIAutomationElement) -> String {

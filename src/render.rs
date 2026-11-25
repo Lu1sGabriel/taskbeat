@@ -19,6 +19,16 @@ pub struct Image {
     pub mips: std::sync::OnceLock<Vec<Image>>,
     /// Reduções exatas já feitas (recorte + tamanho), as mais recentes primeiro.
     pub sized: std::sync::Mutex<Vec<(SizedKey, std::sync::Arc<Image>)>>,
+    /// Identidade única (chave dos caches de desenho). O endereço não serve:
+    /// uma capa nova pode reaproveitar o de uma já liberada e herdar o
+    /// desfoque ou a camada da antiga.
+    pub id: u64,
+}
+
+/// Próxima identidade de imagem (nunca se repete).
+fn next_image_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Recorte da origem (bits dos `f32`) e tamanho de destino de uma redução.
@@ -101,12 +111,12 @@ impl Image {
         } else {
             avg
         };
-        Self { w, h, px, avg, vibrant, mips: Default::default(), sized: Default::default() }
+        Self { w, h, px, avg, vibrant, mips: Default::default(), sized: Default::default(), id: next_image_id() }
     }
 
     /// Imagem já pré-multiplicada, sem análise de cor.
     pub fn plain(w: usize, h: usize, px: Vec<u32>) -> Self {
-        Self { w, h, px, avg: [0.0; 3], vibrant: [0.0; 3], mips: Default::default(), sized: Default::default() }
+        Self { w, h, px, avg: [0.0; 3], vibrant: [0.0; 3], mips: Default::default(), sized: Default::default(), id: next_image_id() }
     }
 
     /// O recorte `src` reduzido para `tw`×`th` por média de área: cada pixel
@@ -235,7 +245,7 @@ impl Image {
                 ((c[3].min(255.0) as u32) << 24) | ((c[0].min(255.0) as u32) << 16) | ((c[1].min(255.0) as u32) << 8) | (c[2].min(255.0) as u32)
             })
             .collect();
-        Image { w, h, px, avg: self.avg, vibrant: self.vibrant, mips: Default::default(), sized: Default::default() }
+        Image { w, h, px, avg: self.avg, vibrant: self.vibrant, mips: Default::default(), sized: Default::default(), id: next_image_id() }
     }
 }
 

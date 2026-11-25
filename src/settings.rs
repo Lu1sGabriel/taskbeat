@@ -261,7 +261,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E91B}", title: "Contorno", desc: "Borda fina em volta do fundo", key: Key::WidgetBorder, kind: Kind::Toggle },
             Section("Posição"),
             Row { icon: "\u{E7C4}", title: "Posição na barra", desc: "Onde o widget fica na barra de tarefas", key: Key::Anchor, kind: Kind::Segmented(ANCHORS) },
-            Row { icon: "\u{E8AB}", title: "Ajuste horizontal", desc: "Desloca o widget para a esquerda ou para a direita", key: Key::Offset, kind: Kind::Slider { min: -1200, max: 1200, step: 10, unit: "px" } },
+            Row { icon: "\u{E8AB}", title: "Ajuste horizontal", desc: "Desloca o widget para a esquerda ou para a direita", key: Key::Offset, kind: Kind::Slider { min: -4000, max: 4000, step: 10, unit: "px" } },
             Row { icon: "\u{E7C2}", title: "Arrastar para mover", desc: "Aperte e arraste o widget pela barra; um clique simples continua abrindo o card", key: Key::WidgetDrag, kind: Kind::Toggle },
             Row { icon: "\u{E72C}", title: "Restaurar posição", desc: "Volta o widget para o lado do relógio", key: Key::ResetPos, kind: Kind::Button("Restaurar") },
         ],
@@ -736,7 +736,6 @@ struct LayoutKey {
     cfg: u64,
 }
 
-/// Dica de opção desativada.
 /// Como desenhar um app da lista de atalhos.
 #[derive(Clone, Copy)]
 struct AppRow {
@@ -758,6 +757,7 @@ struct AppDrag {
     active: bool,
 }
 
+/// Dica de opção desativada.
 struct Tip {
     ri: usize,
     x: f32,

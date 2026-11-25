@@ -240,6 +240,17 @@ fn top_windows() -> Vec<Win> {
 /// Ordem: mesma identidade de app na janela (apps do navegador e da Store);
 /// depois janelas dos processos do app, com o título da música no nome.
 pub(crate) fn player_window(aumid: &str, title: &str) -> Option<HWND> {
+    find_player_window(aumid, title, false)
+}
+
+/// Como `player_window`, mas só aceita a janela do próprio app (mesma
+/// identidade) ou uma janela dos processos dele que mostre a música no
+/// título: nunca "a primeira janela do navegador", que pode ser outro site.
+pub(crate) fn player_window_exact(aumid: &str, title: &str) -> Option<HWND> {
+    find_player_window(aumid, title, true)
+}
+
+fn find_player_window(aumid: &str, title: &str, exact: bool) -> Option<HWND> {
     use crate::audio::process;
     let mut wins = top_windows();
     for w in &mut wins {
@@ -266,7 +277,7 @@ pub(crate) fn player_window(aumid: &str, title: &str) -> Option<HWND> {
     candidates
         .iter()
         .find(|w| !title.is_empty() && w.title.to_lowercase().contains(&title))
-        .or(candidates.first())
+        .or(if exact { None } else { candidates.first() })
         .map(|w| w.hwnd)
 }
 
