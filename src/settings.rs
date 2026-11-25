@@ -1833,7 +1833,7 @@ impl Ui {
     /// Todos os apps de música achados, na ordem escolhida, com "à mostra?".
     fn app_list(&self, cfg: &Config) -> Vec<(crate::shared::Launcher, bool)> {
         let found = self.shared.launchers.lock().unwrap().clone();
-        crate::launchers::arrange(&found, &cfg.launcher_order, &cfg.launcher_hidden)
+        crate::launchers::arranged(&found, cfg)
     }
 
     /// Resumo do que a lista de apps mostra (para só redesenhar quando muda).
@@ -2430,13 +2430,15 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
         }
         Hit::App(_, k) => {
             let cfg = u.cfg();
-            if let Some((app, on)) = u.app_list(&cfg).get(k) {
-                let (id, on) = (app.id.clone(), *on);
+            let mut all = u.app_list(&cfg);
+            if let Some((_, on)) = all.get_mut(k) {
+                *on = !*on;
+                // Ordem e escondidos juntos: vale também para a primeira mudança
+                // de quem estava com o atalho escolhido sozinho.
+                let (order, hidden) = crate::launchers::lists_of(&all);
                 u.shared.update_config(|c| {
-                    c.launcher_hidden.retain(|h| *h != id);
-                    if on {
-                        c.launcher_hidden.push(id);
-                    }
+                    c.launcher_order = order;
+                    c.launcher_hidden = hidden;
                 });
             }
             u.schedule();
@@ -2687,7 +2689,11 @@ impl Ui {
         let Some(to) = (0..n).min_by(|a, b| (row.segs[*a].cy() - cy).abs().total_cmp(&(row.segs[*b].cy() - cy).abs())) else { return };
         if apps.iter().position(|(a, _)| a.id == id) != Some(to) {
             let order = crate::launchers::moved(&apps, &id, to);
-            self.shared.preview_config(|c| c.launcher_order = order);
+            let (_, hidden) = crate::launchers::lists_of(&apps);
+            self.shared.preview_config(|c| {
+                c.launcher_order = order;
+                c.launcher_hidden = hidden;
+            });
         }
     }
 

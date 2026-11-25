@@ -33,10 +33,13 @@ const RESCAN: Duration = Duration::from_secs(30 * 60);
 
 /// Players conhecidos: nome na pasta "Aplicativos" (sem diferenciar
 /// maiúsculas) e trechos do AUMID que identificam o app em qualquer idioma.
+/// A ordem é também a prioridade do atalho escolhido sozinho (`effective`).
 const KNOWN: &[(&str, &[&str])] = &[
     ("spotify", &["spotifyab.spotifymusic", "spotify.exe"]),
     // App do YouTube Music instalado pelo Brave, Chrome ou Edge (mesmo id em todos).
     ("youtube music", &["cinhimbnkkghhklpknlkffjgod"]),
+    // Shazam instalado pelo navegador (shazam.com) ou outro app com esse nome.
+    ("shazam", &[]),
     ("apple music", &["appleinc.applemusicwin"]),
     ("deezer", &["deezer"]),
     ("tidal", &["tidal"]),
@@ -123,7 +126,30 @@ pub fn arrange(found: &[Launcher], order: &[String], hidden: &[String]) -> Vec<(
 
 /// Os atalhos à mostra, na ordem escolhida (no máximo `MAX`).
 pub fn shown(found: &[Launcher], cfg: &crate::config::Config) -> Vec<Launcher> {
-    arrange(found, &cfg.launcher_order, &cfg.launcher_hidden).into_iter().filter(|(_, on)| *on).map(|(l, _)| l).take(MAX).collect()
+    arranged(found, cfg).into_iter().filter(|(_, on)| *on).map(|(l, _)| l).take(MAX).collect()
+}
+
+/// Todos os apps achados como aparecem (ordem e "à mostra?"). Quem nunca mexeu
+/// na lista (ordem e escondidos vazios) fica com UM atalho, escolhido sozinho:
+/// o primeiro instalado na ordem de `KNOWN` (Spotify, YouTube Music, Shazam,
+/// os outros). Quem já escolheu fica com a própria escolha.
+pub fn arranged(found: &[Launcher], cfg: &crate::config::Config) -> Vec<(Launcher, bool)> {
+    if cfg.launcher_order.is_empty() && cfg.launcher_hidden.is_empty() {
+        let mut all = arrange(found, &[], &[]);
+        all.sort_by_key(|(l, _)| known(&l.name, &l.id).unwrap_or(usize::MAX));
+        for (i, (_, on)) in all.iter_mut().enumerate() {
+            *on = i == 0;
+        }
+        return all;
+    }
+    arrange(found, &cfg.launcher_order, &cfg.launcher_hidden)
+}
+
+/// Ordem (todos os ids) e escondidos a gravar a partir da lista como aparece.
+/// Grava os dois juntos: a primeira mudança de quem estava na escolha
+/// automática guarda o que ela mostrava (senão todos apareceriam de uma vez).
+pub fn lists_of(all: &[(Launcher, bool)]) -> (Vec<String>, Vec<String>) {
+    (all.iter().map(|(l, _)| l.id.clone()).collect(), all.iter().filter(|(_, on)| !*on).map(|(l, _)| l.id.clone()).collect())
 }
 
 /// Ordem nova (todos os ids) com o app `id` movido para a posição `to` da lista completa.
@@ -348,6 +374,45 @@ mod tests {
         assert_eq!(full_index(&all, 1), Some(3));
         assert_eq!(moved(&all, "spotify", 0), ["spotify", "vlc", "zune", "ytm"]);
         assert_eq!(moved(&all, "vlc", 9), ["zune", "ytm", "spotify", "vlc"]);
+    }
+
+    /// Sem escolha feita, um atalho só: o primeiro instalado na ordem de
+    /// prioridade (Spotify, YouTube Music, Shazam, os outros). Quem já
+    /// escolheu fica com a própria escolha; a primeira mudança grava a lista.
+    #[test]
+    fn atalho_escolhido_por_prioridade() {
+        use super::{arranged, lists_of, moved};
+        use crate::config::Config;
+        use crate::shared::Launcher;
+        let l = |name: &str, id: &str| Launcher { name: name.into(), id: id.into(), icon: None };
+        let (spotify, ytm, shazam, vlc, zune) = (
+            l("Spotify", "Spotify.exe"),
+            l("YouTube Music", "Brave._crx_cinhimbnkkghhklpknlkffjgod"),
+            l("Shazam", "Chrome._crx_shazam"),
+            l("VLC media player", "vlc"),
+            l("Media Player", "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"),
+        );
+        let on = |found: &[Launcher], cfg: &Config| arranged(found, cfg).into_iter().filter(|(_, on)| *on).map(|(l, _)| l.name).collect::<Vec<_>>();
+        let auto = Config::default();
+        assert_eq!(on(&[vlc.clone(), ytm.clone(), spotify.clone(), zune.clone()], &auto), ["Spotify"]);
+        assert_eq!(on(&[zune.clone(), vlc.clone(), ytm.clone()], &auto), ["YouTube Music"]);
+        assert_eq!(on(&[vlc.clone(), shazam.clone(), zune.clone()], &auto), ["Shazam"]);
+        assert_eq!(on(&[vlc.clone(), zune.clone()], &auto), ["Media Player"]);
+        assert!(on(&[], &auto).is_empty());
+        // Escolha feita (como a do usuário: só o YouTube Music) continua valendo,
+        // mesmo com o Spotify instalado depois.
+        let found = [ytm.clone(), zune.clone(), vlc.clone()];
+        let mine = Config { launcher_order: vec![ytm.id.clone(), zune.id.clone(), vlc.id.clone()], launcher_hidden: vec![zune.id.clone(), vlc.id.clone()], ..Config::default() };
+        assert_eq!(on(&found, &mine), ["YouTube Music"]);
+        // Primeira mudança a partir da escolha automática: arrastar o VLC para o
+        // começo grava a ordem e mantém escondidos os que estavam.
+        let all = arranged(&found, &auto);
+        let (order, hidden) = lists_of(&all);
+        let order2 = moved(&all, &vlc.id, 0);
+        assert_eq!(order, [ytm.id.clone(), zune.id.clone(), vlc.id.clone()]);
+        assert_eq!(hidden, [zune.id.clone(), vlc.id.clone()]);
+        let after = Config { launcher_order: order2, launcher_hidden: hidden, ..Config::default() };
+        assert_eq!(on(&found, &after), ["YouTube Music"]);
     }
 
     #[test]

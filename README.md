@@ -105,21 +105,21 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   página, sem trazer a janela para a frente, e lê o estado do repetir (desativado
   → tudo → uma); o aleatório do YouTube Music embaralha a fila de novo a cada
   clique. Nos outros sites o clique nesses botões traz o player para a frente.
-- **Mixer de volume** (opcional, ligado por padrão): uma setinha embaixo do
+- **Mixer de volume** (Windows; opcional, ligado por padrão): uma setinha embaixo do
   card abre, com animação, o volume de cada app que usa a saída de áudio (ícone,
   nome, slider, mudo e a roda do mouse), juntando os processos do mesmo app,
   mais os sons do sistema e o nome do dispositivo de saída. Atualiza sozinho
   pelos avisos do Windows (app novo, volume mudado em outro lugar). As barras
   de volume (do mixer e a principal) sobem e descem suaves: enchem ao abrir e
-  esvaziam ao fechar. Com ele aberto o card não fecha sozinho. No Mac, que não tem volume por app, a
-  setinha abre a lista das saídas de áudio para escolher a padrão.
+  esvaziam ao fechar. Com ele aberto o card não fecha sozinho.
 - **Atalhos dos apps de música** (opcional, ligado por padrão): o ícone de cada
   player instalado (Spotify, YouTube Music instalado pelo navegador, Apple Music,
   Deezer, TIDAL, Amazon Music, Media Player, VLC, foobar2000…) para abrir com um
-  clique, inclusive quando nada está tocando. Embaixo do card, dentro do widget
-  na barra ou nos dois; em Card expandido > Apps nos atalhos dá para ligar só os
-  que você usa e arrastar para mudar a ordem (no card também dá para arrastar os
-  ícones).
+  clique, inclusive quando nada está tocando. Por padrão vem um só, na barra: o
+  primeiro instalado entre Spotify, YouTube Music, Shazam e os outros. Embaixo
+  do card, dentro do widget na barra ou nos dois; em Card expandido > Apps nos
+  atalhos dá para ligar outros, desligar e arrastar para mudar a ordem (no card
+  também dá para arrastar os ícones).
 - **Ícones animados** (opcional, ligado por padrão): play e pausa trocam com um
   pequeno salto, anterior/próximo dão um empurrão para o lado, aleatório pulsa,
   repetir dá uma volta e o volume chacoalha ao ficar mudo; no card e na barra

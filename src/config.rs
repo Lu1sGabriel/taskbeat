@@ -529,6 +529,9 @@ pub struct Config {
 
 const CONFIG_VERSION: u32 = 5;
 
+/// Padrões: a configuração que o usuário deixou "certinha" (2026-11-24 e
+/// 2026-11-25), sem o que é só da máquina dele (posição do arrasto, a lista
+/// de atalhos escolhida, marcas internas).
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -538,21 +541,21 @@ impl Default for Config {
             cover_shape: Shape::Rounded,
             show_artist: true,
             marquee: false,
-            playing_indicator: true,
+            playing_indicator: false,
             taskbar_progress: false,
             widget_pill: true,
             widget_shape: WidgetShape::Rounded,
             widget_divider: false,
-            taskbar_shuffle_repeat: false,
+            taskbar_shuffle_repeat: true,
             taskbar_play: TaskbarPlay::Filled,
             widget_controls: ControlColor::White,
             widget_controls_rgb: "#5EB1FF".into(),
             widget_sides: SideColor::SameAsMiddle,
             widget_sides_alpha: 100,
             second_line: SecondLine::Artist,
-            text_size: Size3::Normal,
+            text_size: Size3::Small,
             cover_size: Size3::Normal,
-            widget_tint: WidgetTint::Album,
+            widget_tint: WidgetTint::Artwork,
             widget_opacity: 6,
             widget_intensity: 80,
             widget_glow: true,
@@ -568,7 +571,7 @@ impl Default for Config {
             card_style: CardStyle::Artwork,
             card_layout: CardLayout::Horizontal,
             theme: ThemeMode::Dark,
-            accent_source: AccentSource::Windows,
+            accent_source: AccentSource::Album,
             corners: Corners::Medium,
             play_shape: Shape::Rounded,
             card_controls: ControlColor::White,
@@ -582,7 +585,7 @@ impl Default for Config {
             card_shuffle_repeat: ShuffleRepeat::Always,
             card_autoclose: 6,
             card_launchers: true,
-            launcher_place: LauncherPlace::Card,
+            launcher_place: LauncherPlace::Taskbar,
             launcher_order: Vec::new(),
             launcher_hidden: Vec::new(),
             card_viz: true,
@@ -607,11 +610,11 @@ impl Default for Config {
             osd_icon: OsdIcon::Lock,
             osd_anim: OsdAnim::Zoom,
 
-            show_visualizer: true,
-            style: Style::Bars,
+            show_visualizer: false,
+            style: Style::Mirror,
             palette: Palette::Album,
             width: 52,
-            bars: 6,
+            bars: 32,
             sensitivity_db: 0.0,
             only_when_media: false,
             viz_player_only: true,
@@ -764,7 +767,8 @@ mod tests {
         use super::{IconStyle, LauncherPlace, WidgetTint};
         let old = "show_media = true\nwidget_tint = \"album\"\nwidget_opacity = 6\nversion = 5\n";
         let c: Config = toml::from_str(old).unwrap();
-        assert_eq!((c.widget_opacity, c.widget_intensity, c.icon_style, c.launcher_place), (6, 80, IconStyle::Filled, LauncherPlace::Card));
+        // Atalhos: por padrão na barra (o lugar que o usuário escolheu).
+        assert_eq!((c.widget_opacity, c.widget_intensity, c.icon_style, c.launcher_place), (6, 80, IconStyle::Filled, LauncherPlace::Taskbar));
         assert!(c.launcher_order.is_empty() && c.card_viz && c.widget_drag);
         let c2 = Config {
             launcher_order: vec!["Brave._crx_x".into(), "Spotify.exe".into()],

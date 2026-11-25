@@ -1783,11 +1783,15 @@ impl Overlay {
             return;
         }
         let found = self.shared.launchers.lock().unwrap().clone();
-        let all = crate::launchers::arrange(&found, &self.cfg.launcher_order, &self.cfg.launcher_hidden);
+        let all = crate::launchers::arranged(&found, &self.cfg);
         let Some(full) = crate::launchers::full_index(&all, to) else { return };
         let order = crate::launchers::moved(&all, &app.id, full);
+        let (_, hidden) = crate::launchers::lists_of(&all);
         log::info(&format!("atalho {} movido para a posição {}", app.name, to + 1));
-        self.shared.update_config(|c| c.launcher_order = order);
+        self.shared.update_config(|c| {
+            c.launcher_order = order;
+            c.launcher_hidden = hidden;
+        });
     }
 
     // ------------------------------------------------------------ card expandido
