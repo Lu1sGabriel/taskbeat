@@ -45,7 +45,7 @@ const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_VALUE: PCWSTR = w!("Taskbeat");
 const LEGACY_RUN_VALUE: PCWSTR = w!("TaskbarVisualizer");
 
-fn reg_dword(key: PCWSTR, value: PCWSTR) -> Option<u32> {
+pub fn reg_dword(key: PCWSTR, value: PCWSTR) -> Option<u32> {
     let mut data: u32 = 0;
     let mut size = std::mem::size_of::<u32>() as u32;
     let r = unsafe {

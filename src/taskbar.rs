@@ -7,7 +7,12 @@
 //!   está realmente na tela.
 
 use crate::config::{Anchor, Config};
+use std::sync::{Mutex, Once};
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
+use windows::Win32::System::Variant::VARIANT;
+use windows::Win32::UI::Accessibility::{CUIAutomation8, IUIAutomation, IUIAutomationElement, TreeScope_Descendants, UIA_AutomationIdPropertyId};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{
@@ -87,13 +92,25 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
         h = (on.bottom - on.top - 2 * pad).max(8);
         y = on.top + pad;
         w = length;
-        x = match cfg.anchor {
+        let mut base = match cfg.anchor {
             Anchor::BeforeTray => match notify {
                 Some(n) => n.left - margin - w,
                 None => tb.right - (400.0 * scale) as i32 - w,
             },
             Anchor::Left => tb.left + margin,
-        } + offset;
+        };
+        // Botão de Widgets do Windows (o do tempo): com a barra alinhada à
+        // esquerda ele fica ao lado da bandeja; centralizada, no canto
+        // esquerdo. Se ficaria por baixo do nosso, passa para o lado dele.
+        if let Some(wr) = widgets_rect().filter(|r| r.top < tb.bottom && r.bottom > tb.top) {
+            if wr.left < base + w + margin && wr.right + margin > base {
+                base = match cfg.anchor {
+                    Anchor::BeforeTray => wr.left - margin - w,
+                    Anchor::Left => wr.right + margin,
+                };
+            }
+        }
+        x = base + offset;
     } else {
         w = (on.right - on.left - 2 * pad).max(8);
         x = on.left + pad;
@@ -130,6 +147,75 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
         mon_top: screen.top,
         mon_bottom: screen.bottom,
     })
+}
+
+// ---------------------------------------------------------------- botão de Widgets
+
+/// Retângulo atual do botão de Widgets (o do tempo) do Windows 11, se visível.
+static WIDGETS: Mutex<Option<RECT>> = Mutex::new(None);
+
+/// Botão de Widgets na barra (lido em segundo plano; começa na primeira consulta).
+fn widgets_rect() -> Option<RECT> {
+    static START: Once = Once::new();
+    START.call_once(|| {
+        let _ = std::thread::Builder::new().name("taskbar-widgets".into()).spawn(watch_widgets);
+    });
+    *WIDGETS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Acompanha o botão de Widgets: o registro diz se ele está ligado
+/// (`TaskbarDa`) e a UI Automation da barra diz onde está (ele muda de lugar
+/// com o alinhamento da barra e de largura com o texto do tempo). Com o botão
+/// desligado só o registro é lido; ligado, uma leitura do retângulo a cada 2 s.
+fn watch_widgets() {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+    crate::system::background_thread();
+    let Ok(uia) = (unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }) else {
+        crate::audio::log::warn("UI Automation indisponível: posição do botão de Widgets desconhecida");
+        return;
+    };
+    let id = VARIANT::from("WidgetsButton");
+    let mut el: Option<IUIAutomationElement> = None;
+    let mut last_find: Option<Instant> = None;
+    let mut last: Option<RECT> = None;
+    loop {
+        let enabled = crate::system::reg_dword(w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced"), w!("TaskbarDa")) != Some(0);
+        let rect = if enabled {
+            let read = |e: &IUIAutomationElement| unsafe { e.CurrentBoundingRectangle() }.ok().filter(|r| r.right > r.left && r.bottom > r.top);
+            let mut r = el.as_ref().and_then(read);
+            // Sumiu (Explorer reiniciou, botão escondido): procura de novo, sem
+            // pressa (a busca custa ~40 ms; ler o retângulo, menos de 1 ms).
+            if r.is_none() && last_find.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
+                last_find = Some(Instant::now());
+                el = find_on_taskbar(&uia, &id);
+                r = el.as_ref().and_then(read);
+            }
+            r
+        } else {
+            // Ao religar, procura na hora.
+            el = None;
+            last_find = None;
+            None
+        };
+        if rect != last {
+            last = rect;
+            crate::audio::log::info(&format!("botão de Widgets do Windows: {:?}", rect.map(|r| (r.left, r.top, r.right, r.bottom))));
+            *WIDGETS.lock().unwrap_or_else(|e| e.into_inner()) = rect;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// Elemento da barra com este AutomationId (XAML: o `x:Name`).
+fn find_on_taskbar(uia: &IUIAutomation, id: &VARIANT) -> Option<IUIAutomationElement> {
+    let tray = taskbar_hwnd()?;
+    unsafe {
+        let root = uia.ElementFromHandle(tray).ok()?;
+        let cond = uia.CreatePropertyCondition(UIA_AutomationIdPropertyId, id).ok()?;
+        root.FindFirst(TreeScope_Descendants, &cond).ok()
+    }
 }
 
 fn class_name(hwnd: HWND) -> String {
@@ -196,4 +282,28 @@ pub fn taskbar_is_above(ours: HWND, tray: HWND) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mede a busca e a leitura do retângulo pela UI Automation (com o botão
+    /// Iniciar, que sempre existe). `cargo test --release uia_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn uia_cost() {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let uia: IUIAutomation = unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }.unwrap();
+        for id in ["StartButton", "WidgetsButton"] {
+            let t = Instant::now();
+            let el = find_on_taskbar(&uia, &VARIANT::from(id));
+            let found = t.elapsed();
+            let t = Instant::now();
+            let r = el.as_ref().map(|e| unsafe { e.CurrentBoundingRectangle() });
+            println!("{id}: achou={} em {found:?}; retângulo {:?} em {:?}", el.is_some(), r.map(|r| r.map(|r| (r.left, r.top, r.right, r.bottom))), t.elapsed());
+        }
+    }
 }
