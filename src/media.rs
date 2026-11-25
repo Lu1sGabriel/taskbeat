@@ -429,6 +429,8 @@ impl State {
             dur,
             pos_at: Some(Instant::now()),
             can_seek,
+            web_shuffle: false,
+            web_repeat: false,
         };
         self.last_info = Some((info.clone(), now));
         info

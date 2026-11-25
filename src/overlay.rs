@@ -14,7 +14,7 @@ use crate::audio::log;
 use crate::config::{Config, OsdAnim, OsdPosition};
 use crate::dsp::{Analyzer, FFT_SIZE};
 use crate::render::{self, Canvas, Colors, Image, RectF};
-use crate::shared::{Launcher, MediaCmd, MediaInfo, Shared};
+use crate::shared::{Launcher, MediaCmd, MediaInfo, Shared, WebCmd};
 use crate::system;
 use crate::taskbar::{self, Placement};
 use crate::text::TextRenderer;
@@ -508,8 +508,8 @@ struct Overlay {
     flyout_last_hover: Instant,
     /// Superfície do card na posição final (x, y, largura, altura), quando visível.
     flyout_box: Option<(i32, i32, i32, i32)>,
-    /// Aviso "o player não deixa" no card, desde quando.
-    hint: Option<Instant>,
+    /// Aviso rápido no card ("o player não deixa", "fila embaralhada") e desde quando.
+    hint: Option<(Instant, &'static str)>,
     /// Último estado registrado de visibilidade (barra visível, painel, música).
     vis_log: Option<(Option<bool>, bool, bool)>,
     // "A seguir"
@@ -569,6 +569,11 @@ struct Overlay {
     drag_x: f32,
     /// Widget apertado/arrastado pela barra.
     wdrag: Option<WidgetDrag>,
+    /// A sessão não tem aleatório/repetir pelo Windows (navegador): os botões
+    /// da página do player podem servir. E a última música para a qual eles
+    /// foram procurados.
+    web_needed: bool,
+    web_probed: Option<(String, String)>,
 }
 
 /// Arrasto do widget pela barra: começa ao apertar; vira arrasto quando o
@@ -687,6 +692,8 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         launch_press: None,
         drag_x: 0.0,
         wdrag: None,
+        web_needed: false,
+        web_probed: None,
         shared,
     };
     ov.refresh_launchers();
@@ -899,7 +906,9 @@ impl Overlay {
         let mv = self.shared.media_version.load(Ordering::Relaxed);
         if mv != self.media_version {
             self.media_version = mv;
-            let new = self.shared.media.lock().unwrap().clone();
+            let mut new = self.shared.media.lock().unwrap().clone();
+            self.web_needed = new.present() && !(new.can_shuffle && new.can_repeat);
+            self.shared.web.lock().unwrap().merge_into(&mut new);
             // Troca de música com o widget à vista: anima texto e capa.
             if self.cfg.track_anim && self.shown && self.fade > 0.99 {
                 let old = &self.media;
@@ -919,6 +928,10 @@ impl Overlay {
                 }
             }
             self.media = new;
+            // Aleatório/repetir à vista (card aberto ou botões na barra): confere a página.
+            if self.flyout_open || (self.cfg.taskbar_controls && self.cfg.taskbar_shuffle_repeat) {
+                self.probe_web(false);
+            }
         }
         self.colors.album = self.media.art.as_ref().map(|a| a.vibrant);
         let visible = self.placement.is_some_and(|p| p.visible);
@@ -1281,7 +1294,23 @@ impl Overlay {
 
     // ------------------------------------------------------------ entrada
 
+    /// Pede para procurar os botões de aleatório/repetir na página do player
+    /// (só nos players sem esses controles pelo Windows). `force`: mesmo que a
+    /// música não tenha mudado (o card acabou de abrir: relê o repetir).
+    fn probe_web(&mut self, force: bool) {
+        if !self.web_needed {
+            return;
+        }
+        let key = (self.media.aumid.clone(), self.media.title.clone());
+        if !force && self.web_probed.as_ref() == Some(&key) {
+            return;
+        }
+        self.web_probed = Some(key.clone());
+        self.shared.send_web(WebCmd::Probe { aumid: key.0, title: key.1 });
+    }
+
     fn open_flyout(&mut self, now: Instant) {
+        self.probe_web(true);
         self.flyout_open = true;
         self.flyout_last_hover = now;
         self.popup_start = None;
@@ -1424,6 +1453,17 @@ impl Overlay {
                 self.play_pending.set(!playing);
                 self.shared.send_media(MediaCmd::PlayPause);
             }
+            // Navegador: aperta o botão da própria página do player.
+            Hit::Shuffle if m.web_shuffle => {
+                self.icons.kick(Hit::Shuffle);
+                self.shared.send_web(WebCmd::Shuffle { aumid: m.aumid.clone(), title: m.title.clone() });
+                self.hint = Some((now, tr("Fila embaralhada no player")));
+            }
+            Hit::Repeat if m.web_repeat => {
+                let next = crate::webplayer::next_repeat(self.repeat_pending.resolve(m.repeat));
+                self.repeat_pending.set(next);
+                self.shared.send_web(WebCmd::Repeat { aumid: m.aumid.clone(), title: m.title.clone() });
+            }
             Hit::Shuffle if m.can_shuffle => {
                 let on = !self.shuffle_pending.resolve(m.shuffle);
                 self.shuffle_pending.set(on);
@@ -1448,7 +1488,7 @@ impl Overlay {
                     if !self.flyout_open {
                         self.open_flyout(now);
                     }
-                    self.hint = Some(now);
+                    self.hint = Some((now, tr("Este player não deixa mudar isso pelo Windows")));
                 }
             }
             Hit::VolBtn => self.volume.toggle_mute(),
@@ -1581,9 +1621,9 @@ impl Overlay {
                 pb,
                 s,
                 backdrop: backdrop.as_deref(),
-                hint: self.hint.and_then(|t| {
+                hint: self.hint.and_then(|(t, msg)| {
                     let k = (now - t).as_secs_f32();
-                    (k < 2.8).then(|| (tr("Este player não deixa mudar isso pelo Windows"), (1.0 - (k - 2.4) / 0.4).clamp(0.0, 1.0)))
+                    (k < 2.8).then(|| (msg, (1.0 - (k - 2.4) / 0.4).clamp(0.0, 1.0)))
                 }),
                 launchers: &launchers,
                 viz: (self.cfg.card_viz && self.viz).then_some(&self.analyzer.values[..]),

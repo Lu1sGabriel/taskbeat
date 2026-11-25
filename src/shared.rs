@@ -86,6 +86,50 @@ pub struct MediaInfo {
     pub dur: f64,
     pub pos_at: Option<std::time::Instant>,
     pub can_seek: bool,
+    /// Aleatório e repetir vêm dos botões da página do player (navegador),
+    /// não do Windows. No YouTube Music o aleatório embaralha a fila de novo a
+    /// cada clique (não é um modo ligado/desligado).
+    pub web_shuffle: bool,
+    pub web_repeat: bool,
+}
+
+/// O que se sabe dos botões da página de um player de navegador (Windows, `webplayer.rs`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebState {
+    /// Sessão (AUMID) a que isto se refere.
+    pub aumid: String,
+    /// Botão de embaralhar achado.
+    pub shuffle: bool,
+    /// Estado do repetir lido do botão (0 = desligado, 1 = uma, 2 = tudo).
+    pub repeat: Option<u8>,
+}
+
+impl WebState {
+    /// Junta à música os controles da página que o Windows não oferece.
+    pub fn merge_into(&self, m: &mut MediaInfo) {
+        if self.aumid.is_empty() || self.aumid != m.aumid {
+            return;
+        }
+        if !m.can_shuffle && self.shuffle {
+            m.can_shuffle = true;
+            m.shuffle = false;
+            m.web_shuffle = true;
+        }
+        if let (false, Some(r)) = (m.can_repeat, self.repeat) {
+            m.can_repeat = true;
+            m.repeat = r;
+            m.web_repeat = true;
+        }
+    }
+}
+
+/// Pedidos para a thread que aperta os botões da página do player.
+#[derive(Clone, Debug)]
+pub enum WebCmd {
+    /// Procura os botões e lê o repetir.
+    Probe { aumid: String, title: String },
+    Shuffle { aumid: String, title: String },
+    Repeat { aumid: String, title: String },
 }
 
 impl MediaInfo {
@@ -165,6 +209,9 @@ pub struct Shared {
     /// Pedido da tela de configurações para mostrar o aviso de Caps Lock agora
     /// (botão "Mostrar agora" e ajuste de posição ao vivo).
     pub osd_test: AtomicBool,
+    /// Botões da página do player de navegador (aleatório/repetir).
+    pub web: Mutex<WebState>,
+    pub web_tx: Mutex<Option<Sender<WebCmd>>>,
 }
 
 impl Shared {
@@ -181,6 +228,14 @@ impl Shared {
             tray_hwnd: AtomicIsize::new(0),
             media_tx: Mutex::new(None),
             osd_test: AtomicBool::new(false),
+            web: Mutex::new(WebState::default()),
+            web_tx: Mutex::new(None),
+        }
+    }
+
+    pub fn send_web(&self, cmd: WebCmd) {
+        if let Some(tx) = self.web_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(cmd);
         }
     }
 

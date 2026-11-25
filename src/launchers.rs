@@ -239,7 +239,7 @@ fn top_windows() -> Vec<Win> {
 /// Janela do player da sessão `aumid` (de preferência a que mostra `title`).
 /// Ordem: mesma identidade de app na janela (apps do navegador e da Store);
 /// depois janelas dos processos do app, com o título da música no nome.
-fn player_window(aumid: &str, title: &str) -> Option<HWND> {
+pub(crate) fn player_window(aumid: &str, title: &str) -> Option<HWND> {
     use crate::audio::process;
     let mut wins = top_windows();
     for w in &mut wins {

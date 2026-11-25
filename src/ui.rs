@@ -2234,6 +2234,8 @@ pub fn sample_media() -> MediaInfo {
         dur: 243.0,
         pos_at: None,
         can_seek: true,
+        web_shuffle: false,
+        web_repeat: false,
     }
 }
 

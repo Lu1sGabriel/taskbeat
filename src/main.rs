@@ -60,6 +60,8 @@ mod tray;
 mod volume;
 #[cfg(windows)]
 mod vsync;
+#[cfg(windows)]
+mod webplayer;
 
 // Só macOS.
 #[cfg(target_os = "macos")]
@@ -128,6 +130,7 @@ fn main() {
         let audio = audio::spawn(shared.clone());
         media::spawn(shared.clone());
         launchers::spawn(shared.clone());
+        webplayer::spawn(shared.clone());
         let overlay = overlay::spawn(shared.clone());
 
         if let Err(e) = tray::run(shared.clone()) {

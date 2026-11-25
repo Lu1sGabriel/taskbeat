@@ -223,7 +223,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E895}", title: "Animar troca de música", desc: "O título novo desliza e a capa nova aparece suavemente", key: Key::TrackAnim, kind: Kind::Toggle },
             Section("Botões na barra"),
             Row { icon: "\u{E768}", title: "Botões de controle na barra", desc: "Anterior, play e próximo dentro do widget; desligados, ficam só no card", key: Key::TaskbarControls, kind: Kind::Toggle },
-            Row { icon: "\u{E8B1}", title: "Aleatório e repetir na barra", desc: "Junto dos botões; apagados quando o player não deixa (navegadores)", key: Key::TaskbarShuffle, kind: Kind::Toggle },
+            Row { icon: "\u{E8B1}", title: "Aleatório e repetir na barra", desc: "Junto dos botões; no YouTube Music do navegador eles apertam os botões da própria página", key: Key::TaskbarShuffle, kind: Kind::Toggle },
             Row { icon: "\u{E768}", title: "Botão play", desc: "Círculo na cor de destaque ou só o ícone, como os outros", key: Key::TaskbarPlay, kind: Kind::Segmented(TASKBAR_PLAYS) },
             Row { icon: "\u{E7FB}", title: "Separador", desc: "Linha fina entre a música e os botões", key: Key::WidgetDivider, kind: Kind::Toggle },
             Section("Capa e texto"),
@@ -271,7 +271,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E71D}", title: "Atalhos dos apps de música", desc: "Ícones dos players instalados (Spotify, YouTube Music…) para abrir com um clique", key: Key::Launchers, kind: Kind::Toggle },
             Row { icon: "\u{E7C4}", title: "Onde ficam os atalhos", desc: "Embaixo do card, dentro do widget na barra ou nos dois", key: Key::LauncherPlace, kind: Kind::Segmented(LAUNCHER_PLACES) },
             Row { icon: "\u{E8FD}", title: "Apps nos atalhos", desc: "Ligue só os que você quer; arraste para mudar a ordem (no card também dá para arrastar os ícones)", key: Key::LauncherApps, kind: Kind::AppList },
-            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "Funcionam no Spotify e no Media Player; navegadores (Brave, Chrome) não deixam: ficam apagados e o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
+            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "No YouTube Music do navegador o Taskbeat aperta os botões da própria página (o aleatório embaralha a fila de novo); em outros sites ficam apagados e o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
         ],
     },
     Page {
