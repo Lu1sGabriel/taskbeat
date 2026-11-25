@@ -100,6 +100,13 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   → tudo → uma); o aleatório do YouTube Music embaralha a fila de novo a cada
   clique. Nos outros sites os botões ficam apagados e o clique traz o player para
   a frente.
+- **Mixer de volume** (opcional, ligado por padrão): uma setinha embaixo do
+  card abre, com animação, o volume de cada app que usa a saída de áudio (ícone,
+  nome, slider, mudo e a roda do mouse), juntando os processos do mesmo app,
+  mais os sons do sistema e o nome do dispositivo de saída. Atualiza sozinho
+  pelos avisos do Windows (app novo, volume mudado em outro lugar). Com ele
+  aberto o card não fecha sozinho. No Mac, que não tem volume por app, a
+  setinha abre a lista das saídas de áudio para escolher a padrão.
 - **Atalhos dos apps de música** (opcional, ligado por padrão): o ícone de cada
   player instalado (Spotify, YouTube Music instalado pelo navegador, Apple Music,
   Deezer, TIDAL, Amazon Music, Media Player, VLC, foobar2000…) para abrir com um
@@ -183,6 +190,7 @@ Como:
 | Música, capa, controles, linha do tempo, eventos | `GlobalSystemMediaTransportControlsSessionManager` | `src/media.rs` |
 | Nome/ícone do app de origem | Pasta Aplicativos do shell (AUMID) → ícone do .exe | `src/appicon.rs` |
 | Volume | `IAudioEndpointVolume` | `src/volume.rs` |
+| Mixer de volume (volume por app) | Sessões do WASAPI (`IAudioSessionManager2`, `ISimpleAudioVolume`) e avisos `IAudioSessionNotification`/`IAudioSessionEvents` | `src/mixer.rs` |
 | Espectro | Hann + FFT 4096 (`realfft`), bandas log, AGC | `src/dsp.rs` |
 | Desenho (widget, card, "A seguir", Caps Lock) | Renderização própria com anti-aliasing (SDF), desfoque, sombras | `src/ui.rs`, `src/render.rs` |
 | Janelas sobre a barra | Janelas *layered* com alfa por pixel, topmost; o widget pertence à barra (não some atrás dela quando ela é ativada) | `src/overlay.rs` |
