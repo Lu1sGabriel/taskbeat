@@ -325,9 +325,34 @@ fn shuffle_lit(hwnd: HWND, button: &IUIAutomationElement) -> Option<bool> {
 }
 
 /// A música da barra do player é a da sessão (sem diferenciar maiúsculas).
+/// Iguais, sem diferenciar maiúsculas, com os espaços normalizados e sem a
+/// pontuação das pontas. "Contém" só vale para um título de 6 letras ou mais
+/// que caia em fronteira de palavra (um sufixo como " - YouTube Music" ou
+/// " (Official Video)"): "Intro" não bate com "Introduction", nem um título
+/// de uma ou duas letras com quase tudo.
 fn same_title(page: &str, session: &str) -> bool {
-    let (a, b) = (page.trim().to_lowercase(), session.trim().to_lowercase());
-    !a.is_empty() && !b.is_empty() && (a == b || a.contains(&b) || b.contains(&a))
+    let (a, b) = (norm_title(page), norm_title(session));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    let (short, long) = if a.chars().count() <= b.chars().count() { (&a, &b) } else { (&b, &a) };
+    if short.chars().count() < 6 {
+        return false;
+    }
+    long.match_indices(short.as_str()).any(|(i, m)| {
+        let before = long[..i].chars().next_back();
+        let after = long[i + m.len()..].chars().next();
+        before.is_none_or(|c| !c.is_alphanumeric()) && after.is_none_or(|c| !c.is_alphanumeric())
+    })
+}
+
+/// Minúsculas, espaços seguidos viram um, sem pontuação nem espaço nas pontas.
+fn norm_title(s: &str) -> String {
+    let s = s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    s.trim_matches(|c: char| !c.is_alphanumeric()).to_string()
 }
 
 /// A sessão é o app do YouTube Music instalado pelo navegador.
@@ -393,9 +418,20 @@ mod tests {
     fn aba_so_com_a_mesma_musica() {
         assert!(same_title("Thanatos", "Thanatos"));
         assert!(same_title(" thanatos ", "Thanatos"));
+        assert!(same_title("Thanatos.", "thanatos"));
+        assert!(same_title("Midnight   City", "midnight city"));
         assert!(!same_title("Thanatos", "Midnight City"));
         assert!(!same_title("", "Thanatos"));
         assert!(!same_title("Thanatos", ""));
+        // "Contém" só com 6+ letras e em fronteira de palavra.
+        assert!(!same_title("Introduction", "Intro"));
+        assert!(!same_title("A", "Alabama"));
+        assert!(!same_title("Me", "Meet me halfway"));
+        assert!(!same_title("Midnight Cityscape", "Midnight City"));
+        assert!(!same_title("Midnights", "Midnight"));
+        assert!(same_title("Midnight City - YouTube Music", "Midnight City"));
+        assert!(same_title("Midnight City (Official Video)", "Midnight City"));
+        assert!(same_title("Thanatos", "M83 - Thanatos"));
     }
 
     #[test]
