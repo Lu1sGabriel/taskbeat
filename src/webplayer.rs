@@ -53,7 +53,7 @@ pub fn spawn(shared: Arc<Shared>) {
             log::warn("UI Automation indisponível: aleatório/repetir de navegador desligados");
             return;
         };
-        let mut w = Worker { uia, found: None, miss: None, assumed: None, shuffle_on: None };
+        let mut w = Worker { uia, found: None, miss: None, assumed: None, shuffle_on: None, shuffle_read: None, shuffle_assumed: None };
         while shared.is_running() {
             let cmd = match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(c) => c,
@@ -91,8 +91,15 @@ struct Worker {
     /// Clique no repetir que a página ainda não mostrou: (sessão, nome do
     /// botão na hora do clique, estado esperado).
     assumed: Option<(String, String, u8)>,
-    /// Último estado do aleatório lido na página (sessão, ligado).
+    /// Estado do aleatório que vale (sessão, ligado) e quando a página foi
+    /// lida por último (o retrato da janela coberta é caro: não a cada abertura).
     shuffle_on: Option<(String, bool)>,
+    shuffle_read: Option<Instant>,
+    /// Clique no aleatório que a página ainda não mostrou: (sessão, o que a
+    /// página mostrava na hora do clique, estado esperado). Vale até a página
+    /// mostrar outra coisa (com a janela coberta, o clique pode só ser
+    /// aplicado quando ela aparecer).
+    shuffle_assumed: Option<(String, Option<bool>, bool)>,
 }
 
 /// Próximo estado do repetir no ciclo do YouTube Music: desativado → tudo → uma.
@@ -118,28 +125,34 @@ impl Worker {
             return WebState { aumid: aumid.into(), ..Default::default() };
         };
         let (hwnd, shuffle, repeat) = (f.hwnd, f.shuffle.clone(), f.repeat.clone());
-        let lit = || shuffle.as_ref().and_then(|b| shuffle_lit(hwnd, b));
-        // Estado do aleatório: lido ao procurar (música nova) e depois de apertar.
-        let mut shuffle_on = match cmd {
-            WebCmd::Repeat { .. } => self.shuffle_on.as_ref().filter(|(a, _)| a == aumid).map(|(_, on)| *on),
-            _ => None,
-        };
+        // O último estado que vale desta sessão (sem leitura nova, fica ele).
+        let last = self.shuffle_on.as_ref().filter(|(a, _)| a == aumid).map(|(_, on)| *on);
+        let fresh = last.is_some() && self.shuffle_read.is_some_and(|t| t.elapsed() < Duration::from_secs(30));
+        // Lê a página: à vista é barato (da tela); coberta, o retrato da janela
+        // inteira só se não houver leitura recente (ou depois de um clique).
+        let read = |print: bool| shuffle.as_ref().and_then(|b| shuffle_lit(hwnd, b, print));
+        let mut seen = None;
         match cmd {
             WebCmd::Shuffle { .. } => {
-                let before = lit();
+                let before = last;
                 let ok = shuffle.as_ref().is_some_and(|b| invoke(b, hwnd));
-                // Espera o ícone mudar de cor (o estado novo).
-                for wait in [300, 400, 600] {
+                // Espera o ícone mudar de cor (o estado novo): no máximo duas leituras.
+                for wait in [300, 500] {
                     if !ok {
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(wait));
-                    shuffle_on = lit();
-                    if shuffle_on.is_some() && shuffle_on != before {
+                    seen = read(true);
+                    if seen.is_some() && seen != before {
                         break;
                     }
                 }
-                log::info(&format!("aleatório pela página do player ({aumid}): {ok}, {before:?} → {shuffle_on:?} em {:?}", t0.elapsed()));
+                // A página não mostrou a mudança (minimizada, coberta, lenta):
+                // vale o inverso do que estava, até ela mostrar outra coisa.
+                if ok && (seen.is_none() || seen == before) {
+                    self.shuffle_assumed = Some((aumid.to_string(), seen, !before.unwrap_or(false)));
+                }
+                log::info(&format!("aleatório pela página do player ({aumid}): {ok}, {before:?} → {seen:?} em {:?}", t0.elapsed()));
             }
             WebCmd::Repeat { .. } => {
                 if let Some(b) = &repeat {
@@ -161,13 +174,23 @@ impl Worker {
                     log::info(&format!("repetir pela página do player ({aumid}): {ok}, \"{before}\" → \"{after}\" em {:?}", t0.elapsed()));
                 }
             }
-            WebCmd::Probe { .. } => shuffle_on = lit(),
+            WebCmd::Probe { .. } => seen = read(!fresh),
         }
+        if seen.is_some() {
+            self.shuffle_read = Some(Instant::now());
+        }
+        let shuffle_on = self.shuffle_now(aumid, seen, last);
         if let Some(on) = shuffle_on {
             self.shuffle_on = Some((aumid.to_string(), on));
         }
         let repeat = repeat.as_ref().and_then(|b| self.repeat_now(aumid, &name(b)));
         WebState { aumid: aumid.into(), shuffle: shuffle.is_some(), shuffle_on, repeat }
+    }
+
+    /// Estado do aleatório: o esperado depois de um clique que a página ainda
+    /// não mostrou; senão o lido agora; sem leitura, o último que valia.
+    fn shuffle_now(&mut self, aumid: &str, seen: Option<bool>, last: Option<bool>) -> Option<bool> {
+        shuffle_state(&mut self.shuffle_assumed, aumid, seen, last)
     }
 
     /// Estado do repetir: o do nome do botão, ou o esperado depois de um
@@ -265,29 +288,70 @@ impl Worker {
 
 /// O aleatório está ligado na página? O ícone fica branco ligado e cinza
 /// desligado (medido no YouTube Music: ligado, dezenas de pixels em 255;
-/// desligado, nenhum acima de ~150). Lido num retrato da janela feito pelo
-/// próprio navegador (`PrintWindow`), que funciona com ela coberta. `None`:
-/// minimizada ou sem retrato.
-fn shuffle_lit(hwnd: HWND, button: &IUIAutomationElement) -> Option<bool> {
-    use windows::Win32::Foundation::RECT;
+/// desligado, nenhum acima de ~150). Lê só a área do botão: direto da tela
+/// quando ele está à vista (barato, sem pedir nada ao navegador), ou pelo
+/// retrato que o próprio navegador faz (`PrintWindow`, funciona com a janela
+/// coberta), recortado numa imagem do tamanho do botão. `None`: minimizada
+/// ou sem retrato.
+fn shuffle_lit(hwnd: HWND, button: &IUIAutomationElement, print: bool) -> Option<bool> {
+    let r = unsafe { button.CurrentBoundingRectangle() }.ok()?;
+    let px = grab(hwnd, r, print)?;
+    Some(bright_count(&px, r.right - r.left, r.bottom - r.top) >= 8)
+}
+
+/// Pixels claros (os três canais ≥ 215) no miolo de uma imagem `w`×`h` do
+/// botão (sem a borda, onde fica o anel de foco).
+fn bright_count(px: &[u32], w: i32, h: i32) -> usize {
+    let (x0, x1, y0, y1) = (w / 5, w - w / 5, h / 5, h - h / 5);
+    let mut n = 0;
+    for y in y0.max(0)..y1.min(h) {
+        for x in x0.max(0)..x1.min(w) {
+            let p = px[(y * w + x) as usize];
+            if ((p >> 16) & 0xff).min((p >> 8) & 0xff).min(p & 0xff) >= 215 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Regra do estado do aleatório (ver `Worker::shuffle_now`): `assumed` é o
+/// clique ainda não mostrado (sessão, o que a página mostrava, esperado).
+fn shuffle_state(assumed: &mut Option<(String, Option<bool>, bool)>, aumid: &str, seen: Option<bool>, last: Option<bool>) -> Option<bool> {
+    if let Some((a, at_click, expected)) = assumed.as_ref() {
+        if a == aumid && (seen.is_none() || seen == *at_click) {
+            return Some(*expected);
+        }
+        *assumed = None;
+    }
+    seen.or(last)
+}
+
+/// Os pixels do retângulo `r` (tela) da janela `hwnd`: da tela, se o botão
+/// estiver à vista (≈5 ms, sem pedir nada ao navegador); senão, com `print`,
+/// do retrato da janela inteira (`button_pixels_full`: o `PrintWindow` do
+/// conteúdo do navegador ignora a origem deslocada, então não dá para
+/// recortar antes; ≈28 ms e ~8 MB por um instante). Sem `print`: `None`.
+fn grab(hwnd: HWND, r: windows::Win32::Foundation::RECT, print: bool) -> Option<Vec<u32>> {
+    use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::*;
-    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic};
+    use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, IsIconic, WindowFromPoint};
     unsafe {
-        if IsIconic(hwnd).as_bool() {
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        if IsIconic(hwnd).as_bool() || w <= 0 || h <= 0 || w > 400 || h > 400 {
             return None;
         }
-        let r = button.CurrentBoundingRectangle().ok()?;
-        let mut wr = RECT::default();
-        GetWindowRect(hwnd, &mut wr).ok()?;
-        let (ww, wh) = (wr.right - wr.left, wr.bottom - wr.top);
-        if ww <= 0 || wh <= 0 || r.right <= r.left || r.bottom <= r.top {
-            return None;
+        let center = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+        let on_screen = [center, POINT { x: r.left + 2, y: r.top + 2 }, POINT { x: r.right - 3, y: r.bottom - 3 }]
+            .iter()
+            .all(|p| GetAncestor(WindowFromPoint(*p), GA_ROOT) == hwnd);
+        if !on_screen {
+            return if print { button_pixels_full(hwnd, r) } else { None };
         }
         let screen = GetDC(None);
         let dc = CreateCompatibleDC(Some(screen));
         let bmi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: ww, biHeight: -wh, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
+            bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
             ..Default::default()
         };
         let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
@@ -297,36 +361,56 @@ fn shuffle_lit(hwnd: HWND, button: &IUIAutomationElement) -> Option<bool> {
             return None;
         };
         let old = SelectObject(dc, bmp.into());
-        // 2 = PW_RENDERFULLCONTENT (o conteúdo do navegador, mesmo coberto).
+        let ok = BitBlt(dc, 0, 0, w, h, Some(screen), r.left, r.top, SRCCOPY).is_ok();
+        let out = (ok && !bits.is_null()).then(|| std::slice::from_raw_parts(bits as *const u32, (w * h) as usize).to_vec());
+        SelectObject(dc, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, screen);
+        out
+    }
+}
+
+/// Os pixels do retângulo `r` (tela) tirados do retrato da janela inteira
+/// (funciona com ela coberta; não minimizada).
+fn button_pixels_full(hwnd: HWND, r: windows::Win32::Foundation::RECT) -> Option<Vec<u32>> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+    unsafe {
+        let mut wr = RECT::default();
+        GetWindowRect(hwnd, &mut wr).ok()?;
+        let (ww, wh) = (wr.right - wr.left, wr.bottom - wr.top);
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(Some(screen));
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: ww, biHeight: -wh, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let bmp = CreateDIBSection(Some(dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
+        let old = SelectObject(dc, bmp.into());
         let ok = PrintWindow(hwnd, dc, PRINT_WINDOW_FLAGS(2)).as_bool();
-        let mut bright = 0;
-        if ok && !bits.is_null() {
-            let px = std::slice::from_raw_parts(bits as *const u32, (ww * wh) as usize);
-            // O miolo do botão (sem a borda, onde fica o anel de foco).
-            let (bw, bh) = (r.right - r.left, r.bottom - r.top);
-            let (x0, x1) = ((r.left - wr.left + bw / 5).max(0), (r.right - wr.left - bw / 5).min(ww));
-            let (y0, y1) = ((r.top - wr.top + bh / 5).max(0), (r.bottom - wr.top - bh / 5).min(wh));
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let p = px[(y * ww + x) as usize];
-                    let (r, g, b) = ((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
-                    if r.min(g).min(b) >= 215 {
-                        bright += 1;
-                    }
-                }
+        let all = std::slice::from_raw_parts(bits as *const u32, (ww * wh) as usize);
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let mut out = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let (sx, sy) = (r.left - wr.left + x, r.top - wr.top + y);
+                out.push(if sx >= 0 && sy >= 0 && sx < ww && sy < wh { all[(sy * ww + sx) as usize] } else { 0 });
             }
         }
         SelectObject(dc, old);
         let _ = DeleteObject(bmp.into());
         let _ = DeleteDC(dc);
         ReleaseDC(None, screen);
-        ok.then_some(bright >= 8)
+        ok.then_some(out)
     }
 }
 
-/// A música da barra do player é a da sessão (sem diferenciar maiúsculas).
-/// Iguais, sem diferenciar maiúsculas, com os espaços normalizados e sem a
-/// pontuação das pontas. "Contém" só vale para um título de 6 letras ou mais
+/// A música da barra do player é a da sessão: iguais, sem diferenciar
+/// maiúsculas, com os espaços normalizados e sem a pontuação das pontas. "Contém" só vale para um título de 6 letras ou mais
 /// que caia em fronteira de palavra (um sufixo como " - YouTube Music" ou
 /// " (Official Video)"): "Intro" não bate com "Introduction", nem um título
 /// de uma ou duas letras com quase tudo.
@@ -410,7 +494,30 @@ pub fn repeat_state(name: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{repeat_state, same_title};
+    use super::{repeat_state, same_title, shuffle_state};
+
+    /// A bolinha do aleatório: sem leitura, fica o último estado; depois de
+    /// um clique que a página não mostrou, vale o inverso até ela mudar.
+    #[test]
+    fn estado_do_aleatorio() {
+        let mut none = None;
+        // Minimizada (sem leitura): continua ligado.
+        assert_eq!(shuffle_state(&mut none, "yt", None, Some(true)), Some(true));
+        assert_eq!(shuffle_state(&mut none, "yt", Some(false), Some(true)), Some(false));
+        // Clique com a janela minimizada (leitura nenhuma): vale o inverso.
+        let mut a = Some(("yt".to_string(), None, true));
+        assert_eq!(shuffle_state(&mut a, "yt", None, Some(false)), Some(true));
+        // Coberta: o retrato ainda mostra o de antes; continua o inverso.
+        let mut b = Some(("yt".to_string(), Some(false), true));
+        assert_eq!(shuffle_state(&mut b, "yt", Some(false), Some(false)), Some(true));
+        // A página mudou: vale o que ela mostra, e o "esperado" some.
+        assert_eq!(shuffle_state(&mut b, "yt", Some(true), Some(false)), Some(true));
+        assert!(b.is_none());
+        assert_eq!(shuffle_state(&mut b, "yt", Some(false), Some(true)), Some(false));
+        // Outra sessão: o "esperado" não vale.
+        let mut c = Some(("yt".to_string(), None, true));
+        assert_eq!(shuffle_state(&mut c, "outra", None, None), None);
+    }
 
     /// Numa aba, só aperta se a barra do player mostrar a música da sessão
     /// (lida de verdade: "Thanatos" na barra e no Windows).
@@ -462,11 +569,41 @@ mod tests {
         let aumid = s.SourceAppUserModelId().unwrap().to_string();
         let title = s.TryGetMediaPropertiesAsync().and_then(|op| op.join()).and_then(|p| p.Title()).map(|t| t.to_string()).unwrap_or_default();
         let uia = unsafe { windows::Win32::System::Com::CoCreateInstance::<_, super::IUIAutomation>(&super::CUIAutomation8, None, super::CLSCTX_INPROC_SERVER) }.unwrap();
-        let mut w = super::Worker { uia, found: None, miss: None, assumed: None, shuffle_on: None };
+        let mut w = super::Worker { uia, found: None, miss: None, assumed: None, shuffle_on: None, shuffle_read: None, shuffle_assumed: None };
         for _ in 0..3 {
             let t = std::time::Instant::now();
             let st = w.run(&crate::shared::WebCmd::Probe { aumid: aumid.clone(), title: title.clone() });
             println!("{aumid} \"{title}\" → {st:?} em {:?}", t.elapsed());
+        }
+    }
+}
+
+#[cfg(test)]
+mod crop {
+    /// O recorte (tela ou PrintWindow com a origem deslocada) dá os mesmos
+    /// pixels do botão que o retrato da janela inteira, e custa menos (só lê).
+    /// `cargo test --release shuffle_crop_here -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn shuffle_crop_here() {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
+        // Janela Chromium à vista (TASKBEAT_CROP_TITLE, padrão "Claude").
+        let title = std::env::var("TASKBEAT_CROP_TITLE").unwrap_or_else(|_| "Claude".into());
+        unsafe {
+            let hwnd = FindWindowW(windows::core::w!("Chrome_WidgetWin_1"), &windows::core::HSTRING::from(title.as_str())).unwrap();
+            let mut wr = RECT::default();
+            GetWindowRect(hwnd, &mut wr).unwrap();
+            let (cx, cy) = ((wr.left + wr.right) / 2, (wr.top + wr.bottom) / 2);
+            let r = RECT { left: cx - 20, top: cy - 20, right: cx + 20, bottom: cy + 20 };
+            let full = super::button_pixels_full(hwnd, r).unwrap();
+            let t = std::time::Instant::now();
+            let px = super::grab(hwnd, r, false).expect("à vista");
+            let diff = px.iter().zip(&full).filter(|(a, b)| (**a & 0xffffff) != (**b & 0xffffff)).count();
+            println!("da tela: {:?}, pixels diferentes do retrato inteiro: {diff} de {}", t.elapsed(), px.len());
+            let t = std::time::Instant::now();
+            let _ = super::button_pixels_full(hwnd, r);
+            println!("retrato da janela inteira: {:?} ({}x{})", t.elapsed(), wr.right - wr.left, wr.bottom - wr.top);
         }
     }
 }
