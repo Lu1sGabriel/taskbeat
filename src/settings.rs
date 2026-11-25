@@ -75,6 +75,8 @@ enum Key {
     WidgetShape,
     WidgetTint,
     WidgetOpacity,
+    WidgetIntensity,
+    WidgetGlow,
     WidgetBorder,
     WidgetDivider,
     TaskbarShuffle,
@@ -192,7 +194,7 @@ const BARS: &[usize] = &[6, 8, 10, 12, 16, 24, 32];
 const SIZES: &[&str] = &["Pequeno", "Normal", "Grande"];
 const COVER_SIZES: &[&str] = &["Pequena", "Normal", "Grande"];
 const SECOND_LINES: &[&str] = &["Artista", "Artista · Álbum", "Álbum", "Tempo"];
-const TINTS: &[&str] = &["Neutro", "Cor da capa", "Cor de destaque"];
+const TINTS: &[&str] = &["Neutro", "Cor da capa", "Cor de destaque", "Gradiente da capa", "Capa desfocada"];
 
 const PAGES: &[Page] = &[
     Page {
@@ -223,8 +225,10 @@ const PAGES: &[Page] = &[
             Section("Fundo"),
             Row { icon: "\u{E7B5}", title: "Fundo em pílula", desc: "Fundo sutil sempre visível, com a música e os botões dentro", key: Key::WidgetPill, kind: Kind::Toggle },
             Row { icon: "\u{E7FB}", title: "Formato do fundo", desc: "Cantos do fundo do widget", key: Key::WidgetShape, kind: Kind::Segmented(WIDGET_SHAPES) },
-            Row { icon: "\u{E790}", title: "Cor do fundo", desc: "Neutro, tingido com a cor da capa ou com a cor de destaque", key: Key::WidgetTint, kind: Kind::Segmented(TINTS) },
-            Row { icon: "\u{E706}", title: "Opacidade do fundo", desc: "Quanto o fundo aparece sobre a barra", key: Key::WidgetOpacity, kind: Kind::Slider { min: 0, max: 60, step: 2, unit: "%" } },
+            Row { icon: "\u{E790}", title: "Cor do fundo", desc: "Neutro, cor da capa ou de destaque; ou fundos fortes: gradiente vivo da capa ou a própria capa desfocada", key: Key::WidgetTint, kind: Kind::Choice(TINTS) },
+            Row { icon: "\u{E706}", title: "Opacidade do fundo", desc: "Quanto o fundo aparece sobre a barra", key: Key::WidgetOpacity, kind: Kind::Slider { min: 0, max: 100, step: 2, unit: "%" } },
+            Row { icon: "\u{E706}", title: "Intensidade da cor", desc: "Quanto o gradiente ou a capa desfocada cobrem a barra; o texto se ajusta para ficar legível", key: Key::WidgetIntensity, kind: Kind::Slider { min: 10, max: 100, step: 5, unit: "%" } },
+            Row { icon: "\u{E9A9}", title: "Brilho da capa", desc: "Luz suave na cor da capa atrás dela", key: Key::WidgetGlow, kind: Kind::Toggle },
             Row { icon: "\u{E91B}", title: "Contorno", desc: "Borda fina em volta do fundo", key: Key::WidgetBorder, kind: Kind::Toggle },
             Section("Posição"),
             Row { icon: "\u{E7C4}", title: "Posição na barra", desc: "Onde o widget fica na barra de tarefas", key: Key::Anchor, kind: Kind::Segmented(ANCHORS) },
@@ -357,7 +361,7 @@ const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
 const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbow, Palette::Neon, Palette::Mono];
 const SIZE_V: &[Size3] = &[Size3::Small, Size3::Normal, Size3::Large];
 const SECOND_V: &[SecondLine] = &[SecondLine::Artist, SecondLine::ArtistAlbum, SecondLine::Album, SecondLine::Time];
-const TINT_V: &[WidgetTint] = &[WidgetTint::Neutral, WidgetTint::Album, WidgetTint::Accent];
+const TINT_V: &[WidgetTint] = &[WidgetTint::Neutral, WidgetTint::Album, WidgetTint::Accent, WidgetTint::Gradient, WidgetTint::Artwork];
 
 fn get(c: &Config, key: Key) -> i32 {
     match key {
@@ -377,6 +381,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::WidgetShape => idx(WIDGET_SHAPE_V, c.widget_shape),
         Key::WidgetTint => idx(TINT_V, c.widget_tint),
         Key::WidgetOpacity => c.widget_opacity,
+        Key::WidgetIntensity => c.widget_intensity,
+        Key::WidgetGlow => c.widget_glow as i32,
         Key::WidgetBorder => c.widget_border as i32,
         Key::WidgetDivider => c.widget_divider as i32,
         Key::TaskbarShuffle => c.taskbar_shuffle_repeat as i32,
@@ -453,6 +459,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::WidgetShape => c.widget_shape = pick(WIDGET_SHAPE_V, i),
         Key::WidgetTint => c.widget_tint = pick(TINT_V, i),
         Key::WidgetOpacity => c.widget_opacity = v,
+        Key::WidgetIntensity => c.widget_intensity = v,
+        Key::WidgetGlow => c.widget_glow = v != 0,
         Key::WidgetBorder => c.widget_border = v != 0,
         Key::WidgetDivider => c.widget_divider = v != 0,
         Key::TaskbarShuffle => c.taskbar_shuffle_repeat = v != 0,
@@ -517,6 +525,8 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     const MEDIA: &str = "Ligue \"Mostrar música na barra\" para usar esta opção";
     const CONTROLS: &str = "Os botões estão desligados: ligue \"Botões de controle na barra\" para usar esta opção";
     const PILL: &str = "Ligue \"Fundo em pílula\" para usar esta opção";
+    const RICH: &str = "Escolha \"Gradiente da capa\" ou \"Capa desfocada\" em \"Cor do fundo\" para usar esta opção";
+    const CLASSIC: &str = "Com o gradiente ou a capa desfocada, quem manda é \"Intensidade da cor\"";
     const ARTIST: &str = "Ligue \"Mostrar artista\" para escolher a segunda linha";
     const POPUP: &str = "Ligue \"Mostrar A seguir\" para usar esta opção";
     const OSD: &str = "Ligue o aviso de Caps Lock ou de Num Lock para usar esta opção";
@@ -524,13 +534,15 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     const VIZ: &str = "Ligue \"Mostrar barras dinâmicas\" para usar esta opção";
     let osd_on = c.caps_lock_osd || c.num_lock_osd;
     match key {
-        AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetBorder
+        AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
             if !c.show_media =>
         {
             Some(MEDIA)
         }
         TaskbarShuffle | TaskbarPlay | WidgetDivider if !c.taskbar_controls => Some(CONTROLS),
-        WidgetShape | WidgetTint | WidgetOpacity | WidgetBorder if !c.widget_pill => Some(PILL),
+        WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder if !c.widget_pill => Some(PILL),
+        WidgetIntensity | WidgetGlow if !c.widget_tint.is_rich() => Some(RICH),
+        WidgetOpacity if c.widget_tint.is_rich() => Some(CLASSIC),
         SecondLine if !c.show_artist => Some(ARTIST),
         PopupSecs if !c.next_track_popup => Some(POPUP),
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdShape | OsdSize | OsdTheme | OsdDuration | OsdSwitch | OsdMaterial | OsdOpacity | OsdBlur | OsdIcon | OsdAnim if !osd_on => Some(OSD),
@@ -2568,6 +2580,7 @@ mod tests {
         };
         let off = Config { show_media: false, show_visualizer: false, caps_lock_osd: false, num_lock_osd: false, next_track_popup: false, ..Config::default() };
         let off2 = Config { taskbar_controls: false, widget_pill: false, show_artist: false, osd_material: OsdMaterial::Solid, ..Config::default() };
+        let off3 = Config { widget_tint: WidgetTint::Gradient, ..Config::default() };
         for p in PAGES {
             check(p.name);
             check(p.subtitle);
@@ -2583,7 +2596,7 @@ mod tests {
                             _ => {}
                         }
                         // As dicas de opção desativada também.
-                        for c in [&off, &off2] {
+                        for c in [&off, &off2, &off3] {
                             if let Some(why) = requirement(c, *key) {
                                 check(why);
                             }

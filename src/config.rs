@@ -177,6 +177,18 @@ pub enum WidgetTint {
     Album,
     /// Cor de destaque (Windows ou capa, conforme "Cor de destaque").
     Accent,
+    /// Gradiente vivo com a cor da capa: profundo na barra escura, pastel na
+    /// clara, com um brilho atrás da capa.
+    Gradient,
+    /// A própria capa desfocada ocupando o fundo, sob uma película.
+    Artwork,
+}
+
+impl WidgetTint {
+    /// Fundos "fortes" (gradiente e capa desfocada), com intensidade própria.
+    pub fn is_rich(self) -> bool {
+        matches!(self, WidgetTint::Gradient | WidgetTint::Artwork)
+    }
 }
 
 /// Aleatório e repetir: sempre (apagados quando o player não deixa) ou só quando dá.
@@ -293,8 +305,12 @@ pub struct Config {
     pub cover_size: Size3,
     /// Cor do fundo do widget.
     pub widget_tint: WidgetTint,
-    /// Opacidade do fundo do widget (%).
+    /// Opacidade do fundo do widget (%), nas cores neutra, da capa e de destaque.
     pub widget_opacity: i32,
+    /// Intensidade (%) dos fundos fortes (gradiente da capa, capa desfocada).
+    pub widget_intensity: i32,
+    /// Brilho na cor da capa atrás dela, nos fundos fortes.
+    pub widget_glow: bool,
     /// Contorno fino em volta do fundo.
     pub widget_border: bool,
     /// Anima a troca de música no widget (texto desliza, capa esmaece).
@@ -420,6 +436,8 @@ impl Default for Config {
             cover_size: Size3::Normal,
             widget_tint: WidgetTint::Album,
             widget_opacity: 6,
+            widget_intensity: 80,
+            widget_glow: true,
             widget_border: true,
             track_anim: true,
             icon_anim: true,
@@ -587,7 +605,8 @@ impl Config {
         self.osd_offset_y = self.osd_offset_y.clamp(-1200, 1200);
         self.osd_opacity = self.osd_opacity.clamp(20, 100);
         self.osd_blur = self.osd_blur.clamp(0, 100);
-        self.widget_opacity = self.widget_opacity.clamp(0, 60);
+        self.widget_opacity = self.widget_opacity.clamp(0, 100);
+        self.widget_intensity = self.widget_intensity.clamp(10, 100);
     }
 }
 
@@ -600,6 +619,23 @@ mod tests {
         let enabled = Cell::new(false);
         let changed = cfg.apply_login_default(first_run, always, || on, || enabled.set(true));
         (changed, enabled.get())
+    }
+
+    /// Config gravada antes das opções novas carrega (com os padrões delas) e
+    /// as novas vão e voltam do arquivo.
+    #[test]
+    fn config_antiga_carrega_e_opcoes_novas_sao_gravadas() {
+        use super::WidgetTint;
+        let old = "show_media = true\nwidget_tint = \"album\"\nwidget_opacity = 6\nversion = 5\n";
+        let c: Config = toml::from_str(old).unwrap();
+        assert_eq!((c.widget_opacity, c.widget_intensity, c.widget_glow), (6, 80, true));
+        let c2 = Config {
+            widget_tint: WidgetTint::Gradient,
+            widget_intensity: 55,
+            ..Config::default()
+        };
+        let text = toml::to_string_pretty(&c2).unwrap();
+        assert_eq!(toml::from_str::<Config>(&text).unwrap(), c2);
     }
 
     #[test]

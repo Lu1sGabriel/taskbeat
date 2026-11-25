@@ -341,6 +341,78 @@ fn icon_frames() {
     save_png("icon-frames.png", iw.ceil() as usize, ih.ceil() as usize, &sheet);
 }
 
+/// Capa de exemplo de uma cor (gradiente diagonal com um "sol"), para conferir
+/// os fundos do widget com capas bem diferentes.
+fn tinted_art(a: Rgb, b: Rgb) -> std::sync::Arc<Image> {
+    const N: usize = 160;
+    let mut px = vec![0u32; N * N];
+    for y in 0..N {
+        for x in 0..N {
+            let (fx, fy) = (x as f32 / N as f32, y as f32 / N as f32);
+            let mut c = lerp3(a, b, (fx * 0.4 + fy * 0.6).clamp(0.0, 1.0));
+            let d = ((fx - 0.62).powi(2) + (fy - 0.4).powi(2)).sqrt();
+            c = lerp3(c, [1.0, 0.95, 0.85], ((0.16 - d) / 0.02).clamp(0.0, 1.0));
+            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u32;
+            px[y * N + x] = 0xff00_0000 | (q(c[0]) << 16) | (q(c[1]) << 8) | q(c[2]);
+        }
+    }
+    std::sync::Arc::new(Image::new(N, N, px))
+}
+
+/// Fundos do widget (neutro, cor da capa, gradiente, capa desfocada) com capas
+/// de cores diferentes, na barra escura e na clara.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test --release widget_tints -- --ignored`
+#[test]
+#[ignore]
+fn widget_tints() {
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let arts = [
+        ui::sample_media().art.unwrap(),
+        tinted_art([0.05, 0.45, 0.50], [0.10, 0.80, 0.70]),
+        tinted_art([0.95, 0.80, 0.20], [0.98, 0.55, 0.10]),
+        tinted_art([0.80, 0.10, 0.15], [0.35, 0.02, 0.10]),
+        tinted_art([0.85, 0.85, 0.86], [0.55, 0.55, 0.58]),
+    ];
+    let tints = [(WidgetTint::Album, 6), (WidgetTint::Neutral, 60), (WidgetTint::Gradient, 80), (WidgetTint::Artwork, 80), (WidgetTint::Gradient, 100)];
+    let wh = 40.0 * S;
+    let bar_h = 48.0 * S;
+    let mut cols = Vec::new();
+    for light in [false, true] {
+        for (tint, k) in tints {
+            let mut col = Vec::new();
+            for art in &arts {
+                let mut media = ui::sample_media();
+                media.art = Some(art.clone());
+                let cfg = Config { widget_tint: tint, widget_opacity: k.min(100), widget_intensity: k, ..Config::default() };
+                let mut c = colors(&cfg, &media);
+                c.light_taskbar = light;
+                let l = WLayout::build(S, wh, &cfg, true, false);
+                col.push(render(l.width, wh, |cv| {
+                    let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb: playback(&media), time: 1.0, viz: None, flyout_open: false, s: S, change: None };
+                    ui::draw_widget(cv, &mut tr, &l, &f);
+                }));
+            }
+            cols.push((light, col));
+        }
+    }
+    let cw = cols.iter().flat_map(|(_, c)| c.iter().map(|l| l.0)).max().unwrap() as f32 + 16.0 * S;
+    let rows = arts.len();
+    let (iw, ih) = (cw * tints.len() as f32, 2.0 * rows as f32 * bar_h);
+    let img = render(iw, ih, |cv| {
+        for (ci, (light, col)) in cols.into_iter().enumerate() {
+            let x = (ci % tints.len()) as f32 * cw;
+            let y0 = if light { rows as f32 * bar_h } else { 0.0 };
+            let bc: Rgb = if light { [0.93, 0.93, 0.94] } else { [0.11, 0.11, 0.12] };
+            cv.fill_rrect(x, y0, x + cw, y0 + rows as f32 * bar_h, 0.0, 1.0, bc);
+            for (ri, layer) in col.into_iter().enumerate() {
+                blit(cv, x + 8.0 * S, y0 + ri as f32 * bar_h + 4.0 * S, layer);
+            }
+        }
+    });
+    save_png("widget-tints.png", img.0, img.1, &img.2);
+}
+
 /// Widget em pílula com cada formato e tamanho de capa (conferir que a capa
 /// fica dentro da ponta arredondada).
 #[test]

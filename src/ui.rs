@@ -335,10 +335,12 @@ pub fn card_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     Theme { fg, accent, on_accent: on_color(accent), dark }
 }
 
-/// Cores do widget na barra (texto segue a barra; destaque segue a capa ou o Windows).
+/// Cores do widget na barra. O texto segue o fundo de verdade (a barra com o
+/// fundo do widget por cima): com um fundo forte e claro, o texto fica escuro
+/// mesmo na barra escura. O destaque segue a capa ou o Windows.
 pub fn widget_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
-    let dark = !colors.light_taskbar;
-    let fg = colors.foreground();
+    let dark = luma(widget_bg_mean(cfg, colors, media)) < 0.47;
+    let fg = if dark { [1.0; 3] } else { [0.10, 0.10, 0.10] };
     let accent = match (cfg.accent_source, &media.art) {
         (crate::config::AccentSource::Album, Some(a)) => readable(a.vibrant, dark),
         _ => {
@@ -352,27 +354,163 @@ pub fn widget_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     Theme { fg, accent, on_accent: on_color(accent), dark }
 }
 
+/// Cor aproximada da barra de tarefas atrás do widget.
+fn taskbar_base(colors: &Colors) -> Rgb {
+    if colors.light_taskbar { [0.93, 0.93, 0.94] } else { [0.11, 0.11, 0.12] }
+}
+
+/// Cor de destaque do Windows legível sobre a barra.
+fn taskbar_accent(colors: &Colors) -> Rgb {
+    if colors.light_taskbar { colors.accent } else { colors.accent_light }
+}
+
+/// Cores do fundo "Gradiente da capa": começo, fim e o brilho atrás da capa.
+/// Na barra escura, tons profundos (texto branco legível); na clara, pastéis.
+fn rich_gradient(base: Rgb, light: bool) -> (Rgb, Rgb, Rgb) {
+    let (h, s, _) = crate::render::rgb_to_hsv(base);
+    // Cores quase sem saturação (capa cinza): um gradiente neutro, sem inventar matiz.
+    let s = if s < 0.12 { s } else { s.clamp(0.42, 0.85) };
+    if light {
+        let c0 = lerp3(hsv(h, s, 1.0), [1.0; 3], 0.50);
+        let c1 = lerp3(hsv(h + 24.0, s, 0.95), [1.0; 3], 0.66);
+        (c0, c1, lerp3(hsv(h, s, 1.0), [1.0; 3], 0.25))
+    } else {
+        (hsv(h, s, 0.52), hsv(h + 24.0, (s * 0.92).min(0.85), 0.30), hsv(h, (s * 0.8).min(0.75), 0.96))
+    }
+}
+
+/// Película sobre a capa desfocada (cor e opacidade), para o texto ficar legível.
+fn artwork_scrim(light: bool) -> (Rgb, f32) {
+    if light { ([1.0; 3], 0.46) } else { ([0.0; 3], 0.38) }
+}
+
+/// Cor média do fundo do widget já sobre a barra (decide texto claro ou escuro).
+fn widget_bg_mean(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Rgb {
+    let base = taskbar_base(colors);
+    if !cfg.widget_pill {
+        return base;
+    }
+    let light = colors.light_taskbar;
+    let vibrant = media.art.as_ref().map(|a| a.vibrant);
+    let op = cfg.widget_opacity as f32 / 100.0;
+    let rich = cfg.widget_intensity as f32 / 100.0;
+    let (c, a) = match cfg.widget_tint {
+        WidgetTint::Neutral | WidgetTint::Album | WidgetTint::Accent => (widget_tint(cfg, colors, media), op),
+        WidgetTint::Artwork if media.art.is_some() => {
+            let avg = media.art.as_ref().map(|a| a.avg).unwrap_or(base);
+            let (sc, sa) = artwork_scrim(light);
+            (lerp3(avg, sc, sa), rich)
+        }
+        WidgetTint::Gradient | WidgetTint::Artwork => {
+            let (c0, c1, _) = rich_gradient(vibrant.unwrap_or(taskbar_accent(colors)), light);
+            (lerp3(c0, c1, 0.45), rich)
+        }
+    };
+    lerp3(base, c, a.clamp(0.0, 1.0))
+}
+
 // ---------------------------------------------------------------- utilidades
 
 thread_local! {
-    static BLUR_CACHE: RefCell<Option<(usize, Arc<Image>)>> = const { RefCell::new(None) };
+    /// Capas desfocadas mais recentes (a troca de música mostra a antiga e a nova juntas).
+    static BLUR_CACHE: RefCell<Vec<(usize, Arc<Image>)>> = const { RefCell::new(Vec::new()) };
+    static LAYERS: RefCell<Vec<Layer>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Capa desfocada (em cache por imagem).
 pub(crate) fn blurred(img: &Arc<Image>) -> Arc<Image> {
-    let key = Arc::as_ptr(img) as usize;
+    blurred_cached(img, false)
+}
+
+/// Capa bem mais desfocada, quase só as cores dela espalhadas: no widget a
+/// faixa é fina e larga, e detalhes da capa (um sol, um rosto) virariam manchas.
+fn color_wash(img: &Arc<Image>) -> Arc<Image> {
+    blurred_cached(img, true)
+}
+
+fn blurred_cached(img: &Arc<Image>, wash: bool) -> Arc<Image> {
+    let key = Arc::as_ptr(img) as usize ^ wash as usize;
     BLUR_CACHE.with(|c| {
-        if let Some((k, b)) = c.borrow().as_ref() {
-            if *k == key {
-                return b.clone();
-            }
+        let mut c = c.borrow_mut();
+        if let Some(i) = c.iter().position(|(k, _)| *k == key) {
+            let hit = c.remove(i);
+            let b = hit.1.clone();
+            c.push(hit);
+            return b;
         }
         // Desfoca uma versão pequena (rápido); o desfoque esconde a ampliação.
-        let small = img.mip(if img.w >= 128 { 2 } else { 1 });
-        let b = Arc::new(small.blurred((small.w / 14).max(2)));
-        *c.borrow_mut() = Some((key, b.clone()));
+        let b = if wash {
+            let level = (0..8).find(|&k| img.w >> k <= 24).unwrap_or(8);
+            Arc::new(img.mip(level).blurred(4))
+        } else {
+            let small = img.mip(if img.w >= 128 { 2 } else { 1 });
+            Arc::new(small.blurred((small.w / 14).max(2)))
+        };
+        if c.len() >= 3 {
+            c.remove(0);
+        }
+        c.push((key, b.clone()));
         b
     })
+}
+
+/// Camada já desenhada (fundo do widget, do card, do "A seguir") guardada:
+/// enquanto nada muda nela, os quadros seguintes só a copiam (sem refazer
+/// gradientes, sombras e capa a cada quadro).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LayerTag {
+    Widget,
+}
+
+struct Layer {
+    tag: LayerTag,
+    key: u64,
+    w: usize,
+    h: usize,
+    px: Vec<u32>,
+}
+
+/// Chave de uma camada a partir de tudo que muda o desenho dela.
+pub(crate) fn layer_key(parts: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut h);
+    h.finish()
+}
+
+/// Bits de um retângulo (para entrar em chaves de cache).
+fn rect_bits(r: RectF) -> [u32; 4] {
+    [r.x.to_bits(), r.y.to_bits(), r.w.to_bits(), r.h.to_bits()]
+}
+
+/// Compõe a camada `key` (do tamanho do canvas) com opacidade `alpha`,
+/// desenhando-a antes com `draw` se ainda não estiver guardada. Guarda até
+/// duas por tipo (a troca de capa anima entre a antiga e a nova).
+/// `replace`: o canvas acabou de ser limpo, então a camada é copiada em vez de composta.
+fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, replace: bool, draw: impl FnOnce(&mut Canvas)) {
+    let (w, h) = (cv.w, cv.h);
+    LAYERS.with(|cell| {
+        let mut layers = cell.borrow_mut();
+        let i = match layers.iter().position(|l| l.tag == tag && l.key == key && l.w == w && l.h == h) {
+            Some(i) => i,
+            None => {
+                let mut px = vec![0u32; w * h];
+                draw(&mut Canvas::new(w, h, &mut px));
+                let same: Vec<usize> = layers.iter().enumerate().filter(|(_, l)| l.tag == tag).map(|(i, _)| i).collect();
+                if same.len() >= 2 {
+                    layers.remove(same[0]);
+                }
+                layers.push(Layer { tag, key, w, h, px });
+                layers.len() - 1
+            }
+        };
+        let l = &layers[i];
+        if replace && alpha >= 0.999 {
+            cv.copy_from(0, 0, &l.px, l.w, l.h, 0);
+        } else {
+            cv.composite(0, 0, &l.px, l.w, l.h, alpha);
+        }
+    });
 }
 
 pub fn glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32) {
@@ -792,26 +930,113 @@ fn widget_text(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, m: &MediaInfo, 
     }
 }
 
-/// Cor do fundo do widget conforme a opção.
-fn widget_tint(cfg: &Config, th: &Theme, m: &MediaInfo) -> Rgb {
+/// Cor do fundo translúcido do widget (cores neutra, da capa e de destaque),
+/// escolhida pela barra (o texto é que se ajusta ao resultado).
+fn widget_tint(cfg: &Config, colors: &Colors, m: &MediaInfo) -> Rgb {
+    let album = m.art.as_ref().map(|a| readable(a.vibrant, !colors.light_taskbar));
     match cfg.widget_tint {
-        WidgetTint::Neutral => th.fg,
-        WidgetTint::Album => m.art.as_ref().map(|a| readable(a.vibrant, th.dark)).unwrap_or(th.accent),
-        WidgetTint::Accent => th.accent,
+        WidgetTint::Neutral => colors.foreground(),
+        WidgetTint::Album | WidgetTint::Gradient | WidgetTint::Artwork => album.unwrap_or(taskbar_accent(colors)),
+        WidgetTint::Accent => match (cfg.accent_source, album) {
+            (crate::config::AccentSource::Album, Some(c)) => c,
+            _ => taskbar_accent(colors),
+        },
     }
+}
+
+/// Fundo forte do widget (gradiente da capa ou capa desfocada) de uma música,
+/// desenhado numa camada guardada: os quadros seguintes só a compõem.
+fn rich_widget_bg(cv: &mut Canvas, l: &WLayout, f: &WidgetFrame, m: &MediaInfo, alpha: f32) {
+    let (Some(bg), Some(_)) = (l.bg, l.art.or(l.text)) else { return };
+    let (s, cfg, colors) = (f.s, f.cfg, f.colors);
+    let light = colors.light_taskbar;
+    let a = cfg.widget_intensity as f32 / 100.0;
+    let art = m.art.clone().filter(|_| cfg.widget_tint == WidgetTint::Artwork);
+    let base = m.art.as_ref().map(|a| a.vibrant).unwrap_or(taskbar_accent(colors));
+    // Centro do brilho: a capa (ou o começo do texto).
+    let glow_at = l.art.map(|r| (r.cx(), r.cy())).unwrap_or((bg.x + bg.h, bg.cy()));
+    let key = layer_key((
+        cfg.widget_tint as u8,
+        art.as_ref().map(|a| Arc::as_ptr(a) as usize),
+        base.map(f32::to_bits),
+        rect_bits(bg),
+        l.radius.to_bits(),
+        (glow_at.0.to_bits(), glow_at.1.to_bits()),
+        (cfg.widget_intensity, cfg.widget_glow, light),
+    ));
+    let radius = l.radius;
+    cached_layer(cv, LayerTag::Widget, key, alpha, false, |cv| {
+        let (c0, c1, glow) = rich_gradient(base, light);
+        let reach = bg.h * 1.5;
+        let glow_a = if cfg.widget_glow { if light { 0.55 } else { 0.62 } } else { 0.0 };
+        let (gx, gy) = glow_at;
+        let shade = move |x: f32, y: f32, c: Rgb| -> Rgb {
+            // Brilho suave na cor da capa em volta dela e um reflexo claro no alto.
+            let d2 = ((x - gx) / reach).powi(2) + ((y - gy) / (reach * 0.8)).powi(2);
+            let g = glow_a * (-2.2 * d2).exp();
+            let top = (1.0 - ((y - bg.y) / bg.h).clamp(0.0, 1.0)).powi(2);
+            lerp3(lerp3(c, glow, g), [1.0; 3], 0.07 * top)
+        };
+        match &art {
+            Some(img) => {
+                // A capa inteira espalhada pela faixa (cores da esquerda à direita).
+                let b = color_wash(img);
+                cv.draw_image(bg, &b, radius, a);
+                let (sc, sa) = artwork_scrim(light);
+                // Película um pouco mais forte à direita (onde ficam os botões).
+                cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |x, _| {
+                    let t = ((x - bg.x) / bg.w).clamp(0.0, 1.0);
+                    (sc, a * (sa + 0.10 * t))
+                });
+                if glow_a > 0.0 {
+                    let gc = if light { lerp3(img.vibrant, [1.0; 3], 0.4) } else { readable(img.vibrant, true) };
+                    cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |x, y| {
+                        let d2 = ((x - gx) / reach).powi(2) + ((y - gy) / (reach * 0.8)).powi(2);
+                        (gc, a * 0.42 * glow_a * (-2.2 * d2).exp())
+                    });
+                }
+            }
+            None => {
+                cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |x, y| {
+                    let t = ((x - bg.x) / bg.w).clamp(0.0, 1.0);
+                    let t = t * t * (3.0 - 2.0 * t);
+                    (shade(x, y, lerp3(c0, c1, t)), a)
+                });
+            }
+        }
+        // Brilho fino no topo e contorno (elevação do Fluent).
+        cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |_, y| ([1.0; 3], if y < bg.y + 1.5 * s { 0.10 * a } else { 0.0 }));
+        if cfg.widget_border {
+            cv.stroke_round(bg, radius, s, if light { [0.0; 3] } else { [1.0; 3] }, if light { 0.10 } else { 0.12 });
+        }
+    });
 }
 
 pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &WidgetFrame) {
     let (s, th, m, cfg) = (f.s, &f.theme, f.media, f.cfg);
     // Fundo único com tudo dentro; o card aberto deixa o fundo um pouco mais forte.
     if let Some(bg) = l.bg {
-        let a = cfg.widget_opacity as f32 / 100.0 + if f.flyout_open { 0.04 } else { 0.0 };
-        cv.fill_round(bg, l.radius, widget_tint(cfg, th, m), a.min(1.0));
-        if cfg.widget_border {
-            cv.stroke_round(bg, l.radius, s, th.fg, if th.dark { 0.08 } else { 0.10 });
+        if cfg.widget_tint.is_rich() {
+            // Troca de música: o fundo da capa antiga dá lugar ao da nova.
+            match f.change.filter(|c| c.2 < 1.0) {
+                Some((old, _, t)) => {
+                    rich_widget_bg(cv, l, f, old, 1.0);
+                    rich_widget_bg(cv, l, f, m, ease_enter(t));
+                }
+                None => rich_widget_bg(cv, l, f, m, 1.0),
+            }
+            if f.flyout_open {
+                cv.fill_round(bg, l.radius, th.fg, 0.06);
+            }
+        } else {
+            let a = cfg.widget_opacity as f32 / 100.0 + if f.flyout_open { 0.04 } else { 0.0 };
+            cv.fill_round(bg, l.radius, widget_tint(cfg, f.colors, m), a.min(1.0));
+            if cfg.widget_border {
+                cv.stroke_round(bg, l.radius, s, th.fg, if th.dark { 0.08 } else { 0.10 });
+            }
+            // Brilho fino no topo (elevação do Fluent).
+            cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), l.radius, |_, y| ([1.0; 3], if y < bg.y + 1.5 * s { 0.05 } else { 0.0 }));
         }
-        // Brilho fino no topo (elevação do Fluent).
-        cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), l.radius, |_, y| ([1.0; 3], if y < bg.y + 1.5 * s { 0.05 } else { 0.0 }));
     }
     // Hover dentro do fundo: a área da música e cada botão têm o próprio destaque.
     if let Some(r) = l.info {

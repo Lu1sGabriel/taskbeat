@@ -49,7 +49,7 @@ fn area_weights(start: f32, len: f32, n: usize, max: usize) -> Vec<(usize, Vec<f
         .collect()
 }
 
-fn rgb_to_hsv(c: Rgb) -> (f32, f32, f32) {
+pub(crate) fn rgb_to_hsv(c: Rgb) -> (f32, f32, f32) {
     let max = c[0].max(c[1]).max(c[2]);
     let min = c[0].min(c[1]).min(c[2]);
     let d = max - min;
