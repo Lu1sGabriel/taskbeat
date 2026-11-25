@@ -554,6 +554,8 @@ struct Overlay {
     media_version: u64,
     /// Assinatura do último quadro desenhado do widget (pula se nada mudou).
     last_sig: Option<WidgetSig>,
+    /// Assinatura do último quadro desenhado do card (pula se nada mudou).
+    flyout_sig: Option<FlyoutSig>,
     /// Troca de música no widget: música anterior e quando o texto/a capa mudaram.
     prev_media: MediaInfo,
     text_change: Option<Instant>,
@@ -603,6 +605,26 @@ struct WidgetSig {
     progress_px: i32,
     /// Segundo atual quando a segunda linha mostra o tempo.
     clock: i64,
+}
+
+/// Tudo que muda a aparência do card aberto quando nada está animando.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct FlyoutSig {
+    place: (i32, i32, i32, i32),
+    media: u64,
+    cfg: u64,
+    colors: u64,
+    hover: Option<Hit>,
+    pressed: Option<(Win, Hit)>,
+    drag: Option<Hit>,
+    drag_x: i32,
+    seek: Option<i32>,
+    playing: bool,
+    shuffle: bool,
+    repeat: u8,
+    /// Segundo da música (o tempo e a barra de progresso).
+    clock: i64,
+    volume: (u16, bool),
 }
 
 fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
@@ -683,6 +705,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         demo_osd: std::env::var_os("TV_DEMO_CAPS").is_some(),
         media_version: u64::MAX,
         last_sig: None,
+        flyout_sig: None,
         prev_media: MediaInfo::default(),
         text_change: None,
         art_change: None,
@@ -1061,7 +1084,9 @@ impl Overlay {
             self.icons.reset_seen();
         }
         let icons_active = self.cfg.icon_anim && self.icons.running();
-        let flyout_active = self.update_flyout(now, dt, placement, pb);
+        // Barras no card mexendo (card aberto, barras ligadas e som tocando).
+        let live_bars = self.cfg.card_viz && viz && sound;
+        let flyout_active = self.update_flyout(now, dt, placement, pb, live_bars);
         let popup_active = self.update_popup(now, placement);
         let osd_active = self.update_osd(now, placement);
 
@@ -1563,7 +1588,10 @@ impl Overlay {
 
     // ------------------------------------------------------------ card expandido
 
-    fn update_flyout(&mut self, now: Instant, dt: f32, placement: Option<Placement>, pb: Playback) -> bool {
+    /// Desenha o card (abrindo, aberto ou fechando). Devolve se ele precisa
+    /// de quadros seguidos (animação, barras tocando); parado, só é
+    /// redesenhado quando algo nele muda.
+    fn update_flyout(&mut self, now: Instant, dt: f32, placement: Option<Placement>, pb: Playback, live_bars: bool) -> bool {
         let target = if self.flyout_open && placement.is_some() { 1.0 } else { 0.0 };
         let opening = target > 0.5;
         let speed = if opening { 1.0 / 0.28 } else { 1.0 / 0.16 };
@@ -1577,6 +1605,7 @@ impl Overlay {
             self.flyout_anim = 0.0;
             self.flyout_open = false;
             self.flyout_box = None;
+            self.flyout_sig = None;
             return false;
         };
         let s = p.scale;
@@ -1594,6 +1623,29 @@ impl Overlay {
             (p.y + p.h + (10.0 * s) as i32 - m as i32, -1)
         };
         self.flyout_box = Some((x, y, l.w.round() as i32, l.h.round() as i32));
+        // Parado (aberto, sem animação): só redesenha se algo mudou.
+        let hint_on = self.hint.is_some_and(|(t, _)| (now - t).as_secs_f32() < 2.8);
+        let moving = self.flyout_anim < 0.999 || live_bars || hint_on || (self.cfg.icon_anim && self.icons.running());
+        let sig = FlyoutSig {
+            place: (x, y, l.w.round() as i32, l.h.round() as i32),
+            media: self.media_version,
+            cfg: self.cfg_version,
+            colors: self.last_colors.elapsed().as_secs() / 30,
+            hover: self.hover_f,
+            pressed: self.pressed,
+            drag: self.drag,
+            drag_x: self.drag_x.round() as i32,
+            seek: self.seek_preview.map(|v| (v * 1000.0) as i32),
+            playing: pb.playing,
+            shuffle: pb.shuffle,
+            repeat: pb.repeat,
+            clock: pb.pos as i64,
+            volume: ((pb.volume * 1000.0) as u16, pb.muted),
+        };
+        if !moving && self.flyout.shown && self.flyout_sig == Some(sig) {
+            return false;
+        }
+        self.flyout_sig = Some(sig);
         // Acrílico: captura antes de o card aparecer (o card tem o foco: escondê-lo
         // para recapturar o fecharia, então mudanças com ele aberto usam a mesma imagem).
         let backdrop = if ui::card_wants_backdrop(&self.cfg) {
@@ -1633,7 +1685,7 @@ impl Overlay {
         surf.present_at(self.flyout.hwnd, x, y as f32 + dir as f32 * slide, e);
         self.flyout.surface = Some(surf);
         self.flyout.show(true);
-        true
+        moving
     }
 
     // ------------------------------------------------------------ "A seguir"
