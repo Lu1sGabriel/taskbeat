@@ -191,6 +191,16 @@ impl WidgetTint {
     }
 }
 
+/// Desenho dos ícones de controle (anterior, play, próximo, aleatório...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconStyle {
+    /// Formas preenchidas e encorpadas, desenhadas em vetor.
+    Filled,
+    /// Ícones finos de contorno do Segoe Fluent.
+    Fluent,
+}
+
 /// Aleatório e repetir: sempre (apagados quando o player não deixa) ou só quando dá.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -313,6 +323,8 @@ pub struct Config {
     pub widget_glow: bool,
     /// Contorno fino em volta do fundo.
     pub widget_border: bool,
+    /// Desenho dos ícones de controle (na barra e no card).
+    pub icon_style: IconStyle,
     /// Anima a troca de música no widget (texto desliza, capa esmaece).
     pub track_anim: bool,
     /// Anima os ícones dos botões (play/pausa, pular, aleatório, repetir, volume).
@@ -341,6 +353,8 @@ pub struct Config {
     pub card_autoclose: i32,
     /// Atalhos para abrir os apps de música instalados (linha embaixo do card).
     pub card_launchers: bool,
+    /// Mini barras de áudio no card, ao lado do título (com as barras ligadas).
+    pub card_viz: bool,
 
     // ---- "A seguir"
     /// Cartão animado com a próxima música quando o player troca sozinho.
@@ -439,6 +453,7 @@ impl Default for Config {
             widget_intensity: 80,
             widget_glow: true,
             widget_border: true,
+            icon_style: IconStyle::Filled,
             track_anim: true,
             icon_anim: true,
             title_width: 120,
@@ -457,6 +472,7 @@ impl Default for Config {
             card_shuffle_repeat: ShuffleRepeat::Always,
             card_autoclose: 6,
             card_launchers: true,
+            card_viz: true,
 
             next_track_popup: true,
             popup_secs: 5,
@@ -625,13 +641,15 @@ mod tests {
     /// as novas vão e voltam do arquivo.
     #[test]
     fn config_antiga_carrega_e_opcoes_novas_sao_gravadas() {
-        use super::WidgetTint;
+        use super::{IconStyle, WidgetTint};
         let old = "show_media = true\nwidget_tint = \"album\"\nwidget_opacity = 6\nversion = 5\n";
         let c: Config = toml::from_str(old).unwrap();
-        assert_eq!((c.widget_opacity, c.widget_intensity, c.widget_glow), (6, 80, true));
+        assert_eq!((c.widget_opacity, c.widget_intensity, c.icon_style), (6, 80, IconStyle::Filled));
+        assert!(c.card_viz && c.widget_glow);
         let c2 = Config {
             widget_tint: WidgetTint::Gradient,
-            widget_intensity: 55,
+            icon_style: IconStyle::Fluent,
+            card_viz: false,
             ..Config::default()
         };
         let text = toml::to_string_pretty(&c2).unwrap();

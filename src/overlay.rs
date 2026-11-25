@@ -1069,7 +1069,7 @@ impl Overlay {
                 media: &self.media,
                 theme,
                 colors: &self.colors,
-                it: Interact { hover: self.hover_w, pressed, drag: None, fx: self.icons.fx(self.cfg.icon_anim) },
+                it: Interact { hover: self.hover_w, pressed, drag: None, fx: self.icons.fx(self.cfg.icon_anim), ..Default::default() },
                 pb,
                 time: (now - self.started).as_secs_f32(),
                 viz: Some((&self.analyzer.values, &self.analyzer.peaks)),
@@ -1403,6 +1403,9 @@ impl Overlay {
         let speed = if opening { 1.0 / 0.28 } else { 1.0 / 0.16 };
         self.flyout_anim += (target - self.flyout_anim).clamp(-speed * dt, speed * dt);
         let Some(p) = placement.filter(|_| self.flyout_anim > 0.001) else {
+            if self.flyout.shown {
+                ui::forget_layers(ui::LayerTag::Card);
+            }
             self.flyout.hide();
             self.hover_f = None;
             self.flyout_anim = 0.0;
@@ -1448,7 +1451,7 @@ impl Overlay {
                 colors: &self.colors,
                 media: &self.media,
                 theme: ui::card_theme(&self.cfg, &self.colors, &self.media),
-                it: Interact { hover: self.hover_f, pressed, drag: self.drag, fx: self.icons.fx(self.cfg.icon_anim) },
+                it: Interact { hover: self.hover_f, pressed, drag: self.drag, fx: self.icons.fx(self.cfg.icon_anim), ..Default::default() },
                 pb,
                 s,
                 backdrop: backdrop.as_deref(),
@@ -1457,6 +1460,7 @@ impl Overlay {
                     (k < 2.8).then(|| (tr("Este player não deixa mudar isso pelo Windows"), (1.0 - (k - 2.4) / 0.4).clamp(0.0, 1.0)))
                 }),
                 launchers: &launchers,
+                viz: (self.cfg.card_viz && self.viz).then_some(&self.analyzer.values[..]),
             };
             ui::draw_card(&mut cv, &mut self.text, &l, &f);
         }
@@ -1504,6 +1508,7 @@ impl Overlay {
         let Some(p) = placement.filter(|_| t < total) else {
             self.popup_start = None;
             self.popup_pos = None;
+            ui::forget_layers(ui::LayerTag::UpNext);
             self.popup.hide();
             return false;
         };

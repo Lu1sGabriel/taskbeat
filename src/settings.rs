@@ -68,6 +68,8 @@ enum Key {
     TaskbarProgress,
     TrackAnim,
     IconAnim,
+    IconStyle,
+    CardViz,
     CoverShape,
     CoverSize,
     TextSize,
@@ -194,6 +196,7 @@ const BARS: &[usize] = &[6, 8, 10, 12, 16, 24, 32];
 const SIZES: &[&str] = &["Pequeno", "Normal", "Grande"];
 const COVER_SIZES: &[&str] = &["Pequena", "Normal", "Grande"];
 const SECOND_LINES: &[&str] = &["Artista", "Artista · Álbum", "Álbum", "Tempo"];
+const ICON_STYLES: &[&str] = &["Preenchidos", "Contorno"];
 const TINTS: &[&str] = &["Neutro", "Cor da capa", "Cor de destaque", "Gradiente da capa", "Capa desfocada"];
 
 const PAGES: &[Page] = &[
@@ -249,6 +252,8 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E7FB}", title: "Cantos", desc: "Raio das bordas do card", key: Key::Corners, kind: Kind::Segmented(CORNERS) },
             Row { icon: "\u{E768}", title: "Botão play", desc: "Formato do botão principal", key: Key::PlayShape, kind: Kind::Segmented(PLAY_SHAPES) },
             Row { icon: "\u{E945}", title: "Animar ícones", desc: "Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar (no card e na barra)", key: Key::IconAnim, kind: Kind::Toggle },
+            Row { icon: "\u{E8D3}", title: "Estilo dos ícones", desc: "Formas preenchidas e encorpadas ou o contorno fino do Fluent (no card e na barra)", key: Key::IconStyle, kind: Kind::Segmented(ICON_STYLES) },
+            Row { icon: "\u{E9E9}", title: "Barras no card", desc: "Mini visualizador ao lado do título, reagindo ao som", key: Key::CardViz, kind: Kind::Toggle },
             Section("Conteúdo"),
             Row { icon: "\u{E916}", title: "Barra de progresso", desc: "Tempo decorrido e restante; arraste para pular", key: Key::CardSeek, kind: Kind::Toggle },
             Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e botão de mudo", key: Key::ShowVolume, kind: Kind::Toggle },
@@ -361,6 +366,7 @@ const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
 const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbow, Palette::Neon, Palette::Mono];
 const SIZE_V: &[Size3] = &[Size3::Small, Size3::Normal, Size3::Large];
 const SECOND_V: &[SecondLine] = &[SecondLine::Artist, SecondLine::ArtistAlbum, SecondLine::Album, SecondLine::Time];
+const ICON_STYLE_V: &[IconStyle] = &[IconStyle::Filled, IconStyle::Fluent];
 const TINT_V: &[WidgetTint] = &[WidgetTint::Neutral, WidgetTint::Album, WidgetTint::Accent, WidgetTint::Gradient, WidgetTint::Artwork];
 
 fn get(c: &Config, key: Key) -> i32 {
@@ -374,6 +380,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::TaskbarProgress => c.taskbar_progress as i32,
         Key::TrackAnim => c.track_anim as i32,
         Key::IconAnim => c.icon_anim as i32,
+        Key::IconStyle => idx(ICON_STYLE_V, c.icon_style),
+        Key::CardViz => c.card_viz as i32,
         Key::CoverShape => idx(SHAPE_V, c.cover_shape),
         Key::CoverSize => idx(SIZE_V, c.cover_size),
         Key::TextSize => idx(SIZE_V, c.text_size),
@@ -452,6 +460,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::TaskbarProgress => c.taskbar_progress = v != 0,
         Key::TrackAnim => c.track_anim = v != 0,
         Key::IconAnim => c.icon_anim = v != 0,
+        Key::IconStyle => c.icon_style = pick(ICON_STYLE_V, i),
+        Key::CardViz => c.card_viz = v != 0,
         Key::CoverShape => c.cover_shape = pick(SHAPE_V, i),
         Key::CoverSize => c.cover_size = pick(SIZE_V, i),
         Key::TextSize => c.text_size = pick(SIZE_V, i),
@@ -547,7 +557,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         PopupSecs if !c.next_track_popup => Some(POPUP),
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdShape | OsdSize | OsdTheme | OsdDuration | OsdSwitch | OsdMaterial | OsdOpacity | OsdBlur | OsdIcon | OsdAnim if !osd_on => Some(OSD),
         OsdBlur if c.osd_material != crate::config::OsdMaterial::Acrylic => Some(BLUR),
-        Style | Palette | Bars | Width | Sens | OnlyMedia | PlayerOnly | Peaks if !c.show_visualizer => Some(VIZ),
+        Style | Palette | Bars | Width | Sens | OnlyMedia | PlayerOnly | Peaks | CardViz if !c.show_visualizer => Some(VIZ),
         _ => None,
     }
 }
@@ -1811,7 +1821,10 @@ impl Ui {
                 m2.dur = m2.dur.max(1.0);
                 let mut sub = SubCanvas::new(r.cx() - l.w / 2.0, r.y + 4.0 * s, l.w, l.h);
                 let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(l.card.offset(sub.x, sub.y), ui::GLASS_BLUR * s)).flatten();
-                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None, launchers: &launchers };
+                // Mini barras paradas num desenho de exemplo (a prévia do card não anima a 60 fps).
+                const BARS: &[f32] = &[0.55, 0.9, 0.62, 0.38, 0.74, 0.5];
+                let viz = cfg.show_visualizer.then_some(if self.media_paused() { &[0.0; 6][..] } else { BARS });
+                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None, launchers: &launchers, viz };
                 ui::draw_card(&mut sub.canvas(), &mut self.preview_text, &l, &f);
                 sub.commit(cv);
             }

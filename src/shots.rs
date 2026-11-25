@@ -20,6 +20,9 @@ use windows::core::HSTRING;
 /// Escala das imagens (2x = nítidas em telas de alta densidade).
 const S: f32 = 2.0;
 
+/// Barras de áudio de exemplo (mini visualizador do card).
+const VIZ: &[f32] = &[0.55, 0.9, 0.62, 0.38, 0.74, 0.5];
+
 /// `docs/screenshots` (ou a pasta em `TASKBEAT_SHOTS_DIR`, para conferir sem mexer no README).
 fn out_dir() -> PathBuf {
     let d = std::env::var_os("TASKBEAT_SHOTS_DIR")
@@ -123,7 +126,7 @@ fn shots() {
         let cl = CLayout::build(S, &cfg, true);
         let wl = WLayout::build(S, 40.0 * S, &cfg, true, false);
         let card = render(cl.w, cl.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[] };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
             ui::draw_card(cv, &mut tr, &cl, &f);
         });
         let widget = render(wl.width, 40.0 * S, |cv| {
@@ -170,7 +173,7 @@ fn shots() {
         let c = colors(&cfg, &media);
         let l = CLayout::build(S, &cfg, true);
         let img = render(l.w, l.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[] };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
             ui::draw_card(cv, &mut tr, &l, &f);
         });
         save_png(name, img.0, img.1, &img.2);
@@ -184,7 +187,7 @@ fn shots() {
         let bg = render(w, h, |cv| busy_wallpaper(cv, RectF::new(0.0, 0.0, w, h), 14.0 * S));
         let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::GLASS_BLUR * S);
         let card = render(w, h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None, launchers: &[] };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None, launchers: &[], viz: Some(VIZ) };
             ui::draw_card(cv, &mut tr, &l, &f);
         });
         let img = render(w, h, |cv| {
@@ -198,11 +201,14 @@ fn shots() {
     {
         let variants = [
             // Só a música; o padrão (com os botões); pílula com aleatório e
-            // repetir; reto, neutro, com o play só no ícone.
+            // repetir; reto, neutro, com o play só no ícone e os ícones de contorno.
             Config { taskbar_controls: false, playing_indicator: false, ..Config::default() },
             Config::default(),
             Config { taskbar_shuffle_repeat: true, widget_divider: true, widget_shape: WidgetShape::Pill, ..Config::default() },
-            Config { taskbar_play: TaskbarPlay::Icon, widget_shape: WidgetShape::Square, widget_tint: WidgetTint::Neutral, ..Config::default() },
+            Config { taskbar_play: TaskbarPlay::Icon, widget_shape: WidgetShape::Square, widget_tint: WidgetTint::Neutral, icon_style: IconStyle::Fluent, ..Config::default() },
+            // Fundos fortes: gradiente da capa e capa desfocada.
+            Config { widget_tint: WidgetTint::Gradient, ..Config::default() },
+            Config { widget_tint: WidgetTint::Artwork, widget_shape: WidgetShape::Pill, taskbar_shuffle_repeat: true, ..Config::default() },
         ];
         let bar_h = 48.0 * S;
         let wh = 40.0 * S;
@@ -324,7 +330,7 @@ fn icon_frames() {
                 }
                 let card = render(cl.w, cl.h, |cv| {
                     let it = Interact { fx: IconFx::single(*h, age), ..Interact::default() };
-                    let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &[] };
+                    let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
                     ui::draw_card(cv, &mut tr, &cl, &f);
                 });
                 let (cw, _, px) = card;
@@ -467,7 +473,7 @@ fn card_launchers() {
         for hover in [None, Some(Hit::Launch(0))] {
             cards.push(render(cl.w, cl.h, |cv| {
                 let it = Interact { hover, ..Interact::default() };
-                let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &launchers };
+                let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &launchers, viz: Some(VIZ) };
                 ui::draw_card(cv, &mut tr, &cl, &f);
             }));
         }

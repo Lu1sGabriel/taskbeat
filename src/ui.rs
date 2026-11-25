@@ -67,6 +67,18 @@ pub struct Interact {
     pub drag: Option<Hit>,
     /// Animação dos ícones neste quadro.
     pub fx: IconFx,
+    /// Ícones de controle desenhados como formas preenchidas (Windows, opção
+    /// "Estilo dos ícones"); desligado, usa os glifos da fonte (o Mac sempre).
+    pub vector: bool,
+    /// Botão play com brilho na cor de destaque em vez da sombra preta (Windows).
+    pub glow: bool,
+}
+
+impl Interact {
+    /// O mesmo estado com o visual do Windows escolhido nas opções.
+    pub(crate) fn styled(self, cfg: &Config) -> Interact {
+        Interact { vector: cfg.icon_style == crate::config::IconStyle::Filled, glow: true, ..self }
+    }
 }
 
 // ---------------------------------------------------------------- ícones animados
@@ -245,20 +257,38 @@ fn pose(it: &Interact, h: Hit, s: f32) -> Pose {
     p
 }
 
-/// Ícone com pose (parado = desenho normal, alinhado aos pixels).
-pub(crate) fn glyph_pose(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32, p: Pose) {
-    if p == Pose::REST {
-        return glyph(cv, tr, r, g, font, c, a);
-    }
+/// Ícone com pose (parado = desenho normal, alinhado aos pixels). `vec_em`:
+/// tamanho do ícone em vetor (px), quando ele deve ser desenhado como forma.
+pub(crate) fn glyph_pose(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32, p: Pose, vec_em: Option<f32>) {
     let (w, h) = (r.w.round().max(1.0), r.h.round().max(1.0));
-    let m = tr.mask(g, font, w as i32, h as i32, Align::Center);
+    let m = match vec_em.zip(vicon_of(g)) {
+        Some((em, v)) => vector_mask(v, em, w as i32, h as i32),
+        None if p == Pose::REST => return glyph(cv, tr, r, g, font, c, a),
+        None => tr.mask(g, font, w as i32, h as i32, Align::Center),
+    };
+    if p == Pose::REST {
+        cv.blit_mask(r.x.round() as i32, r.y.round() as i32, &m, c, a);
+        return;
+    }
     // O símbolo está centrado na caixa: gira e escala em volta do centro dela.
     cv.blit_mask_xform(r.x.round() + p.dx, r.y.round(), &m, w / 2.0, h / 2.0, p.scale, p.rot, c, a * p.alpha);
 }
 
+/// Tamanho (px) do ícone em vetor equivalente a uma fonte de ícones, ou
+/// `None` se o quadro usa os glifos da fonte.
+fn vec_em(it: &Interact, font: Font, s: f32) -> Option<f32> {
+    let px = match font {
+        Font::IconSmall => 13.0,
+        Font::IconMd => 16.0,
+        Font::IconLg => 18.0,
+        _ => 15.0,
+    };
+    it.vector.then_some(px * s)
+}
+
 /// Ícone de um botão de controle (pular, play só ícone, volume), animado.
 pub(crate) fn ctrl_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32, it: &Interact, h: Hit, s: f32) {
-    glyph_pose(cv, tr, r, g, font, c, a, pose(it, h, s));
+    glyph_pose(cv, tr, r, g, font, c, a, pose(it, h, s), vec_em(it, font, s));
 }
 
 /// Play↔pausa animado: o ícone antigo encolhe e some, o novo cresce com um
@@ -266,19 +296,227 @@ pub(crate) fn ctrl_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &s
 fn play_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, playing: bool, font: Font, c: Rgb, a: f32, it: &Interact, s: f32) {
     let (now_g, old_g) = if playing { (G_PAUSE, G_PLAY) } else { (G_PLAY, G_PAUSE) };
     let base = pose(it, Hit::Play, s);
+    let em = vec_em(it, font, s);
     match it.fx.progress(Hit::Play) {
         Some(u) => {
             let out = (u / 0.4).min(1.0);
             if out < 1.0 {
                 let po = Pose { scale: base.scale * (1.0 - 0.5 * ease_out_cubic(out)), alpha: 1.0 - out, ..base };
-                glyph_pose(cv, tr, r, old_g, font, c, a, po);
+                glyph_pose(cv, tr, r, old_g, font, c, a, po, em);
             }
             let e = ease_out_back(((u - 0.12) / 0.88).clamp(0.0, 1.0));
             let pn = Pose { scale: base.scale * (0.45 + 0.55 * e), alpha: ((u - 0.12) / 0.3).clamp(0.0, 1.0), ..base };
-            glyph_pose(cv, tr, r, now_g, font, c, a, pn);
+            glyph_pose(cv, tr, r, now_g, font, c, a, pn, em);
         }
-        None => glyph_pose(cv, tr, r, now_g, font, c, a, base),
+        None => glyph_pose(cv, tr, r, now_g, font, c, a, base, em),
     }
+}
+
+// ---------------------------------------------------------------- ícones em vetor
+
+/// Ícones de controle desenhados como formas cheias e arredondadas (no lugar
+/// dos glifos finos de contorno do Segoe Fluent), no espírito dos símbolos
+/// preenchidos do macOS. Cada um vira uma máscara guardada por tamanho.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum VIcon {
+    Play,
+    Pause,
+    Prev,
+    Next,
+    Shuffle,
+    RepeatAll,
+    RepeatOne,
+    Mute,
+    Vol1,
+    Vol2,
+    Vol3,
+}
+
+fn vicon_of(g: &str) -> Option<VIcon> {
+    let all = [
+        (G_PLAY, VIcon::Play),
+        (G_PAUSE, VIcon::Pause),
+        (G_PREV, VIcon::Prev),
+        (G_NEXT, VIcon::Next),
+        (G_SHUFFLE, VIcon::Shuffle),
+        (G_REPEAT_ALL, VIcon::RepeatAll),
+        (G_REPEAT_ONE, VIcon::RepeatOne),
+        (G_MUTE, VIcon::Mute),
+        (G_VOL1, VIcon::Vol1),
+        (G_VOL2, VIcon::Vol2),
+        (G_VOL3, VIcon::Vol3),
+    ];
+    all.iter().find(|(s, _)| *s == g).map(|(_, v)| *v)
+}
+
+type Pt = (f32, f32);
+
+/// Distância de `p` ao segmento `a`–`b`.
+fn sd_seg(p: Pt, a: Pt, b: Pt) -> f32 {
+    let (pa, ba) = ((p.0 - a.0, p.1 - a.1), (b.0 - a.0, b.1 - a.1));
+    let h = ((pa.0 * ba.0 + pa.1 * ba.1) / (ba.0 * ba.0 + ba.1 * ba.1).max(1e-9)).clamp(0.0, 1.0);
+    (pa.0 - ba.0 * h).hypot(pa.1 - ba.1 * h)
+}
+
+/// Distância com sinal a um triângulo (negativa dentro).
+fn sd_tri(p: Pt, a: Pt, b: Pt, c: Pt) -> f32 {
+    let e = [(b.0 - a.0, b.1 - a.1), (c.0 - b.0, c.1 - b.1), (a.0 - c.0, a.1 - c.1)];
+    let v = [(p.0 - a.0, p.1 - a.1), (p.0 - b.0, p.1 - b.1), (p.0 - c.0, p.1 - c.1)];
+    let s = (e[0].0 * e[2].1 - e[0].1 * e[2].0).signum();
+    let mut d = (f32::MAX, f32::MAX);
+    for k in 0..3 {
+        let (ek, vk) = (e[k], v[k]);
+        let t = ((vk.0 * ek.0 + vk.1 * ek.1) / (ek.0 * ek.0 + ek.1 * ek.1)).clamp(0.0, 1.0);
+        let q = (vk.0 - ek.0 * t, vk.1 - ek.1 * t);
+        d.0 = d.0.min(q.0 * q.0 + q.1 * q.1);
+        d.1 = d.1.min(s * (vk.0 * ek.1 - vk.1 * ek.0));
+    }
+    -d.0.sqrt() * d.1.signum()
+}
+
+/// Distância com sinal a um retângulo arredondado (centro, meia largura/altura, raio).
+fn sd_box(p: Pt, c: Pt, half: Pt, r: f32) -> f32 {
+    rrect_sd((p.0 - c.0).abs() - (half.0 - r), (p.1 - c.1).abs() - (half.1 - r), r)
+}
+
+/// Distância a uma linha (polilinha) com meia espessura `hw`.
+fn sd_path(p: Pt, pts: &[Pt], hw: f32) -> f32 {
+    pts.windows(2).map(|w| sd_seg(p, w[0], w[1])).fold(f32::MAX, f32::min) - hw
+}
+
+/// Pontos de um arco (centro, raio, ângulos em graus; 0° = direita, sentido horário na tela).
+fn arc_pts(c: Pt, r: f32, a0: f32, a1: f32, n: usize) -> Vec<Pt> {
+    (0..=n).map(|i| (a0 + (a1 - a0) * i as f32 / n as f32).to_radians()).map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin())).collect()
+}
+
+/// Pontos de uma curva de Bézier cúbica.
+fn bezier_pts(p0: Pt, p1: Pt, p2: Pt, p3: Pt, n: usize) -> Vec<Pt> {
+    (0..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            let u = 1.0 - t;
+            let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            (a * p0.0 + b * p1.0 + c * p2.0 + d * p3.0, a * p0.1 + b * p1.1 + c * p2.1 + d * p3.1)
+        })
+        .collect()
+}
+
+/// Forma do ícone: distância com sinal (em "em", com o centro em 0,0 e y para baixo).
+struct Shape2 {
+    parts: Vec<Box<dyn Fn(Pt) -> f32>>,
+}
+
+impl Shape2 {
+    fn sd(&self, p: Pt) -> f32 {
+        self.parts.iter().map(|f| f(p)).fold(f32::MAX, f32::min)
+    }
+}
+
+fn vicon_shape(v: VIcon) -> Shape2 {
+    let mut parts: Vec<Box<dyn Fn(Pt) -> f32>> = Vec::new();
+    let tri = |a: Pt, b: Pt, c: Pt, r: f32| -> Box<dyn Fn(Pt) -> f32> { Box::new(move |p| sd_tri(p, a, b, c) - r) };
+    let path = |pts: Vec<Pt>, hw: f32| -> Box<dyn Fn(Pt) -> f32> { Box::new(move |p| sd_path(p, &pts, hw)) };
+    // Alto-falante (volume) deslocado para a esquerda; as ondas saem dele.
+    let speaker = |parts: &mut Vec<Box<dyn Fn(Pt) -> f32>>, dx: f32| {
+        parts.push(Box::new(move |p| sd_box(p, (-0.36 + dx, 0.0), (0.10, 0.15), 0.04)));
+        parts.push(tri((-0.31 + dx, -0.13), (-0.08 + dx, -0.37), (-0.08 + dx, 0.37), 0.035));
+        parts.push(tri((-0.31 + dx, -0.13), (-0.08 + dx, 0.37), (-0.31 + dx, 0.13), 0.035));
+    };
+    match v {
+        VIcon::Play => parts.push(tri((-0.29, -0.38), (-0.29, 0.38), (0.39, 0.0), 0.07)),
+        VIcon::Pause => {
+            for cx in [-0.19, 0.19] {
+                parts.push(Box::new(move |p| sd_box(p, (cx, 0.0), (0.12, 0.40), 0.07)));
+            }
+        }
+        VIcon::Next | VIcon::Prev => {
+            let k = if v == VIcon::Next { 1.0 } else { -1.0 };
+            for x0 in [-0.44, 0.0] {
+                parts.push(tri((k * x0, -0.31), (k * x0, 0.31), (k * (x0 + 0.42), 0.0), 0.05));
+            }
+        }
+        VIcon::Shuffle => {
+            let hw = 0.065;
+            for sy in [1.0f32, -1.0] {
+                let pts = bezier_pts((-0.46, 0.27 * sy), (-0.06, 0.27 * sy), (0.02, -0.27 * sy), (0.30, -0.27 * sy), 14);
+                parts.push(path(pts, hw));
+                parts.push(tri((0.27, -0.27 * sy - 0.15), (0.27, -0.27 * sy + 0.15), (0.49, -0.27 * sy), 0.03));
+            }
+        }
+        VIcon::RepeatAll | VIcon::RepeatOne => {
+            let hw = 0.07;
+            for k in [1.0f32, -1.0] {
+                // Topo (k = 1): sobe pela esquerda, faz a curva e segue para a direita com a seta.
+                let mut pts = vec![(-0.46 * k, 0.15 * k)];
+                pts.extend(arc_pts((-0.26 * k, -0.09 * k), 0.20, if k > 0.0 { 180.0 } else { 0.0 }, if k > 0.0 { 270.0 } else { 90.0 }, 8));
+                pts.push((0.30 * k, -0.29 * k));
+                parts.push(path(pts, hw));
+                parts.push(tri((0.28 * k, -0.29 * k - 0.17), (0.28 * k, -0.29 * k + 0.17), (0.52 * k, -0.29 * k), 0.03));
+            }
+            if v == VIcon::RepeatOne {
+                parts.push(path(vec![(-0.07, -0.06), (0.02, -0.13), (0.02, 0.13)], 0.055));
+            }
+        }
+        VIcon::Mute => {
+            speaker(&mut parts, 0.0);
+            parts.push(path(vec![(0.10, -0.13), (0.36, 0.13)], 0.055));
+            parts.push(path(vec![(0.10, 0.13), (0.36, -0.13)], 0.055));
+        }
+        VIcon::Vol1 | VIcon::Vol2 | VIcon::Vol3 => {
+            let n = match v {
+                VIcon::Vol1 => 1,
+                VIcon::Vol2 => 2,
+                _ => 3,
+            };
+            let dx = -0.04 * (n - 1) as f32;
+            speaker(&mut parts, dx);
+            for i in 0..n {
+                let r = 0.17 + 0.15 * i as f32;
+                parts.push(path(arc_pts((-0.06 + dx, 0.0), r, -48.0, 48.0, 10), 0.05));
+            }
+        }
+    }
+    Shape2 { parts }
+}
+
+/// Máscaras dos ícones em vetor já feitas: (ícone, tamanho, caixa).
+type VMaskCache = std::collections::HashMap<(VIcon, u32, i32, i32), std::rc::Rc<Mask>>;
+
+thread_local! {
+    static VMASKS: RefCell<VMaskCache> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Máscara do ícone `v` com `em` px, centrado numa caixa `w`×`h` (guardada).
+fn vector_mask(v: VIcon, em: f32, w: i32, h: i32) -> std::rc::Rc<Mask> {
+    let key = (v, em.to_bits(), w, h);
+    if let Some(m) = VMASKS.with(|c| c.borrow().get(&key).cloned()) {
+        return m;
+    }
+    let shape = vicon_shape(v);
+    let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    let mut cov = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            // Cobertura pela distância à borda (em pixels), com 4 amostras por
+            // pixel: bordas e pontas finas ficam lisas mesmo nos ícones pequenos.
+            let mut acc = 0.0;
+            for (ox, oy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+                let p = ((x as f32 + ox - cx) / em, (y as f32 + oy - cy) / em);
+                acc += (0.5 - shape.sd(p) * em * 2.0).clamp(0.0, 1.0);
+            }
+            cov[y * w + x] = (acc / 4.0 * 255.0 + 0.5) as u8;
+        }
+    }
+    let m = std::rc::Rc::new(Mask { w, h, cov });
+    VMASKS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 64 {
+            c.clear();
+        }
+        c.insert(key, m.clone());
+    });
+    m
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -460,6 +698,8 @@ fn blurred_cached(img: &Arc<Image>, wash: bool) -> Arc<Image> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LayerTag {
     Widget,
+    Card,
+    UpNext,
 }
 
 struct Layer {
@@ -486,8 +726,7 @@ fn rect_bits(r: RectF) -> [u32; 4] {
 /// Compõe a camada `key` (do tamanho do canvas) com opacidade `alpha`,
 /// desenhando-a antes com `draw` se ainda não estiver guardada. Guarda até
 /// duas por tipo (a troca de capa anima entre a antiga e a nova).
-/// `replace`: o canvas acabou de ser limpo, então a camada é copiada em vez de composta.
-fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, replace: bool, draw: impl FnOnce(&mut Canvas)) {
+fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, draw: impl FnOnce(&mut Canvas)) {
     let (w, h) = (cv.w, cv.h);
     LAYERS.with(|cell| {
         let mut layers = cell.borrow_mut();
@@ -505,12 +744,13 @@ fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, replace: b
             }
         };
         let l = &layers[i];
-        if replace && alpha >= 0.999 {
-            cv.copy_from(0, 0, &l.px, l.w, l.h, 0);
-        } else {
-            cv.composite(0, 0, &l.px, l.w, l.h, alpha);
-        }
+        cv.composite(0, 0, &l.px, l.w, l.h, alpha);
     });
+}
+
+/// Libera as camadas guardadas de um tipo (ex.: o card fechou).
+pub fn forget_layers(tag: LayerTag) {
+    LAYERS.with(|cell| cell.borrow_mut().retain(|l| l.tag != tag));
 }
 
 pub fn glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32) {
@@ -646,10 +886,25 @@ pub(crate) fn play_button(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, size
         Shape::Square => 4.0 * s,
     };
     let en = if enabled { 1.0 } else { 0.35 };
-    if enabled {
-        cv.drop_shadow(b, radius, 8.0 * s, 2.0 * s, if th.dark { 0.35 } else { 0.18 });
+    if it.glow {
+        // Windows: brilho suave na cor do botão por baixo dele e um degradê
+        // discreto (mais claro em cima), como um botão com volume.
+        if enabled {
+            let big = size > 30.0 * s;
+            let (blur, dy) = if big { (16.0 * s, 5.0 * s) } else { (9.0 * s, 2.5 * s) };
+            cv.glow(b, radius, blur, dy, th.accent, (if th.dark { 0.55 } else { 0.42 }) * if hot { 1.25 } else { 1.0 });
+            cv.drop_shadow(b, radius, 4.0 * s, 1.0 * s, if th.dark { 0.25 } else { 0.10 });
+        }
+        let (top, bot) = (lerp3(th.accent, [1.0; 3], 0.14), lerp3(th.accent, [0.0; 3], 0.06));
+        let (y0, h) = (b.y, b.h);
+        cv.fill_rrect_ca(b.x, b.y, b.right(), b.bottom(), radius, |_, y| (lerp3(top, bot, ((y - y0) / h).clamp(0.0, 1.0)), en));
+        cv.stroke_round(b, radius, s, [1.0; 3], 0.12 * en);
+    } else {
+        if enabled {
+            cv.drop_shadow(b, radius, 8.0 * s, 2.0 * s, if th.dark { 0.35 } else { 0.18 });
+        }
+        cv.fill_round(b, radius, th.accent, en);
     }
-    cv.fill_round(b, radius, th.accent, en);
     // Caixa do ícone no tamanho normal (o mesmo desenho em cache em qualquer quadro).
     let font = if size > 30.0 * s { Font::Icon } else { Font::IconSmall };
     let gb = RectF::new(r.cx() - size / 2.0, r.cy() - size / 2.0, size, size);
@@ -666,11 +921,15 @@ pub(crate) fn toggle_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: 
 }
 
 pub(crate) fn slider(cv: &mut Canvas, x0: f32, x1: f32, cy: f32, t: f32, th: &Theme, hot: bool, thumb: bool, s: f32) {
-    let h = 4.0 * s;
-    cv.fill_rrect(x0, cy - h / 2.0, x1, cy + h / 2.0, h / 2.0, if th.dark { 0.24 } else { 0.18 }, th.fg);
+    // Engrossa sob o mouse; a parte cheia tem um brilho suave da própria cor.
+    let h = if hot { 6.0 * s } else { 4.0 * s };
+    cv.fill_rrect(x0, cy - h / 2.0, x1, cy + h / 2.0, h / 2.0, if th.dark { 0.22 } else { 0.16 }, th.fg);
     let xv = x0 + (x1 - x0) * t.clamp(0.0, 1.0);
     if xv > x0 + 0.5 {
-        cv.fill_rrect(x0, cy - h / 2.0, xv, cy + h / 2.0, h / 2.0, 1.0, th.accent);
+        let bar = RectF::new(x0, cy - h / 2.0, xv - x0, h);
+        cv.glow(bar, h / 2.0, 7.0 * s, 0.0, th.accent, if th.dark { 0.30 } else { 0.18 });
+        let (a, b) = (lerp3(th.accent, th.fg, 0.10), th.accent);
+        cv.fill_rrect_ca(bar.x, bar.y, bar.right(), bar.bottom(), h / 2.0, |x, _| (lerp3(a, b, ((x - x0) / (xv - x0).max(1.0)).clamp(0.0, 1.0)), 1.0));
     }
     if thumb {
         let ring = if th.dark { [0.24, 0.24, 0.25] } else { [1.0; 3] };
@@ -965,7 +1224,7 @@ fn rich_widget_bg(cv: &mut Canvas, l: &WLayout, f: &WidgetFrame, m: &MediaInfo, 
         (cfg.widget_intensity, cfg.widget_glow, light),
     ));
     let radius = l.radius;
-    cached_layer(cv, LayerTag::Widget, key, alpha, false, |cv| {
+    cached_layer(cv, LayerTag::Widget, key, alpha, |cv| {
         let (c0, c1, glow) = rich_gradient(base, light);
         let reach = bg.h * 1.5;
         let glow_a = if cfg.widget_glow { if light { 0.55 } else { 0.62 } } else { 0.0 };
@@ -1014,6 +1273,7 @@ fn rich_widget_bg(cv: &mut Canvas, l: &WLayout, f: &WidgetFrame, m: &MediaInfo, 
 
 pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &WidgetFrame) {
     let (s, th, m, cfg) = (f.s, &f.theme, f.media, f.cfg);
+    let it = f.it.styled(cfg);
     // Fundo único com tudo dentro; o card aberto deixa o fundo um pouco mais forte.
     if let Some(bg) = l.bg {
         if cfg.widget_tint.is_rich() {
@@ -1112,22 +1372,22 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
     // Aleatório/repetir: apagados quando o player não deixa mudar pelo Windows.
     if let Some(r) = l.shuffle {
-        toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &f.it, Hit::Shuffle);
+        toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &it, Hit::Shuffle);
     }
     if let Some(r) = l.prev {
-        ctrl_glyph(cv, tr, r, G_PREV, Font::IconSmall, th.fg, dim(m.can_prev), &f.it, Hit::Prev, s);
+        ctrl_glyph(cv, tr, r, G_PREV, Font::IconSmall, th.fg, dim(m.can_prev), &it, Hit::Prev, s);
     }
     if let Some(r) = l.play {
         match cfg.taskbar_play {
-            TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s),
-            TaskbarPlay::Icon => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, th.fg, dim(m.can_toggle), &f.it, s),
+            TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, th, &it, f.pb.playing, m.can_toggle, s),
+            TaskbarPlay::Icon => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, th.fg, dim(m.can_toggle), &it, s),
         }
     }
     if let Some(r) = l.next {
-        ctrl_glyph(cv, tr, r, G_NEXT, Font::IconSmall, th.fg, dim(m.can_next), &f.it, Hit::Next, s);
+        ctrl_glyph(cv, tr, r, G_NEXT, Font::IconSmall, th.fg, dim(m.can_next), &it, Hit::Next, s);
     }
     if let Some(r) = l.repeat {
-        toggle_glyph(cv, tr, r, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &f.it, Hit::Repeat);
+        toggle_glyph(cv, tr, r, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &it, Hit::Repeat);
     }
     if let (Some(r), Some((values, peaks))) = (l.viz, f.viz) {
         draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s });
@@ -1275,28 +1535,40 @@ impl CLayout {
 /// Sombra + fundo do card no estilo escolhido. `backdrop`: o que está atrás,
 /// já desfocado (estilo acrílico); sem ele o acrílico vira um vidro sólido.
 pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32, backdrop: Option<&Image>) {
-    cv.drop_shadow(card, radius, 24.0 * s, 8.0 * s, if th.dark { 0.55 } else { 0.22 });
+    cv.drop_shadow(card, radius, 28.0 * s, 10.0 * s, if th.dark { 0.58 } else { 0.24 });
+    cv.drop_shadow(card, radius, 6.0 * s, 1.5 * s, if th.dark { 0.30 } else { 0.10 });
+    let (x0, y0, w, h) = (card.x, card.y, card.w, card.h);
+    // Posição relativa (0..1) e distância ao centro, para as luzes e a vinheta.
+    let rel = move |x: f32, y: f32| (((x - x0) / w).clamp(0.0, 1.0), ((y - y0) / h).clamp(0.0, 1.0));
     match (cfg.card_style, &media.art) {
         (CardStyle::Artwork, Some(art)) => {
             let b = blurred(art);
             cv.draw_image_cover(card, &b, radius, 1.0);
-            // Escurece mais embaixo para o texto e os controles ficarem legíveis.
-            let (y0, h) = (card.y, card.h);
-            cv.fill_rrect_ca(card.x, card.y, card.right(), card.bottom(), radius, |_, y| {
-                let t = ((y - y0) / h).clamp(0.0, 1.0);
-                ([0.02, 0.02, 0.03], 0.38 + 0.30 * t)
+            // Película escura (mais forte embaixo, onde ficam os controles), um
+            // pouco da cor viva da capa no alto à esquerda e vinheta nas bordas.
+            let glow = readable(art.vibrant, true);
+            cv.fill_rrect_ca(x0, y0, card.right(), card.bottom(), radius, |x, y| {
+                let (u, v) = rel(x, y);
+                let light = (-(((u - 0.18) * 2.0).powi(2) + ((v - 0.15) * 2.2).powi(2))).exp();
+                let edge = ((u - 0.5).powi(2) * 1.6 + (v - 0.5).powi(2) * 2.2).min(1.0);
+                let c = lerp3([0.02, 0.02, 0.03], glow, 0.22 * light);
+                (c, (0.34 + 0.30 * v + 0.30 * edge - 0.10 * light).clamp(0.0, 0.92))
             });
-            cv.stroke_round(card, radius, s, [1.0; 3], 0.12);
         }
         (CardStyle::AlbumColor, _) | (CardStyle::Artwork, None) => {
             let bg = album_bg(cfg, colors, media);
-            let (y0, h) = (card.y, card.h);
             let dark = th.dark;
-            cv.fill_rrect_ca(card.x, card.y, card.right(), card.bottom(), radius, |_, y| {
-                let t = ((y - y0) / h).clamp(0.0, 1.0);
-                (lerp3(bg, if dark { [0.0; 3] } else { [1.0; 3] }, 0.25 * t), 1.0)
+            let vib = media.art.as_ref().map(|a| a.vibrant).unwrap_or(th.accent);
+            let glow = if dark { readable(vib, true) } else { lerp3(vib, [1.0; 3], 0.35) };
+            let far: Rgb = if dark { [0.0; 3] } else { [1.0; 3] };
+            cv.fill_rrect_ca(x0, y0, card.right(), card.bottom(), radius, |x, y| {
+                let (u, v) = rel(x, y);
+                // Luz da cor da capa no alto à esquerda (onde está a capa), fundo
+                // mais profundo na diagonal oposta.
+                let light = (-(((u - 0.16) * 1.8).powi(2) + ((v - 0.2) * 2.0).powi(2))).exp();
+                let c = lerp3(bg, far, 0.32 * ((u * 0.45 + v * 0.55) - 0.2).clamp(0.0, 1.0));
+                (lerp3(c, glow, (if dark { 0.30 } else { 0.22 }) * light), 1.0)
             });
-            cv.stroke_round(card, radius, s, if dark { [1.0; 3] } else { [0.0; 3] }, 0.10);
         }
         (CardStyle::Glass, _) => {
             let base: Rgb = if th.dark { [0.12, 0.12, 0.13] } else { [0.96, 0.96, 0.965] };
@@ -1306,9 +1578,16 @@ pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, 
                 Some(b) => acrylic(cv, card, radius, b, c, if th.dark { 0.70 } else { 0.66 }),
                 None => cv.fill_round(card, radius, c, 0.96),
             }
-            cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.12 } else { 0.08 });
         }
     }
+    // Granulado fino (tira o aspecto de "plástico" dos degradês), reflexo no
+    // alto e contorno.
+    if cfg.card_style != CardStyle::Glass {
+        cv.grain(card, radius, if th.dark { 0.022 } else { 0.014 });
+    }
+    cv.fill_rrect_ca(x0, y0, card.right(), card.bottom(), radius, |_, y| ([1.0; 3], if y < y0 + 1.5 * s { 0.10 } else { 0.0 }));
+    let line: Rgb = if th.dark || cfg.card_style == CardStyle::Artwork { [1.0; 3] } else { [0.0; 3] };
+    cv.stroke_round(card, radius, s, line, if th.dark { 0.12 } else { 0.08 });
 }
 
 /// Selo com ícone + nome do app de origem ("de onde vem a música").
@@ -1358,6 +1637,8 @@ pub struct CardFrame<'a> {
     pub hint: Option<(&'a str, f32)>,
     /// Apps de música instalados (atalhos embaixo do card, em `l.launch`).
     pub launchers: &'a [crate::shared::Launcher],
+    /// Barras de áudio (mini visualizador ao lado do título), se ligadas.
+    pub viz: Option<&'a [f32]>,
 }
 
 /// Sombra da capa: brilho na cor dela + sombra curta, como capas "flutuando".
@@ -1366,26 +1647,56 @@ pub(crate) fn art_shadow(cv: &mut Canvas, r: RectF, radius: f32, art: &Image, th
     cv.drop_shadow(r, radius, 12.0 * s, 4.0 * s, if th.dark { 0.40 } else { 0.22 });
 }
 
+/// Mini barras de áudio do card (até 7, na cor de destaque, mais claras em cima).
+fn card_bars(cv: &mut Canvas, r: RectF, values: &[f32], th: &Theme, s: f32) {
+    if values.is_empty() {
+        return;
+    }
+    let n = values.len().min(7);
+    let chunk = values.len().div_ceil(n);
+    let slot = r.w / n as f32;
+    let bw = (slot * 0.58).max(2.0 * s);
+    let top = lerp3(th.accent, [1.0; 3], if th.dark { 0.35 } else { 0.0 });
+    let (y1, h) = (r.bottom(), r.h);
+    for i in 0..n {
+        let v = values[i * chunk..((i + 1) * chunk).min(values.len())].iter().copied().fold(0.0f32, f32::max);
+        let bh = (3.0 * s + v.clamp(0.0, 1.0) * (h - 3.0 * s)).round();
+        let x = r.x + i as f32 * slot + (slot - bw) / 2.0;
+        cv.fill_rrect_ca(x, y1 - bh, x + bw, y1, bw / 2.0, |_, y| (lerp3(th.accent, top, ((y1 - y) / h).clamp(0.0, 1.0)), 1.0));
+    }
+}
+
 pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFrame) {
     let (s, th, m, cfg) = (f.s, &f.theme, f.media, f.cfg);
-    card_background(cv, l.card, l.radius, cfg, f.colors, m, th, s, f.backdrop);
+    let it = f.it.styled(cfg);
 
-    // Capa com sombra.
+    // Fundo, sombra e capa não mudam de um quadro para o outro: ficam numa
+    // camada guardada e os quadros seguintes só a compõem.
     let art_r = (l.radius * 0.6).max(6.0 * s);
-    if let Some(a) = &m.art {
-        art_shadow(cv, l.art, art_r, a, th, s);
-    }
     let art_shape = if cfg.cover_shape == Shape::Circle && !l.vertical { Shape::Circle } else { Shape::Rounded };
-    match art_shape {
-        Shape::Circle => draw_art(cv, tr, l.art, m, th, Shape::Circle, s, cfg.show_source.then_some(0.0)),
-        _ => match &m.art {
-            Some(a) => {
-                cv.draw_image_cover(l.art, a, art_r, 1.0);
-                cv.stroke_round(l.art, art_r, s, [1.0; 3], 0.10);
-            }
-            None => draw_art(cv, tr, l.art, m, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
-        },
-    }
+    let key = layer_key((
+        (cfg.card_style as u8, art_shape as u8, cfg.show_source, l.vertical),
+        (rect_bits(l.card), rect_bits(l.art), l.radius.to_bits()),
+        (m.art.as_ref().map(|a| Arc::as_ptr(a) as usize), m.icon.as_ref().map(|a| Arc::as_ptr(a) as usize)),
+        (th.dark, th.accent.map(f32::to_bits), th.fg.map(f32::to_bits), f.colors.accent.map(f32::to_bits)),
+        f.backdrop.map(|b| b as *const Image as usize),
+    ));
+    cached_layer(cv, LayerTag::Card, key, 1.0, |cv| {
+        card_background(cv, l.card, l.radius, cfg, f.colors, m, th, s, f.backdrop);
+        if let Some(a) = &m.art {
+            art_shadow(cv, l.art, art_r, a, th, s);
+        }
+        match art_shape {
+            Shape::Circle => draw_art(cv, tr, l.art, m, th, Shape::Circle, s, cfg.show_source.then_some(0.0)),
+            _ => match &m.art {
+                Some(a) => {
+                    cv.draw_image_cover(l.art, a, art_r, 1.0);
+                    cv.stroke_round(l.art, art_r, s, [1.0; 3], 0.10);
+                }
+                None => draw_art(cv, tr, l.art, m, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
+            },
+        }
+    });
 
     // App, título, artista.
     if cfg.show_source {
@@ -1398,9 +1709,20 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     } else {
         m.title.clone()
     };
+    // Mini barras de áudio na ponta direita da linha do título (como no Mac).
+    let bars_w = 30.0 * s;
+    let bars = f.viz.filter(|_| cfg.card_viz && m.present());
+    let title_w = |r: RectF| if bars.is_some() { RectF { w: r.w - bars_w - 10.0 * s, ..r } } else { r };
+    let draw_bars = |cv: &mut Canvas, t: RectF| {
+        if let Some(v) = bars {
+            card_bars(cv, RectF::new(t.right() - bars_w, t.y + 3.0 * s, bars_w, t.h - 5.0 * s), v, th, s);
+        }
+    };
     if l.vertical {
         // Coluna larga: "Artista · Álbum" numa linha só.
-        text(cv, tr, &title, Font::CardTitle, l.title.x, l.title.y, l.title.w, l.title.h, th.fg, 1.0);
+        let t = title_w(l.title);
+        text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
+        draw_bars(cv, l.title);
         text(cv, tr, &artist_album(m), Font::Subtitle, l.artist.x, l.artist.y, l.artist.w, l.artist.h, th.fg, 0.72);
     } else {
         // Álbum numa terceira linha; o bloco sobe metade dela para seguir centralizado.
@@ -1408,8 +1730,9 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let sub = artist_album(m);
         let album = (sub != m.artist && !m.artist.is_empty() && !cfg.show_source).then(|| m.album.trim());
         let dy = if album.is_some() { -8.0 * s } else { 0.0 };
-        let (t, a) = (l.title.offset(0.0, dy), l.artist.offset(0.0, dy));
+        let (t, a) = (title_w(l.title.offset(0.0, dy)), l.artist.offset(0.0, dy));
         text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
+        draw_bars(cv, l.title.offset(0.0, dy));
         text(cv, tr, if m.artist.is_empty() || cfg.show_source { &sub } else { &m.artist }, Font::Subtitle, a.x, a.y, a.w, a.h, th.fg, 0.72);
         if let Some(album) = album {
             text(cv, tr, album, Font::Small, a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s, th.fg, 0.52);
@@ -1439,13 +1762,13 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     }
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
     if m.can_shuffle || always {
-        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &f.it, Hit::Shuffle);
+        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &it, Hit::Shuffle);
     }
-    ctrl_glyph(cv, tr, l.prev, G_PREV, Font::Icon, th.fg, dim(m.can_prev), &f.it, Hit::Prev, s);
-    play_button(cv, tr, l.play, l.play_size, cfg.play_shape, th, &f.it, f.pb.playing, m.can_toggle, s);
-    ctrl_glyph(cv, tr, l.next, G_NEXT, Font::Icon, th.fg, dim(m.can_next), &f.it, Hit::Next, s);
+    ctrl_glyph(cv, tr, l.prev, G_PREV, Font::Icon, th.fg, dim(m.can_prev), &it, Hit::Prev, s);
+    play_button(cv, tr, l.play, l.play_size, cfg.play_shape, th, &it, f.pb.playing, m.can_toggle, s);
+    ctrl_glyph(cv, tr, l.next, G_NEXT, Font::Icon, th.fg, dim(m.can_next), &it, Hit::Next, s);
     if m.can_repeat || always {
-        toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &f.it, Hit::Repeat);
+        toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &it, Hit::Repeat);
     }
 
     // Progresso com tempos embaixo.
@@ -1474,7 +1797,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         } else {
             G_VOL3
         };
-        ctrl_glyph(cv, tr, b, g, Font::IconSmall, th.fg, 0.9, &f.it, Hit::VolBtn, s);
+        ctrl_glyph(cv, tr, b, g, Font::IconSmall, th.fg, 0.9, &it, Hit::VolBtn, s);
         let hot = f.it.hover == Some(Hit::Vol) || f.it.drag == Some(Hit::Vol);
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, true, s);
     }
@@ -1550,7 +1873,13 @@ pub fn upnext_card(s: f32) -> RectF {
 pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32, t: f32, total: f32, backdrop: Option<&Image>) {
     let card = upnext_card(s);
     let radius = cfg.corners.radius() * s;
-    card_background(cv, card, radius, cfg, colors, media, th, s, backdrop);
+    let key = layer_key((
+        (cfg.card_style as u8, rect_bits(card), radius.to_bits()),
+        media.art.as_ref().map(|a| Arc::as_ptr(a) as usize),
+        (th.dark, th.accent.map(f32::to_bits), colors.accent.map(f32::to_bits)),
+        backdrop.map(|b| b as *const Image as usize),
+    ));
+    cached_layer(cv, LayerTag::UpNext, key, 1.0, |cv| card_background(cv, card, radius, cfg, colors, media, th, s, backdrop));
 
     let pad = 14.0 * s;
     let full = card.h - 2.0 * pad;
@@ -1937,7 +2266,7 @@ mod tests {
         let mut px = vec![0u32; w * h];
         {
             let mut cv = Canvas::new(w, h, &mut px);
-            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[] };
+            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[], viz: None };
             draw_card(&mut cv, &mut tr, &l, &f);
         }
         let mut s = stray(&px, w, h);
@@ -1962,7 +2291,7 @@ mod tests {
             let mut px = vec![0u32; w * h];
             {
                 let mut cv = Canvas::new(w, h, &mut px);
-                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[] };
+                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[], viz: None };
                 draw_card(&mut cv, &mut tr, &l, &f);
             }
             let st = stray(&px, w, h);
