@@ -100,6 +100,8 @@ pub struct WebState {
     pub aumid: String,
     /// Botão de embaralhar achado.
     pub shuffle: bool,
+    /// Aleatório ligado na página (lido da cor do botão), se deu para ler.
+    pub shuffle_on: Option<bool>,
     /// Estado do repetir lido do botão (0 = desligado, 1 = uma, 2 = tudo).
     pub repeat: Option<u8>,
 }
@@ -112,7 +114,7 @@ impl WebState {
         }
         if !m.can_shuffle && self.shuffle {
             m.can_shuffle = true;
-            m.shuffle = false;
+            m.shuffle = self.shuffle_on.unwrap_or(false);
             m.web_shuffle = true;
         }
         if let (false, Some(r)) = (m.can_repeat, self.repeat) {

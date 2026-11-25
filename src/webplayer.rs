@@ -9,8 +9,11 @@
 //! tudo", "Repetir uma"…). O elemento em volta de cada botão tem uma classe
 //! que não muda com o idioma (`repeat style-scope ytmusic-player-bar`).
 //!
-//! No YouTube Music o aleatório não é um modo: cada clique embaralha a fila de
-//! novo. O repetir é um ciclo: desativado → tudo → uma.
+//! O aleatório do YouTube Music liga e desliga, mas a página não conta isso à
+//! acessibilidade (o botão se chama sempre "Ordem aleatória"): o ícone fica
+//! branco ligado e cinza desligado, e é essa cor que é lida, num retrato da
+//! janela (`PrintWindow`, sem trazê-la para a frente). O repetir é um ciclo
+//! (desativado → tudo → uma), lido do nome do botão.
 //!
 //! Roda numa thread própria: o navegador pode levar alguns segundos para
 //! responder à primeira consulta (ele só monta a árvore de acessibilidade
@@ -50,7 +53,7 @@ pub fn spawn(shared: Arc<Shared>) {
             log::warn("UI Automation indisponível: aleatório/repetir de navegador desligados");
             return;
         };
-        let mut w = Worker { uia, found: None, miss: None, assumed: None };
+        let mut w = Worker { uia, found: None, miss: None, assumed: None, shuffle_on: None };
         while shared.is_running() {
             let cmd = match rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(c) => c,
@@ -88,6 +91,8 @@ struct Worker {
     /// Clique no repetir que a página ainda não mostrou: (sessão, nome do
     /// botão na hora do clique, estado esperado).
     assumed: Option<(String, String, u8)>,
+    /// Último estado do aleatório lido na página (sessão, ligado).
+    shuffle_on: Option<(String, bool)>,
 }
 
 /// Próximo estado do repetir no ciclo do YouTube Music: desativado → tudo → uma.
@@ -113,10 +118,28 @@ impl Worker {
             return WebState { aumid: aumid.into(), ..Default::default() };
         };
         let (hwnd, shuffle, repeat) = (f.hwnd, f.shuffle.clone(), f.repeat.clone());
+        let lit = || shuffle.as_ref().and_then(|b| shuffle_lit(hwnd, b));
+        // Estado do aleatório: lido ao procurar (música nova) e depois de apertar.
+        let mut shuffle_on = match cmd {
+            WebCmd::Repeat { .. } => self.shuffle_on.as_ref().filter(|(a, _)| a == aumid).map(|(_, on)| *on),
+            _ => None,
+        };
         match cmd {
             WebCmd::Shuffle { .. } => {
+                let before = lit();
                 let ok = shuffle.as_ref().is_some_and(|b| invoke(b, hwnd));
-                log::info(&format!("aleatório pela página do player ({aumid}): {ok} em {:?}", t0.elapsed()));
+                // Espera o ícone mudar de cor (o estado novo).
+                for wait in [300, 400, 600] {
+                    if !ok {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(wait));
+                    shuffle_on = lit();
+                    if shuffle_on.is_some() && shuffle_on != before {
+                        break;
+                    }
+                }
+                log::info(&format!("aleatório pela página do player ({aumid}): {ok}, {before:?} → {shuffle_on:?} em {:?}", t0.elapsed()));
             }
             WebCmd::Repeat { .. } => {
                 if let Some(b) = &repeat {
@@ -138,10 +161,13 @@ impl Worker {
                     log::info(&format!("repetir pela página do player ({aumid}): {ok}, \"{before}\" → \"{after}\" em {:?}", t0.elapsed()));
                 }
             }
-            WebCmd::Probe { .. } => {}
+            WebCmd::Probe { .. } => shuffle_on = lit(),
+        }
+        if let Some(on) = shuffle_on {
+            self.shuffle_on = Some((aumid.to_string(), on));
         }
         let repeat = repeat.as_ref().and_then(|b| self.repeat_now(aumid, &name(b)));
-        WebState { aumid: aumid.into(), shuffle: shuffle.is_some(), repeat }
+        WebState { aumid: aumid.into(), shuffle: shuffle.is_some(), shuffle_on, repeat }
     }
 
     /// Estado do repetir: o do nome do botão, ou o esperado depois de um
@@ -234,6 +260,67 @@ impl Worker {
             // O próprio grupo também aceita o clique, se o botão não vier.
             Some(first.filter(|e| e.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId).is_ok()).unwrap_or(group))
         }
+    }
+}
+
+/// O aleatório está ligado na página? O ícone fica branco ligado e cinza
+/// desligado (medido no YouTube Music: ligado, dezenas de pixels em 255;
+/// desligado, nenhum acima de ~150). Lido num retrato da janela feito pelo
+/// próprio navegador (`PrintWindow`), que funciona com ela coberta. `None`:
+/// minimizada ou sem retrato.
+fn shuffle_lit(hwnd: HWND, button: &IUIAutomationElement) -> Option<bool> {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic};
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            return None;
+        }
+        let r = button.CurrentBoundingRectangle().ok()?;
+        let mut wr = RECT::default();
+        GetWindowRect(hwnd, &mut wr).ok()?;
+        let (ww, wh) = (wr.right - wr.left, wr.bottom - wr.top);
+        if ww <= 0 || wh <= 0 || r.right <= r.left || r.bottom <= r.top {
+            return None;
+        }
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(Some(screen));
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: ww, biHeight: -wh, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let Ok(bmp) = CreateDIBSection(Some(dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+            return None;
+        };
+        let old = SelectObject(dc, bmp.into());
+        // 2 = PW_RENDERFULLCONTENT (o conteúdo do navegador, mesmo coberto).
+        let ok = PrintWindow(hwnd, dc, PRINT_WINDOW_FLAGS(2)).as_bool();
+        let mut bright = 0;
+        if ok && !bits.is_null() {
+            let px = std::slice::from_raw_parts(bits as *const u32, (ww * wh) as usize);
+            // O miolo do botão (sem a borda, onde fica o anel de foco).
+            let (bw, bh) = (r.right - r.left, r.bottom - r.top);
+            let (x0, x1) = ((r.left - wr.left + bw / 5).max(0), (r.right - wr.left - bw / 5).min(ww));
+            let (y0, y1) = ((r.top - wr.top + bh / 5).max(0), (r.bottom - wr.top - bh / 5).min(wh));
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let p = px[(y * ww + x) as usize];
+                    let (r, g, b) = ((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
+                    if r.min(g).min(b) >= 215 {
+                        bright += 1;
+                    }
+                }
+            }
+        }
+        SelectObject(dc, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(dc);
+        ReleaseDC(None, screen);
+        ok.then_some(bright >= 8)
     }
 }
 
@@ -339,11 +426,58 @@ mod tests {
         let aumid = s.SourceAppUserModelId().unwrap().to_string();
         let title = s.TryGetMediaPropertiesAsync().and_then(|op| op.join()).and_then(|p| p.Title()).map(|t| t.to_string()).unwrap_or_default();
         let uia = unsafe { windows::Win32::System::Com::CoCreateInstance::<_, super::IUIAutomation>(&super::CUIAutomation8, None, super::CLSCTX_INPROC_SERVER) }.unwrap();
-        let mut w = super::Worker { uia, found: None, miss: None, assumed: None };
+        let mut w = super::Worker { uia, found: None, miss: None, assumed: None, shuffle_on: None };
         for _ in 0..3 {
             let t = std::time::Instant::now();
             let st = w.run(&crate::shared::WebCmd::Probe { aumid: aumid.clone(), title: title.clone() });
             println!("{aumid} \"{title}\" → {st:?} em {:?}", t.elapsed());
+        }
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    /// Tudo que a UI Automation mostra dos botões de aleatório e repetir do
+    /// YouTube Music (só lê). `cargo test --release ytm_buttons_here -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn ytm_buttons_here() {
+        use windows::Win32::System::Com::*;
+        use windows::Win32::System::Variant::VARIANT;
+        use windows::Win32::UI::Accessibility::*;
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let uia: IUIAutomation = CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER).unwrap();
+            let root = uia.GetRootElement().unwrap();
+            let cond = uia.CreatePropertyCondition(UIA_NamePropertyId, &VARIANT::from("YouTube Music")).unwrap();
+            let Ok(win) = root.FindFirst(TreeScope_Children, &cond) else { println!("sem janela"); return };
+            let walker = uia.RawViewWalker().unwrap();
+            for class in [super::SHUFFLE_CLASS, super::REPEAT_CLASS] {
+                let c = uia.CreatePropertyCondition(UIA_ClassNamePropertyId, &VARIANT::from(class)).unwrap();
+                let Ok(g) = win.FindFirst(TreeScope_Descendants, &c) else { println!("[{class}] não achado"); continue };
+                let mut stack = vec![(g, 0)];
+                while let Some((e, depth)) = stack.pop() {
+                    let s = |id| e.GetCurrentPropertyValue(id).map(|v| v.to_string()).unwrap_or_default();
+                    let legacy = e.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(UIA_LegacyIAccessiblePatternId).ok();
+                    let (lstate, lrole, ldesc, lval) = legacy.map(|l| (l.CurrentState().unwrap_or(0), l.CurrentRole().unwrap_or(0), l.CurrentDescription().map(|b| b.to_string()).unwrap_or_default(), l.CurrentValue().map(|b| b.to_string()).unwrap_or_default())).unwrap_or_default();
+                    let toggle = e.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId).ok().map(|t| t.CurrentToggleState().map(|x| x.0).unwrap_or(-1));
+                    println!(
+                        "{}- nome='{}' classe='{}' aria='{}' estado=0x{lstate:x} papel={lrole} desc='{ldesc}' valor='{lval}' toggle={toggle:?} status='{}' full='{}' auto='{}'",
+                        "  ".repeat(depth),
+                        s(UIA_NamePropertyId),
+                        s(UIA_ClassNamePropertyId),
+                        s(UIA_AriaPropertiesPropertyId),
+                        s(UIA_ItemStatusPropertyId),
+                        s(UIA_FullDescriptionPropertyId),
+                        s(UIA_AutomationIdPropertyId),
+                    );
+                    let mut kid = walker.GetFirstChildElement(&e).ok();
+                    while let Some(k) = kid {
+                        kid = walker.GetNextSiblingElement(&k).ok();
+                        stack.push((k, depth + 1));
+                    }
+                }
+            }
         }
     }
 }

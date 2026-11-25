@@ -614,6 +614,10 @@ struct Overlay {
     mouse_f: (f32, f32),
     /// Falhas ao trocar a saída de áudio já avisadas.
     out_failed_seen: u64,
+    /// Último clique em aleatório/repetir de um player de navegador: apertar
+    /// o botão da página às vezes dá o primeiro plano ao navegador por um
+    /// instante (ele é devolvido em seguida), e isso não pode fechar o card.
+    web_click: Option<Instant>,
 }
 
 /// Linhas do mixer na ordem `order` (a da abertura; os que não estão nela,
@@ -790,6 +794,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         mix_scroll: 0.0,
         mouse_f: (0.0, 0.0),
         out_failed_seen: 0,
+        web_click: None,
         shared,
     };
     ov.refresh_launchers();
@@ -1665,6 +1670,9 @@ impl Overlay {
                     }
                     _ => self.volume.step(d as f32 / 120.0 * 0.02),
                 },
+                // O navegador pegou o foco por um instante ao apertar o botão da
+                // página (aleatório/repetir): o card continua aberto.
+                Ev::Deactivate if self.web_click.is_some_and(|t| now - t < Duration::from_secs(3)) => {}
                 Ev::Deactivate | Ev::Escape => {
                     if self.drag.is_none() {
                         self.flyout_open = false;
@@ -1714,14 +1722,19 @@ impl Overlay {
                 self.shared.send_media(MediaCmd::PlayPause);
             }
             // Navegador: aperta o botão da própria página do player.
+            // O aleatório da página liga e desliga: a bolinha muda na hora e
+            // depois segue a cor do botão lida na página.
             Hit::Shuffle if m.web_shuffle => {
                 self.icons.kick(Hit::Shuffle);
+                let on = !self.shuffle_pending.resolve(m.shuffle);
+                self.shuffle_pending.set(on);
+                self.web_click = Some(now);
                 self.shared.send_web(WebCmd::Shuffle { aumid: m.aumid.clone(), title: m.title.clone() });
-                self.hint = Some((now, tr("Fila embaralhada no player")));
             }
             Hit::Repeat if m.web_repeat => {
                 let next = crate::webplayer::next_repeat(self.repeat_pending.resolve(m.repeat));
                 self.repeat_pending.set(next);
+                self.web_click = Some(now);
                 self.shared.send_web(WebCmd::Repeat { aumid: m.aumid.clone(), title: m.title.clone() });
             }
             Hit::Shuffle if m.can_shuffle => {

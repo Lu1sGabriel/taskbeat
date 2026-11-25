@@ -269,7 +269,6 @@ static T: &[[&str; 4]] = &[
     ["Cantos do fundo do widget", "Corners of the widget background", "Esquinas del fondo del widget", "Ecken des Widget-Hintergrunds"],
     ["Reto", "Square", "Recto", "Eckig"],
     ["No YouTube Music do navegador o Taskbeat aperta os botões da própria página (o aleatório embaralha a fila de novo); em outros sites ficam apagados e o clique traz o player para a frente", "In YouTube Music in the browser, Taskbeat presses the page's own buttons (shuffle reshuffles the queue); on other sites they're dimmed and clicking brings the player to the front", "En YouTube Music del navegador, Taskbeat pulsa los botones de la propia página (el aleatorio vuelve a mezclar la cola); en otros sitios se atenúan y el clic trae el reproductor al frente", "Bei YouTube Music im Browser drückt Taskbeat die Tasten der Seite selbst (Zufall mischt die Warteschlange neu); auf anderen Seiten sind sie abgeblendet und ein Klick holt den Player nach vorn"],
-    ["Fila embaralhada no player", "Queue shuffled in the player", "Cola mezclada en el reproductor", "Warteschlange im Player gemischt"],
     ["Sempre", "Always", "Siempre", "Immer"],
     ["Quando o player permite", "When the player allows", "Cuando el reproductor lo permite", "Wenn der Player es erlaubt"],
     ["Este player não deixa mudar isso pelo Windows", "This player doesn't let Windows change this", "Este reproductor no deja cambiar esto desde Windows", "Dieser Player lässt das nicht über Windows ändern"],

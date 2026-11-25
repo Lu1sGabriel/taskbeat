@@ -97,17 +97,19 @@ Aviso de teclas com fundo **sólido**, **acrílico** ou na **cor de destaque**, 
   Fundo **capa desfocada** (com luz da cor da capa, vinheta e granulado), **cor
   do álbum** ou **acrílico** (vidro fosco que desfoca o que está atrás); play com
   brilho na cor de destaque; mini **barras de áudio** ao lado do título (Barras
-  no card); layout horizontal ou vertical; tema; cor de destaque (capa ou
-  Windows); cantos; formato do play. Mostra também o álbum, quando o player
-  informa. Aleatório e repetir aparecem sempre ou só quando o player permite. No
+  no card, ligadas por padrão e independentes do visualizador da barra: o som
+  só é capturado com o card aberto); layout horizontal ou vertical; tema; cor
+  de destaque (capa ou Windows); cantos; formato do play. Mostra também o
+  álbum, quando o player informa. Aleatório e repetir aparecem sempre ou só
+  quando o player permite. No
   **YouTube Music do navegador** (app instalado pelo Brave/Chrome/Edge ou aba),
   que não deixa o Windows mudar isso, o Taskbeat aperta os botões da própria
   página, sem trazer a janela para a frente, e lê o estado do repetir (desativado
-  → tudo → uma); o aleatório do YouTube Music embaralha a fila de novo a cada
-  clique (não é um modo ligado/desligado). Numa aba, ele só aperta se a aba do
-  YouTube Music estiver na frente da janela dela e a barra do player mostrar a
-  música que está tocando. Nos outros sites o clique nesses botões traz o player
-  para a frente.
+  → tudo → uma); o aleatório liga e desliga, e a bolinha embaixo dele mostra o
+  estado (a página não o informa: é lido da cor do botão). Numa aba, ele só
+  aperta se a aba do YouTube Music estiver na frente da janela dela e a barra
+  do player mostrar a música que está tocando. Nos outros sites o clique nesses
+  botões traz o player para a frente.
 - **Mixer de volume** (Windows; opcional, ligado por padrão): uma setinha embaixo do
   card abre, com animação, o volume de cada app com som, como no Mixer de
   Volume do Windows: os de todas as saídas de áudio (ícone, nome, slider, mudo e
