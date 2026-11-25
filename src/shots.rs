@@ -570,6 +570,46 @@ fn card_bars_cost() {
     println!("CPU de um núcleo: antes (inteiro a 60 Hz) {:.1}% / a 144 Hz {:.1}%; agora (barras a 30 fps) {:.2}%", full * 60.0 / 10.0, full * 144.0 / 10.0, bars * 30.0 / 10.0);
 }
 
+/// Card com o mixer de volume aberto para o README: apps comuns (com os
+/// ícones deles, se instalados nesta máquina) e um nome de saída genérico.
+/// `$env:TASKBEAT_LANG="pt"; cargo test --release readme_mixer -- --ignored`
+#[test]
+#[ignore]
+fn readme_mixer() {
+    use crate::shared::{MixApp, MixerState};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+    let exe = |path: &str| crate::appicon::exe_icon(path).map(std::sync::Arc::new);
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let discord = std::fs::read_dir(format!(r"{local}\Discord"))
+        .ok()
+        .and_then(|d| d.filter_map(|e| e.ok()).map(|e| e.path().join("Discord.exe")).filter(|p| p.exists()).last())
+        .and_then(|p| exe(&p.to_string_lossy()));
+    let app = |key: &str, name: &str, icon: Option<std::sync::Arc<Image>>, volume: f32, muted: bool, active: bool| MixApp { key: key.into(), name: name.into(), icon, volume, muted, active, system: false };
+    let apps = vec![
+        MixApp { key: "system".into(), name: String::new(), icon: None, volume: 0.62, muted: false, active: false, system: true },
+        app("brave", "Brave Browser", exe(r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"), 1.0, false, true),
+        app("discord", "Discord", discord, 0.74, false, true),
+        app("steam", "Steam", exe(r"C:\Program Files (x86)\Steam\steam.exe"), 0.45, true, false),
+        app("whatsapp", "WhatsApp", crate::appicon::from_apps_folder("5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App").1.map(std::sync::Arc::new), 0.85, false, false),
+        app("xbox", "Xbox", crate::appicon::from_apps_folder("Microsoft.GamingApp_8wekyb3d8bbwe!Microsoft.Xbox.App").1.map(std::sync::Arc::new), 0.55, false, false),
+    ];
+    let mut mx = MixerState { device: "Alto-falantes (Realtek Audio)".into(), device_id: "a".into(), apps, ..Default::default() };
+    mx.fill = mx.apps.iter().map(|a| if a.muted { 0.0 } else { a.volume }).collect();
+    let media = ui::sample_media();
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let cfg = Config::default();
+    let c = colors(&cfg, &media);
+    let cl = CLayout::build(S, &cfg, true).with_mixer(Some(mx.apps.len()), 1.0, 0.0, crate::shared::MIXER_ROWS, S);
+    let img = render(cl.w, cl.h, |cv| {
+        let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb: playback(&media), s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: Some(&mx) };
+        ui::draw_card(cv, &mut tr, &cl, &f);
+    });
+    save_png("card-mixer.png", img.0, img.1, &img.2);
+}
+
 /// Quanto custa um quadro do card enquanto o mixer abre (o fundo muda de
 /// altura a cada quadro). `cargo test --release card_frame_cost -- --ignored --nocapture`
 #[test]
