@@ -277,7 +277,6 @@ pub(crate) fn player_window_exact(aumid: &str, title: &str) -> Option<HWND> {
 }
 
 fn find_player_window(aumid: &str, title: &str, exact: bool) -> Option<HWND> {
-    use crate::audio::process;
     let mut wins = top_windows();
     for w in &mut wins {
         w.aumid = window_aumid(w.hwnd);
@@ -290,14 +289,7 @@ fn find_player_window(aumid: &str, title: &str, exact: bool) -> Option<HWND> {
     if aumid.contains("_crx_") && title.is_empty() {
         return None;
     }
-    let procs = process::processes();
-    let mine: Vec<u32> = if let Some((family, _)) = aumid.split_once('!') {
-        let family = family.to_lowercase();
-        procs.iter().filter(|p| process::package_aumid(p.pid).is_some_and(|a| a.to_lowercase().starts_with(&family))).map(|p| p.pid).collect()
-    } else {
-        let want = process::stems(aumid);
-        procs.iter().filter(|p| want.iter().any(|w| *w == p.stem)).map(|p| p.pid).collect()
-    };
+    let mine = app_pids(aumid);
     let title = title.to_lowercase();
     let candidates: Vec<&Win> = wins.iter().filter(|w| mine.contains(&w.pid)).collect();
     candidates
@@ -305,6 +297,25 @@ fn find_player_window(aumid: &str, title: &str, exact: bool) -> Option<HWND> {
         .find(|w| !title.is_empty() && w.title.to_lowercase().contains(&title))
         .or(if exact { None } else { candidates.first() })
         .map(|w| w.hwnd)
+}
+
+/// Processos do app `aumid` (o pacote, ou os do .exe: o navegador inteiro).
+fn app_pids(aumid: &str) -> Vec<u32> {
+    use crate::audio::process;
+    let procs = process::processes();
+    if let Some((family, _)) = aumid.split_once('!') {
+        let family = family.to_lowercase();
+        procs.iter().filter(|p| process::package_aumid(p.pid).is_some_and(|a| a.to_lowercase().starts_with(&family))).map(|p| p.pid).collect()
+    } else {
+        let want = process::stems(aumid);
+        procs.iter().filter(|p| want.iter().any(|w| *w == p.stem)).map(|p| p.pid).collect()
+    }
+}
+
+/// Janelas dos processos do app `aumid` (numa aba: as do navegador), com o título.
+pub(crate) fn app_windows(aumid: &str) -> Vec<(HWND, String)> {
+    let mine = app_pids(aumid);
+    top_windows().into_iter().filter(|w| mine.contains(&w.pid)).map(|w| (w.hwnd, w.title)).collect()
 }
 
 /// Traz o player para a frente (restaura se estiver minimizado). Usado quando

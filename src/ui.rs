@@ -12,6 +12,7 @@ use crate::render::*;
 use crate::shared::MediaInfo;
 use crate::text::*;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// Margem (lógica) em volta dos cards para caber a sombra.
@@ -771,7 +772,12 @@ fn blurred_cached(img: &Arc<Image>, wash: bool) -> Arc<Image> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LayerTag {
     Widget,
+    /// Fundo do card (com a capa), no tamanho do card fechado e sem o
+    /// granulado da faixa que estica com o mixer.
     Card,
+    /// O fundo do card na altura atual: esticado com o mixer aberto e com o
+    /// granulado da faixa refeito (esticado, ele virava riscos verticais).
+    CardFinal,
     UpNext,
 }
 
@@ -780,7 +786,7 @@ struct Layer {
     key: u64,
     w: usize,
     h: usize,
-    px: Vec<u32>,
+    px: Rc<Vec<u32>>,
 }
 
 /// Chave de uma camada a partir de tudo que muda o desenho dela.
@@ -807,24 +813,27 @@ fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, draw: impl
 /// A camada `key` de `w`×`h` (desenhada antes com `draw` se ainda não
 /// estiver guardada), entregue a `use_it`.
 fn with_layer(tag: LayerTag, key: u64, w: usize, h: usize, draw: impl FnOnce(&mut Canvas), use_it: impl FnOnce(&[u32], usize, usize)) {
+    let px = layer(tag, key, w, h, draw);
+    use_it(&px, w, h);
+}
+
+/// A camada `key` de `w`×`h`, desenhada com `draw` se ainda não estiver guardada.
+fn layer(tag: LayerTag, key: u64, w: usize, h: usize, draw: impl FnOnce(&mut Canvas)) -> Rc<Vec<u32>> {
+    if let Some(px) = LAYERS.with(|cell| cell.borrow().iter().find(|l| l.tag == tag && l.key == key && l.w == w && l.h == h).map(|l| l.px.clone())) {
+        return px;
+    }
+    let mut px = vec![0u32; w * h];
+    draw(&mut Canvas::new(w, h, &mut px));
+    let px = Rc::new(px);
     LAYERS.with(|cell| {
         let mut layers = cell.borrow_mut();
-        let i = match layers.iter().position(|l| l.tag == tag && l.key == key && l.w == w && l.h == h) {
-            Some(i) => i,
-            None => {
-                let mut px = vec![0u32; w * h];
-                draw(&mut Canvas::new(w, h, &mut px));
-                let same: Vec<usize> = layers.iter().enumerate().filter(|(_, l)| l.tag == tag).map(|(i, _)| i).collect();
-                if same.len() >= 2 {
-                    layers.remove(same[0]);
-                }
-                layers.push(Layer { tag, key, w, h, px });
-                layers.len() - 1
-            }
-        };
-        let l = &layers[i];
-        use_it(&l.px, l.w, l.h);
+        let same: Vec<usize> = layers.iter().enumerate().filter(|(_, l)| l.tag == tag).map(|(i, _)| i).collect();
+        if same.len() >= 2 {
+            layers.remove(same[0]);
+        }
+        layers.push(Layer { tag, key, w, h, px: px.clone() });
     });
+    px
 }
 
 /// Linha da camada (altura `h0`) que vai na linha `y` de um canvas `grow`
@@ -839,9 +848,10 @@ fn stretch_row(y: usize, a: usize, b: usize, grow: usize) -> usize {
     }
 }
 
-/// Libera as camadas guardadas de um tipo (ex.: o card fechou).
+/// Libera as camadas guardadas de um tipo (ex.: o card fechou; vale também
+/// para a camada final dele).
 pub fn forget_layers(tag: LayerTag) {
-    LAYERS.with(|cell| cell.borrow_mut().retain(|l| l.tag != tag));
+    LAYERS.with(|cell| cell.borrow_mut().retain(|l| l.tag != tag && !(tag == LayerTag::Card && l.tag == LayerTag::CardFinal)));
 }
 
 pub fn glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32) {
@@ -1490,7 +1500,11 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
     // Controles na cor escolhida (padrão: branco).
     let ct = controls_theme(cfg.widget_controls, &cfg.widget_controls_rgb, th, m);
     // Botões laterais: por padrão tão fortes quanto o do meio, na mesma cor.
-    let mid = if cfg.taskbar_play == TaskbarPlay::Icon { ct.fg } else { ct.accent };
+    // "Igual ao botão do meio": a cor do play; em "Branco e destaque" (play na
+    // cor de destaque, ícones brancos) os laterais ficam brancos, senão essa
+    // opção ficaria igual a "Cor de destaque".
+    let white_accent = cfg.widget_controls == crate::config::ControlColor::WhiteAccent;
+    let mid = if cfg.taskbar_play == TaskbarPlay::Icon || white_accent { ct.fg } else { ct.accent };
     let side = Sides::of(cfg.widget_sides, cfg.widget_sides_alpha, mid, th, m, it, s);
     if let Some(r) = l.shuffle {
         side.toggle(cv, tr, r, G_SHUFFLE, f.pb.shuffle && m.can_shuffle, Hit::Shuffle);
@@ -1729,6 +1743,35 @@ impl CLayout {
 /// Sombra + fundo do card no estilo escolhido. `backdrop`: o que está atrás,
 /// já desfocado (estilo acrílico); sem ele o acrílico vira um vidro sólido.
 pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32, backdrop: Option<&Image>) {
+    card_bg(cv, &BgSpec { card, radius, cfg, colors, media, th, s, backdrop }, None);
+}
+
+/// O que `card_background` desenha (para passar adiante sem uma lista enorme).
+struct BgSpec<'a> {
+    card: RectF,
+    radius: f32,
+    cfg: &'a Config,
+    colors: &'a Colors,
+    media: &'a MediaInfo,
+    th: &'a Theme,
+    s: f32,
+    backdrop: Option<&'a Image>,
+}
+
+/// Intensidade do granulado do card (o acrílico tem o dele).
+fn card_grain(cfg: &Config, th: &Theme, backdrop: bool) -> f32 {
+    match cfg.card_style {
+        CardStyle::Glass if backdrop => 0.026,
+        CardStyle::Glass => 0.0,
+        _ if th.dark => 0.022,
+        _ => 0.014,
+    }
+}
+
+/// Fundo do card; `skip`: faixa de linhas (y0, y1) sem granulado (é a que
+/// estica com o mixer: o granulado dela é feito depois, na altura certa).
+fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
+    let BgSpec { card, radius, cfg, colors, media, th, s, backdrop } = *b;
     cv.drop_shadow(card, radius, 28.0 * s, 10.0 * s, if th.dark { 0.58 } else { 0.24 });
     cv.drop_shadow(card, radius, 6.0 * s, 1.5 * s, if th.dark { 0.30 } else { 0.10 });
     let (x0, y0, w, h) = (card.x, card.y, card.w, card.h);
@@ -1769,15 +1812,29 @@ pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, 
             let tint = media.art.as_ref().map(|a| a.avg).unwrap_or(th.accent);
             let c = lerp3(base, tint, if th.dark { 0.14 } else { 0.06 });
             match backdrop {
-                Some(b) => acrylic(cv, card, radius, b, c, if th.dark { 0.70 } else { 0.66 }),
+                // Acrílico sem o granulado dele: vem logo abaixo, com o dos outros.
+                Some(b) => {
+                    cv.draw_image_cover(card, b, radius, 1.0);
+                    cv.fill_round(card, radius, c, if th.dark { 0.70 } else { 0.66 });
+                }
                 None => cv.fill_round(card, radius, c, 0.96),
             }
         }
     }
     // Granulado fino (tira o aspecto de "plástico" dos degradês), reflexo no
     // alto e contorno.
-    if cfg.card_style != CardStyle::Glass {
-        cv.grain(card, radius, if th.dark { 0.022 } else { 0.014 });
+    let amount = card_grain(cfg, th, backdrop.is_some());
+    match skip {
+        None => cv.grain(card, radius, amount),
+        Some((y0, y1)) => {
+            let clip = cv.clip_rect();
+            let w = cv.w as f32;
+            cv.set_clip(clip.intersect(RectF::new(0.0, 0.0, w, y0 as f32)));
+            cv.grain(card, radius, amount);
+            cv.set_clip(clip.intersect(RectF::new(0.0, y1 as f32, w, cv.h as f32 - y1 as f32)));
+            cv.grain(card, radius, amount);
+            cv.set_clip(clip);
+        }
     }
     cv.fill_rrect_ca(x0, y0, card.right(), card.bottom(), radius, |_, y| ([1.0; 3], if y < y0 + 1.5 * s { 0.10 } else { 0.0 }));
     let line: Rgb = if th.dark || cfg.card_style == CardStyle::Artwork { [1.0; 3] } else { [0.0; 3] };
@@ -1890,7 +1947,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         f.backdrop.map(|b| b.id),
     ));
     let draw_bg = |cv: &mut Canvas| {
-        card_background(cv, base, l.radius, cfg, f.colors, m, th, s, f.backdrop);
+        card_bg(cv, &BgSpec { card: base, radius: l.radius, cfg, colors: f.colors, media: m, th, s, backdrop: f.backdrop }, Some(band));
         if let Some(a) = &m.art {
             art_shadow(cv, l.art, art_r, a, th, s);
         }
@@ -1905,12 +1962,19 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
             },
         }
     };
-    if grow == 0 {
-        cached_layer(cv, LayerTag::Card, key, 1.0, draw_bg);
-    } else {
-        let (w, h0) = (cv.w, cv.h - grow);
-        with_layer(LayerTag::Card, key, w, h0, draw_bg, |px, w, h| cv.composite_rows(px, w, h, |y| stretch_row(y, band.0, band.1, grow)));
-    }
+    // Fundo na altura atual: o guardado (esticado com o mixer) e o granulado
+    // da faixa do meio feito por cima, na altura certa. Fechado ou aberto
+    // parado, essa camada é reaproveitada; abrindo, é refeita (é barata).
+    let (w, h) = (cv.w, cv.h);
+    let h0 = h - grow;
+    let bg = layer(LayerTag::Card, key, w, h0, draw_bg);
+    let amount = card_grain(cfg, th, f.backdrop.is_some());
+    let fin = layer(LayerTag::CardFinal, layer_key((key, grow, band)), w, h, |fcv| {
+        fcv.composite_rows(&bg, w, h0, |y| stretch_row(y, band.0, band.1, grow));
+        fcv.set_clip(RectF::new(0.0, band.0 as f32, w as f32, (band.1 - band.0 + grow) as f32));
+        fcv.grain_tile(l.card, l.radius, amount);
+    });
+    cv.composite(0, 0, &fin, w, h, 1.0);
 
     // App, título, artista.
     if cfg.show_source {
@@ -1975,7 +2039,8 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         }
     }
     let ct = controls_theme(cfg.card_controls, &cfg.card_controls_rgb, th, m);
-    let side = Sides::of(cfg.card_sides, cfg.card_sides_alpha, ct.accent, th, m, it, s);
+    let mid = if cfg.card_controls == crate::config::ControlColor::WhiteAccent { ct.fg } else { ct.accent };
+    let side = Sides::of(cfg.card_sides, cfg.card_sides_alpha, mid, th, m, it, s);
     if m.can_shuffle || always {
         side.toggle(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle && m.can_shuffle, Hit::Shuffle);
     }
@@ -2040,6 +2105,12 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         cv.fill_round(r, h / 2.0, [0.10, 0.10, 0.11], 0.92 * a);
         cv.stroke_round(r, h / 2.0, s, [1.0; 3], 0.10 * a);
         text_center(cv, tr, msg, Font::Caption, r, [1.0; 3], a);
+    }
+
+    // Dica da setinha do mixer: por último, por cima de tudo (dos atalhos também).
+    if let Some(b) = l.mixer_btn.filter(|_| f.it.hover == Some(Hit::MixToggle) && f.it.tip > 0.0) {
+        let msg = crate::i18n::tr(if l.mixer_open > 0.5 { "Fechar mixer de volume" } else { "Abrir mixer de volume" });
+        tooltip(cv, tr, msg, b, th, f.it.tip, s);
     }
 }
 
@@ -2128,10 +2199,6 @@ fn mixer_section(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
             hover_bg(cv, b.inset(2.0 * s), b.h / 2.0, th, f.it.pressed == Some(Hit::MixToggle));
         }
         chevron(cv, b, l.mixer_open, th.fg, if hot { 0.9 } else { 0.55 }, s);
-        if hot && f.it.tip > 0.0 {
-            let msg = crate::i18n::tr(if l.mixer_open > 0.5 { "Fechar mixer de volume" } else { "Abrir mixer de volume" });
-            tooltip(cv, tr, msg, b, th, f.it.tip, s);
-        }
     }
 }
 

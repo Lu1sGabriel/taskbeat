@@ -29,10 +29,12 @@ use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomationElement, IUIAutomationInvokePattern, TreeScope_Descendants, UIA_ClassNamePropertyId,
     UIA_InvokePatternId,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindow, SetForegroundWindow};
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow};
 
 const SHUFFLE_CLASS: &str = "shuffle style-scope ytmusic-player-bar";
 const REPEAT_CLASS: &str = "repeat style-scope ytmusic-player-bar";
+/// Título da música na barra do player da página.
+const TITLE_CLASS: &str = "title style-scope ytmusic-player-bar";
 /// Sem botões numa janela: não procura de novo nela por este tempo.
 const MISS_TTL: Duration = Duration::from_secs(60);
 
@@ -73,6 +75,9 @@ struct Found {
     hwnd: HWND,
     shuffle: Option<IUIAutomationElement>,
     repeat: Option<IUIAutomationElement>,
+    /// Título da música na barra do player da página (numa aba, confere que é
+    /// a mesma música da sessão antes de apertar).
+    title: Option<IUIAutomationElement>,
 }
 
 struct Worker {
@@ -155,9 +160,11 @@ impl Worker {
     /// elementos continuam valendo).
     fn find(&mut self, aumid: &str, title: &str) -> Option<&Found> {
         let alive = |f: &Found| unsafe { IsWindow(Some(f.hwnd)).as_bool() } && f.repeat.as_ref().or(f.shuffle.as_ref()).is_some_and(|e| unsafe { e.CurrentName() }.is_ok());
-        // Numa aba (a sessão é o navegador), a janela guardada só vale enquanto
-        // ainda mostra a música atual: outra aba pode ter começado a tocar.
-        let same_song = |f: &Found| is_ytm_app(aumid) || (!title.is_empty() && window_title(f.hwnd).to_lowercase().contains(&title.to_lowercase()));
+        // Numa aba (a sessão é o navegador), a página guardada só vale
+        // enquanto a barra do player dela ainda mostra a música da sessão:
+        // outra aba pode ter começado a tocar.
+        let app = is_ytm_app(aumid);
+        let same_song = |f: &Found| app || f.title.as_ref().is_some_and(|e| same_title(&name(e), title));
         if self.found.as_ref().is_some_and(|f| f.aumid == aumid && alive(f) && same_song(f)) {
             return self.found.as_ref();
         }
@@ -165,23 +172,35 @@ impl Worker {
         if self.miss.as_ref().is_some_and(|(a, t)| a == aumid && t.elapsed() < MISS_TTL) {
             return None;
         }
-        // Só a janela da própria sessão: o app do YouTube Music (mesmo id) ou a
-        // janela cujo título mostra a música que está tocando. Com uma aba de
-        // outro site tocando e o YouTube Music aberto noutra janela do mesmo
-        // navegador, "a primeira janela do navegador" podia ser o YouTube
-        // Music, e o clique mexia na fila dele.
-        let Some(hwnd) = crate::launchers::player_window_exact(aumid, title) else {
+        let t0 = Instant::now();
+        let found = if app {
+            // O app do YouTube Music: a janela dele (mesmo id).
+            crate::launchers::player_window_exact(aumid, title).and_then(|hwnd| self.scan(aumid, hwnd))
+        } else {
+            // Numa aba: das janelas do navegador com o YouTube Music na frente,
+            // só a que mostra na barra do player a música que o Windows diz
+            // estar tocando. Com uma aba de outro site tocando e o YouTube
+            // Music aberto noutra janela, nada é apertado (a fila dele fica
+            // como está). Só o YouTube Music tem esses botões: outras páginas
+            // nem são lidas, para não ligar a acessibilidade do navegador à toa.
+            crate::launchers::app_windows(aumid)
+                .into_iter()
+                .filter(|(_, t)| t.contains("YouTube Music"))
+                .find_map(|(hwnd, _)| self.scan(aumid, hwnd).filter(|f| f.title.as_ref().is_some_and(|e| same_title(&name(e), title))))
+        };
+        let Some(found) = found else {
+            log::info(&format!("botões da página do player ({aumid}): não achados em {:?}", t0.elapsed()));
             self.miss = Some((aumid.into(), Instant::now()));
             return None;
         };
-        // Só o YouTube Music tem esses botões: em outras páginas (um vídeo numa
-        // aba, por exemplo) nem procura, para não ligar a acessibilidade do
-        // navegador à toa.
-        if !is_youtube_music(aumid, &window_title(hwnd)) {
-            self.miss = Some((aumid.into(), Instant::now()));
-            return None;
-        }
-        let t0 = Instant::now();
+        log::info(&format!("botões da página do player ({aumid}): aleatório={} repetir={} em {:?}", found.shuffle.is_some(), found.repeat.is_some(), t0.elapsed()));
+        self.miss = None;
+        self.found = Some(found);
+        self.found.as_ref()
+    }
+
+    /// Botões e título da barra do player na página da janela `hwnd`.
+    fn scan(&self, aumid: &str, hwnd: HWND) -> Option<Found> {
         let root = unsafe { self.uia.ElementFromHandle(hwnd) }.ok()?;
         let (mut shuffle, mut repeat) = (None, None);
         // O navegador monta a árvore da página só depois do primeiro pedido.
@@ -193,14 +212,16 @@ impl Worker {
             }
             std::thread::sleep(Duration::from_millis(700));
         }
-        log::info(&format!("botões da página do player ({aumid}): aleatório={} repetir={} em {:?}", shuffle.is_some(), repeat.is_some(), t0.elapsed()));
         if shuffle.is_none() && repeat.is_none() {
-            self.miss = Some((aumid.into(), Instant::now()));
             return None;
         }
-        self.miss = None;
-        self.found = Some(Found { aumid: aumid.into(), hwnd, shuffle, repeat });
-        self.found.as_ref()
+        let title = unsafe {
+            self.uia
+                .CreatePropertyCondition(UIA_ClassNamePropertyId, &VARIANT::from(TITLE_CLASS))
+                .ok()
+                .and_then(|c| root.FindFirst(TreeScope_Descendants, &c).ok())
+        };
+        Some(Found { aumid: aumid.into(), hwnd, shuffle, repeat, title })
     }
 
     /// O botão dentro do elemento com a classe `class`.
@@ -216,16 +237,10 @@ impl Worker {
     }
 }
 
-fn window_title(hwnd: HWND) -> String {
-    let mut buf = [0u16; 512];
-    let n = unsafe { GetWindowTextW(hwnd, &mut buf) };
-    String::from_utf16_lossy(&buf[..n.max(0) as usize])
-}
-
-/// A sessão é o YouTube Music: o app instalado pelo navegador (mesmo id no
-/// Brave, Chrome e Edge) ou uma aba com ele aberto.
-fn is_youtube_music(aumid: &str, window_title: &str) -> bool {
-    is_ytm_app(aumid) || window_title.contains("YouTube Music")
+/// A música da barra do player é a da sessão (sem diferenciar maiúsculas).
+fn same_title(page: &str, session: &str) -> bool {
+    let (a, b) = (page.trim().to_lowercase(), session.trim().to_lowercase());
+    !a.is_empty() && !b.is_empty() && (a == b || a.contains(&b) || b.contains(&a))
 }
 
 /// A sessão é o app do YouTube Music instalado pelo navegador.
@@ -283,7 +298,18 @@ pub fn repeat_state(name: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::repeat_state;
+    use super::{repeat_state, same_title};
+
+    /// Numa aba, só aperta se a barra do player mostrar a música da sessão
+    /// (lida de verdade: "Thanatos" na barra e no Windows).
+    #[test]
+    fn aba_so_com_a_mesma_musica() {
+        assert!(same_title("Thanatos", "Thanatos"));
+        assert!(same_title(" thanatos ", "Thanatos"));
+        assert!(!same_title("Thanatos", "Midnight City"));
+        assert!(!same_title("", "Thanatos"));
+        assert!(!same_title("Thanatos", ""));
+    }
 
     #[test]
     fn repetir_pelo_nome_do_botao() {

@@ -503,6 +503,36 @@ fn span(mx: f32, half: f32, lo: usize, hi: usize) -> (usize, usize) {
 
 /// Cor sólida com alfa como pixel BGRA pré-multiplicado.
 #[inline]
+/// Ladrilho 128×128 do granulado (pré-multiplicado), um por intensidade.
+fn grain_tile_for(amount: f32) -> std::rc::Rc<Vec<u32>> {
+    thread_local! {
+        static TILES: std::cell::RefCell<Vec<(u32, std::rc::Rc<Vec<u32>>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    TILES.with(|t| {
+        let mut t = t.borrow_mut();
+        if let Some((_, tile)) = t.iter().find(|(k, _)| *k == amount.to_bits()) {
+            return tile.clone();
+        }
+        let tile: Vec<u32> = (0..128 * 128)
+            .map(|i| {
+                let (x, y) = ((i % 128) as u32, (i / 128) as u32);
+                let mut h = x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77);
+                h ^= h >> 15;
+                h = h.wrapping_mul(0x2C1B_3C6D);
+                h ^= h >> 12;
+                let n = (h & 0xffff) as f32 / 65535.0 * 2.0 - 1.0;
+                premul(if n > 0.0 { [1.0; 3] } else { [0.0; 3] }, n.abs() * amount)
+            })
+            .collect();
+        let tile = std::rc::Rc::new(tile);
+        if t.len() > 4 {
+            t.clear();
+        }
+        t.push((amount.to_bits(), tile.clone()));
+        tile
+    })
+}
+
 pub fn premul(c: Rgb, a: f32) -> u32 {
     let k = 255.0 * a.clamp(0.0, 1.0);
     let ch = |v: f32| (v.clamp(0.0, 1.0) * k + 0.5) as u32;
@@ -802,6 +832,41 @@ impl<'a> Canvas<'a> {
             let n = (h & 0xffff) as f32 / 65535.0 * 2.0 - 1.0;
             (if n > 0.0 { [1.0; 3] } else { [0.0; 3] }, n.abs() * amount)
         });
+    }
+
+    /// Granulado como `grain`, mas tirado de um ladrilho pronto (128×128): é
+    /// barato o bastante para refazer a cada quadro. Respeita o recorte.
+    pub fn grain_tile(&mut self, r: RectF, radius: f32, amount: f32) {
+        if amount <= 0.0 || r.w <= 0.0 || r.h <= 0.0 {
+            return;
+        }
+        let tile = grain_tile_for(amount);
+        let (hx, hy) = (r.w * 0.5, r.h * 0.5);
+        let (mx, my) = (r.x + hx, r.y + hy);
+        let rad = radius.min(hx).min(hy).max(0.0);
+        let (px0, py0, px1, py1) = self.bounds(r.x, r.y, r.right(), r.bottom());
+        for py in py0..py1 {
+            let qy = (py as f32 + 0.5 - my).abs() - (hy - rad);
+            let (ia, ib) = inner_half(hx, rad, qy, 0.5).map(|h| span(mx, h, px0, px1)).unwrap_or((px1, px1));
+            let trow = &tile[(py & 127) * 128..(py & 127) * 128 + 128];
+            let row = py * self.w;
+            for px in px0..px1 {
+                let t = trow[px & 127];
+                if t == 0 {
+                    continue;
+                }
+                let i = row + px;
+                if px >= ia && px < ib {
+                    self.px[i] = over(self.px[i], t);
+                    continue;
+                }
+                let qx = (px as f32 + 0.5 - mx).abs() - (hx - rad);
+                let cov = rrect_cov(qx, qy, rad);
+                if cov > 0.0 {
+                    self.px[i] = over(self.px[i], scale_px(t, (cov * 255.0 + 0.5) as u32));
+                }
+            }
+        }
     }
 
     /// Desenha uma máscara (texto/ícone) com a cor dada, canto superior esquerdo em (x, y).

@@ -203,7 +203,8 @@ static T: &[[&str; 4]] = &[
     ["Posição na barra", "Position on the taskbar", "Posición en la barra", "Position in der Taskleiste"],
     ["Onde o widget fica na barra de tarefas", "Where the widget sits on the taskbar", "Dónde se ubica el widget en la barra de tareas", "Wo das Widget in der Taskleiste sitzt"],
     ["Ajuste horizontal", "Horizontal offset", "Ajuste horizontal", "Horizontaler Versatz"],
-    ["Desloca o widget para a esquerda ou para a direita", "Moves the widget left or right", "Mueve el widget a la izquierda o a la derecha", "Verschiebt das Widget nach links oder rechts"],
+    ["Ajuste de posição", "Position offset", "Ajuste de posición", "Positionsversatz"],
+    ["Desloca o widget ao longo da barra: para os lados ou, com a barra na vertical, para cima e para baixo", "Moves the widget along the taskbar: sideways or, with a vertical taskbar, up and down", "Mueve el widget a lo largo de la barra: a los lados o, con la barra vertical, arriba y abajo", "Verschiebt das Widget entlang der Taskleiste: seitlich oder, bei senkrechter Taskleiste, nach oben und unten"],
     // ---- card
     ["Fundo", "Background", "Fondo", "Hintergrund"],
     ["Capa desfocada, cor extraída da capa ou acrílico (desfoca o que está atrás)", "Blurred cover, a color taken from the cover, or acrylic (blurs what's behind)", "Portada difuminada, color de la portada o acrílico (difumina lo que hay detrás)", "Unscharfes Cover, Farbe aus dem Cover oder Acryl (zeichnet den Hintergrund weich)"],

@@ -199,29 +199,44 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
 static START: Mutex<Option<(Option<RECT>, Instant)>> = Mutex::new(None);
 
 /// Botão Iniciar na barra (para o widget arrastado não ficar por cima dele).
-/// Lido pela UI Automation numa thread à parte, no máximo uma vez por minuto, e só
-/// quando alguém pede (o widget saiu do lugar padrão).
+/// Lido pela UI Automation numa thread só (criada no primeiro pedido, parada
+/// esperando os outros), no máximo uma vez por minuto, e só quando alguém
+/// pede (o widget saiu do lugar padrão).
 pub fn start_rect() -> Option<RECT> {
     let mut g = START.lock().unwrap_or_else(|e| e.into_inner());
     let stale = g.as_ref().is_none_or(|(_, t)| t.elapsed() > Duration::from_secs(60));
     let cur = g.as_ref().and_then(|(r, _)| *r);
     if stale {
-        // Marca como lido agora (evita várias buscas ao mesmo tempo).
+        // Marca como lido agora (evita vários pedidos ao mesmo tempo).
         *g = Some((cur, Instant::now()));
         drop(g);
-        let _ = std::thread::Builder::new().name("taskbar-start".into()).spawn(|| {
+        let _ = start_reader().lock().unwrap_or_else(|e| e.into_inner()).send(());
+    }
+    cur
+}
+
+/// A thread que lê o botão Iniciar: espera um pedido (sem gastar nada) e lê.
+fn start_reader() -> &'static Mutex<std::sync::mpsc::Sender<()>> {
+    static TX: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<()>>> = std::sync::OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let _ = std::thread::Builder::new().name("taskbar-start".into()).spawn(move || {
             unsafe {
                 let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             }
-            let r = unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
-                .ok()
-                .and_then(|uia| find_on_taskbar(&uia, &VARIANT::from("StartButton")))
-                .and_then(|e| unsafe { e.CurrentBoundingRectangle() }.ok())
-                .filter(|r| r.right > r.left);
-            *START.lock().unwrap_or_else(|e| e.into_inner()) = Some((r, Instant::now()));
+            crate::system::background_thread();
+            let uia = unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }.ok();
+            while rx.recv().is_ok() {
+                let r = uia
+                    .as_ref()
+                    .and_then(|uia| find_on_taskbar(uia, &VARIANT::from("StartButton")))
+                    .and_then(|e| unsafe { e.CurrentBoundingRectangle() }.ok())
+                    .filter(|r| r.right > r.left);
+                *START.lock().unwrap_or_else(|e| e.into_inner()) = Some((r, Instant::now()));
+            }
         });
-    }
-    cur
+        Mutex::new(tx)
+    })
 }
 
 // ---------------------------------------------------------------- botão de Widgets
