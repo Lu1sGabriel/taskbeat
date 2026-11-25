@@ -47,6 +47,8 @@ pub enum Hit {
     Seek,
     VolBtn,
     Vol,
+    /// Atalho para abrir um app de música (índice na lista).
+    Launch(u8),
 }
 
 /// Cores de um componente já resolvidas (tema + cor de destaque).
@@ -930,6 +932,9 @@ pub struct CLayout {
     pub vol_btn: Option<RectF>,
     pub vol: Option<RectF>,
     pub vertical: bool,
+    /// Atalhos dos apps de música (linha embaixo do card) e o texto ao lado.
+    pub launch: Vec<RectF>,
+    pub launch_label: RectF,
 }
 
 impl CLayout {
@@ -995,7 +1000,28 @@ impl CLayout {
         l
     }
 
+    /// Acrescenta a linha de atalhos para `n` apps de música embaixo do card.
+    pub fn with_launchers(mut self, n: usize, s: f32) -> Self {
+        if n == 0 {
+            return self;
+        }
+        let pad = 16.0 * s;
+        let size = 32.0 * s;
+        let y = self.card.bottom() - 2.0 * s;
+        let x0 = self.card.x + pad - 6.0 * s;
+        self.launch = (0..n).map(|i| RectF::new(x0 + i as f32 * (size + 2.0 * s), y, size, size)).collect();
+        let lx = x0 + n as f32 * (size + 2.0 * s) + 6.0 * s;
+        self.launch_label = RectF::new(lx, y, (self.card.right() - pad - lx).max(0.0), size);
+        let extra = size + 6.0 * s;
+        self.card.h += extra;
+        self.h += extra;
+        self
+    }
+
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
+        if let Some(i) = self.launch.iter().position(|r| r.contains(x, y)) {
+            return Some(Hit::Launch(i as u8));
+        }
         let all = [
             (Some(self.shuffle), Hit::Shuffle),
             (Some(self.prev), Hit::Prev),
@@ -1105,6 +1131,8 @@ pub struct CardFrame<'a> {
     pub backdrop: Option<&'a Image>,
     /// Aviso rápido sobre o card: (texto, opacidade).
     pub hint: Option<(&'a str, f32)>,
+    /// Apps de música instalados (atalhos embaixo do card, em `l.launch`).
+    pub launchers: &'a [crate::shared::Launcher],
 }
 
 /// Sombra da capa: brilho na cor dela + sombra curta, como capas "flutuando".
@@ -1226,6 +1254,11 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, true, s);
     }
 
+    // Atalhos para abrir os apps de música.
+    if !l.launch.is_empty() {
+        launcher_row(cv, tr, l, f);
+    }
+
     // Aviso rápido (ex.: clicou em aleatório num player que não deixa).
     if let Some((msg, a)) = f.hint {
         let h = 26.0 * s;
@@ -1238,6 +1271,37 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         cv.stroke_round(r, h / 2.0, s, [1.0; 3], 0.10 * a);
         text_center(cv, tr, msg, Font::Caption, r, [1.0; 3], a);
     }
+}
+
+/// Linha de atalhos: ícone de cada app de música; o nome do que está sob o
+/// mouse (ou "Abrir um app de música") ao lado.
+fn launcher_row(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFrame) {
+    let (s, th) = (f.s, &f.theme);
+    // Linha fina separando dos controles.
+    let y = l.launch[0].y - 1.0 * s;
+    cv.fill_rrect(l.card.x + 16.0 * s, y, l.card.right() - 16.0 * s, y + 1.0 * s, 0.5 * s, if th.dark { 0.10 } else { 0.08 }, th.fg);
+    let mut label: Option<&str> = None;
+    for (i, r) in l.launch.iter().enumerate() {
+        let Some(app) = f.launchers.get(i) else { break };
+        let h = Hit::Launch(i as u8);
+        let hot = f.it.hover == Some(h);
+        if hot {
+            label = Some(&app.name);
+            hover_bg(cv, r.inset(2.0 * s), 8.0 * s, th, f.it.pressed == Some(h));
+        }
+        let k = if f.it.pressed == Some(h) && hot { 18.0 * s } else { 20.0 * s };
+        let ir = RectF::new((r.cx() - k / 2.0).round(), (r.cy() - k / 2.0).round(), k.round(), k.round());
+        match &app.icon {
+            Some(img) => cv.draw_image(ir, img, 0.0, 1.0),
+            None => {
+                cv.fill_round(ir, k / 2.0, th.accent, 0.9);
+                let first: String = app.name.chars().take(1).collect();
+                text_center(cv, tr, &first, Font::Caption, ir, th.on_accent, 1.0);
+            }
+        }
+    }
+    let msg = label.unwrap_or(crate::i18n::tr("Abrir um app de música"));
+    text(cv, tr, msg, Font::Small, l.launch_label.x, l.launch_label.y, l.launch_label.w, l.launch_label.h, th.fg, if label.is_some() { 0.85 } else { 0.5 });
 }
 
 // ---------------------------------------------------------------- "A seguir"
@@ -1648,7 +1712,7 @@ mod tests {
         let mut px = vec![0u32; w * h];
         {
             let mut cv = Canvas::new(w, h, &mut px);
-            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0, backdrop: None, hint: None };
+            let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme: card_theme(&cfg, &colors, &media), it: Interact::default(), pb: Playback { volume: 0.5, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[] };
             draw_card(&mut cv, &mut tr, &l, &f);
         }
         let mut s = stray(&px, w, h);
@@ -1673,7 +1737,7 @@ mod tests {
             let mut px = vec![0u32; w * h];
             {
                 let mut cv = Canvas::new(w, h, &mut px);
-                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0, backdrop: None, hint: None };
+                let f = CardFrame { cfg: &ucfg, colors: &colors, media: &m2, theme: card_theme(&ucfg, &colors, &m2), it: Interact::default(), pb: Playback { volume: 0.6, pos, ..Default::default() }, s: 1.0, backdrop: None, hint: None, launchers: &[] };
                 draw_card(&mut cv, &mut tr, &l, &f);
             }
             let st = stray(&px, w, h);

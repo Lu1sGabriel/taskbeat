@@ -93,6 +93,7 @@ enum Key {
     CardSeek,
     ShowVolume,
     Autoclose,
+    Launchers,
     Popup,
     PopupSecs,
     ShowSource,
@@ -249,7 +250,8 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e botão de mudo", key: Key::ShowVolume, kind: Kind::Toggle },
             Row { icon: "\u{E7F4}", title: "Mostrar app de origem", desc: "Selo com o app (Spotify, Brave…) no card, no \"A seguir\" e sobre a capa na barra", key: Key::ShowSource, kind: Kind::Toggle },
             Row { icon: "\u{E916}", title: "Fechar sozinho após", desc: "Tempo sem o mouse em cima do card", key: Key::Autoclose, kind: Kind::Slider { min: 2, max: 20, step: 1, unit: "s" } },
-            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "Funcionam no Spotify e no Media Player; navegadores (Brave, Chrome) não deixam, então ficam apagados", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
+            Row { icon: "\u{E71D}", title: "Atalhos dos apps de música", desc: "Ícones dos players instalados (Spotify, YouTube Music, Media Player…) embaixo do card, para abrir com um clique", key: Key::Launchers, kind: Kind::Toggle },
+            Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "Funcionam no Spotify e no Media Player; navegadores (Brave, Chrome) não deixam: ficam apagados e o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
         ],
     },
     Page {
@@ -393,6 +395,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::CardSeek => c.card_seek as i32,
         Key::ShowVolume => c.show_volume as i32,
         Key::Autoclose => c.card_autoclose,
+        Key::Launchers => c.card_launchers as i32,
         Key::Popup => c.next_track_popup as i32,
         Key::PopupSecs => c.popup_secs,
         Key::ShowSource => c.show_source as i32,
@@ -468,6 +471,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::CardSeek => c.card_seek = v != 0,
         Key::ShowVolume => c.show_volume = v != 0,
         Key::Autoclose => c.card_autoclose = v,
+        Key::Launchers => c.card_launchers = v != 0,
         Key::Popup => c.next_track_popup = v != 0,
         Key::PopupSecs => c.popup_secs = v,
         Key::ShowSource => c.show_source = v != 0,
@@ -932,10 +936,16 @@ impl Ui {
         if m.present() { m } else { ui::sample_media() }
     }
 
-    fn hero_height_at(page: &Page, cfg: &Config, s: f32) -> f32 {
+    /// Card da prévia, com os atalhos dos apps de música desta máquina.
+    fn preview_card(&self, s: f32, cfg: &Config) -> ui::CLayout {
+        let n = if cfg.card_launchers { self.shared.launchers.lock().unwrap().len().min(crate::launchers::MAX) } else { 0 };
+        ui::CLayout::build(s, cfg, true).with_launchers(n, s)
+    }
+
+    fn hero_height_at(&self, page: &Page, cfg: &Config, s: f32) -> f32 {
         match page.preview {
             Preview::Widget | Preview::Visualizer => 168.0 * s,
-            Preview::Card => ui::CLayout::build(s, cfg, true).h + 8.0 * s,
+            Preview::Card => self.preview_card(s, cfg).h + 8.0 * s,
             Preview::UpNext => ui::upnext_size(s).1 + 24.0 * s,
             Preview::LockKeys => ui::osd_size(s, cfg).1 + 40.0 * s,
             Preview::None => 0.0,
@@ -946,7 +956,7 @@ impl Ui {
     /// metade da altura (a prévia fica fixa no topo; as opções rolam embaixo).
     fn preview_scale(&self, page: &Page, cfg: &Config) -> f32 {
         let s = self.scale;
-        let natural = Self::hero_height_at(page, cfg, s);
+        let natural = self.hero_height_at(page, cfg, s);
         let budget = (self.client().1 * 0.5).max(190.0 * s);
         if natural <= budget { s } else { (s * budget / natural).max(0.55 * s) }
     }
@@ -981,7 +991,7 @@ impl Ui {
         // Título e prévia ficam fixos; só a lista de opções rola, abaixo da prévia.
         let mut y = 92.0 * s;
         let mut hero = None;
-        let hh = Self::hero_height_at(page, &cfg, self.preview_scale(page, &cfg));
+        let hh = self.hero_height_at(page, &cfg, self.preview_scale(page, &cfg));
         if hh > 0.0 {
             hero = Some(RectF::new(x0, y, x1 - x0, hh));
             y += hh + 12.0 * s;
@@ -1640,7 +1650,7 @@ impl Ui {
                 RectF::new(wx, bar.y + 4.0 * s, l.width, wh)
             }
             Preview::Card => {
-                let l = ui::CLayout::build(s, cfg, true);
+                let l = self.preview_card(s, cfg);
                 RectF::new(r.cx() - l.w / 2.0, r.y + 4.0 * s, l.w, l.h)
             }
             Preview::UpNext => {
@@ -1782,13 +1792,14 @@ impl Ui {
                 sub.commit(cv);
             }
             Preview::Card => {
-                let l = ui::CLayout::build(s, cfg, true);
+                let l = self.preview_card(s, cfg);
+                let launchers = self.shared.launchers.lock().unwrap().clone();
                 let th = ui::card_theme(cfg, &colors, &media);
                 let mut m2 = media.clone();
                 m2.dur = m2.dur.max(1.0);
                 let mut sub = SubCanvas::new(r.cx() - l.w / 2.0, r.y + 4.0 * s, l.w, l.h);
                 let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(l.card.offset(sub.x, sub.y), ui::GLASS_BLUR * s)).flatten();
-                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None };
+                let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None, launchers: &launchers };
                 ui::draw_card(&mut sub.canvas(), &mut self.preview_text, &l, &f);
                 sub.commit(cv);
             }

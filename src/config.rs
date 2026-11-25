@@ -323,6 +323,8 @@ pub struct Config {
     pub card_shuffle_repeat: ShuffleRepeat,
     /// Segundos sem o mouse em cima até o card fechar sozinho.
     pub card_autoclose: i32,
+    /// Atalhos para abrir os apps de música instalados (linha embaixo do card).
+    pub card_launchers: bool,
 
     // ---- "A seguir"
     /// Cartão animado com a próxima música quando o player troca sozinho.
@@ -436,6 +438,7 @@ impl Default for Config {
             show_volume: true,
             card_shuffle_repeat: ShuffleRepeat::Always,
             card_autoclose: 6,
+            card_launchers: true,
 
             next_track_popup: true,
             popup_secs: 5,

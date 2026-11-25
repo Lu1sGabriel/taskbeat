@@ -37,6 +37,8 @@ mod appicon;
 #[cfg(windows)]
 mod audio;
 #[cfg(windows)]
+mod launchers;
+#[cfg(windows)]
 mod media;
 #[cfg(windows)]
 mod menu;
@@ -125,6 +127,7 @@ fn main() {
         let shared = Arc::new(Shared::new(cfg));
         let audio = audio::spawn(shared.clone());
         media::spawn(shared.clone());
+        launchers::spawn(shared.clone());
         let overlay = overlay::spawn(shared.clone());
 
         if let Err(e) = tray::run(shared.clone()) {

@@ -37,13 +37,19 @@ pub fn from_apps_folder(aumid: &str) -> (Option<String>, Option<Image>) {
             CoTaskMemFree(Some(p.0 as _));
             s
         });
-        let icon = item.cast::<IShellItemImageFactory>().ok().and_then(|f| {
-            let hbm = f.GetImage(SIZE { cx: SIZE_PX, cy: SIZE_PX }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
-            let img = hbitmap_to_image(hbm);
-            let _ = DeleteObject(hbm.into());
-            img
-        });
+        let icon = shell_item_icon(&item);
         (name.filter(|n| !n.is_empty() && n != aumid), icon)
+    }
+}
+
+/// Ícone de um item do shell (ex.: um app da pasta "Aplicativos").
+pub fn shell_item_icon(item: &IShellItem) -> Option<Image> {
+    unsafe {
+        let f = item.cast::<IShellItemImageFactory>().ok()?;
+        let hbm = f.GetImage(SIZE { cx: SIZE_PX, cy: SIZE_PX }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
+        let img = hbitmap_to_image(hbm);
+        let _ = DeleteObject(hbm.into());
+        img
     }
 }
 

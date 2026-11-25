@@ -123,7 +123,7 @@ fn shots() {
         let cl = CLayout::build(S, &cfg, true);
         let wl = WLayout::build(S, 40.0 * S, &cfg, true, false);
         let card = render(cl.w, cl.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[] };
             ui::draw_card(cv, &mut tr, &cl, &f);
         });
         let widget = render(wl.width, 40.0 * S, |cv| {
@@ -170,7 +170,7 @@ fn shots() {
         let c = colors(&cfg, &media);
         let l = CLayout::build(S, &cfg, true);
         let img = render(l.w, l.h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[] };
             ui::draw_card(cv, &mut tr, &l, &f);
         });
         save_png(name, img.0, img.1, &img.2);
@@ -184,7 +184,7 @@ fn shots() {
         let bg = render(w, h, |cv| busy_wallpaper(cv, RectF::new(0.0, 0.0, w, h), 14.0 * S));
         let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::GLASS_BLUR * S);
         let card = render(w, h, |cv| {
-            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None };
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None, launchers: &[] };
             ui::draw_card(cv, &mut tr, &l, &f);
         });
         let img = render(w, h, |cv| {
@@ -324,7 +324,7 @@ fn icon_frames() {
                 }
                 let card = render(cl.w, cl.h, |cv| {
                     let it = Interact { fx: IconFx::single(*h, age), ..Interact::default() };
-                    let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None };
+                    let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &[] };
                     ui::draw_card(cv, &mut tr, &cl, &f);
                 });
                 let (cw, _, px) = card;
@@ -371,4 +371,40 @@ fn pill_covers() {
         }
     });
     save_png("pill-covers.png", img.0, img.1, &img.2);
+}
+
+/// Card com a linha de atalhos dos apps de música instalados nesta máquina
+/// (o segundo com o mouse sobre o primeiro atalho).
+#[test]
+#[ignore]
+fn card_launchers() {
+    use crate::ui::Hit;
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+    let launchers = crate::launchers::scan();
+    let media = ui::sample_media();
+    let pb = playback(&media);
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    for (name, layout) in [("card-launchers.png", CardLayout::Horizontal), ("card-launchers-vertical.png", CardLayout::Vertical)] {
+        let cfg = Config { card_layout: layout, ..Config::default() };
+        let c = colors(&cfg, &media);
+        let cl = CLayout::build(S, &cfg, true).with_launchers(launchers.len(), S);
+        let mut cards = Vec::new();
+        for hover in [None, Some(Hit::Launch(0))] {
+            cards.push(render(cl.w, cl.h, |cv| {
+                let it = Interact { hover, ..Interact::default() };
+                let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &launchers };
+                ui::draw_card(cv, &mut tr, &cl, &f);
+            }));
+        }
+        let img = render(cl.w * 2.0, cl.h, |cv| {
+            cv.fill_rrect(0.0, 0.0, cl.w * 2.0, cl.h, 0.0, 1.0, [0.16, 0.18, 0.24]);
+            for (i, card) in cards.into_iter().enumerate() {
+                blit(cv, i as f32 * cl.w, 0.0, card);
+            }
+        });
+        save_png(name, img.0, img.1, &img.2);
+    }
 }

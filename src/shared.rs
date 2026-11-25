@@ -138,8 +138,19 @@ impl PartialEq for MediaInfo {
     }
 }
 
+/// App de música instalado (atalho para abrir no card).
+#[derive(Clone)]
+pub struct Launcher {
+    pub name: String,
+    /// Como abrir: o AUMID da pasta "Aplicativos" do Windows.
+    pub id: String,
+    pub icon: Option<Arc<Image>>,
+}
+
 pub struct Shared {
     pub running: AtomicBool,
+    /// Apps de música instalados (atalhos do card), do mais conhecido ao menos.
+    pub launchers: Mutex<Arc<Vec<Launcher>>>,
     pub audio: Mutex<AudioRing>,
     pub sample_rate: AtomicU32,
     pub config: Mutex<Config>,
@@ -160,6 +171,7 @@ impl Shared {
     pub fn new(config: Config) -> Self {
         Self {
             running: AtomicBool::new(true),
+            launchers: Mutex::new(Arc::new(Vec::new())),
             audio: Mutex::new(AudioRing::new()),
             sample_rate: AtomicU32::new(48000),
             config: Mutex::new(config),

@@ -821,7 +821,8 @@ impl Overlay {
     }
 
     fn card_layout(&self) -> CLayout {
-        CLayout::build(self.scale(), &self.cfg, self.media.dur > 0.0)
+        let n = if self.cfg.card_launchers { self.shared.launchers.lock().unwrap().len().min(crate::launchers::MAX) } else { 0 };
+        CLayout::build(self.scale(), &self.cfg, self.media.dur > 0.0).with_launchers(n, self.scale())
     }
 
     fn widget_layout(&self) -> Option<WLayout> {
@@ -1369,14 +1370,27 @@ impl Overlay {
                 self.repeat_pending.set(next);
                 self.shared.send_media(MediaCmd::Repeat(next));
             }
-            // O player não deixa (navegadores): explica no card em vez de não fazer nada.
+            // O player não deixa (navegadores): traz o player para a frente,
+            // para usar o botão dele. Sem achar a janela, explica no card.
             Hit::Shuffle | Hit::Repeat => {
-                if !self.flyout_open {
-                    self.open_flyout(now);
+                if crate::launchers::focus_player(&m.aumid, &m.title) {
+                    self.flyout_open = false;
+                } else {
+                    if !self.flyout_open {
+                        self.open_flyout(now);
+                    }
+                    self.hint = Some(now);
                 }
-                self.hint = Some(now);
             }
             Hit::VolBtn => self.volume.toggle_mute(),
+            // Abre o app de música e fecha o card (a janela do app aparece).
+            Hit::Launch(i) => {
+                if let Some(app) = self.shared.launchers.lock().unwrap().get(i as usize) {
+                    log::info(&format!("abrindo {} ({})", app.name, app.id));
+                    crate::launchers::open(&app.id);
+                }
+                self.flyout_open = false;
+            }
             _ => {}
         }
     }
@@ -1428,6 +1442,7 @@ impl Overlay {
             let mut cv = surf.canvas();
             cv.clear();
             let pressed = self.pressed.filter(|(w, _)| *w == Win::Flyout).map(|(_, h)| h);
+            let launchers = self.shared.launchers.lock().unwrap().clone();
             let f = ui::CardFrame {
                 cfg: &self.cfg,
                 colors: &self.colors,
@@ -1441,6 +1456,7 @@ impl Overlay {
                     let k = (now - t).as_secs_f32();
                     (k < 2.8).then(|| (tr("Este player não deixa mudar isso pelo Windows"), (1.0 - (k - 2.4) / 0.4).clamp(0.0, 1.0)))
                 }),
+                launchers: &launchers,
             };
             ui::draw_card(&mut cv, &mut self.text, &l, &f);
         }
