@@ -594,6 +594,33 @@ pub fn widget_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     Theme { fg, accent, on_accent: on_color(accent), dark }
 }
 
+/// Cores dos controles (aleatório, anterior, play, próximo, repetir) conforme
+/// a opção "Cor dos controles". `fg`: os ícones; `accent`: o fundo do play
+/// preenchido e os botões ligados; `on_accent`: o ícone sobre o play.
+pub fn controls_theme(choice: crate::config::ControlColor, custom: &str, th: &Theme, m: &MediaInfo) -> Theme {
+    use crate::config::ControlColor;
+    let one = |c: Rgb| Theme { fg: c, accent: c, on_accent: on_color(c), dark: th.dark };
+    match choice {
+        // Branco no fundo escuro; no fundo claro (barra clara, gradiente pastel)
+        // fica escuro, senão some.
+        ControlColor::White => one(th.fg),
+        ControlColor::WhiteAccent => *th,
+        ControlColor::Album => one(m.art.as_ref().map(|a| readable(a.vibrant, th.dark)).unwrap_or(th.accent)),
+        ControlColor::Accent => one(th.accent),
+        ControlColor::Custom => one(crate::config::parse_hex(custom).unwrap_or(th.fg)),
+    }
+}
+
+/// Opacidade dos controles indisponíveis.
+const OFF_ALPHA: f32 = 0.9;
+
+/// Controle indisponível: a mesma cor dos outros, apagada (misturada a um
+/// cinza neutro) e quase opaca. Translúcida, ela pegava a cor do fundo
+/// (rosado sobre uma capa vermelha).
+fn off_color(c: Rgb, dark: bool) -> Rgb {
+    lerp3(c, if dark { [0.22; 3] } else { [0.86; 3] }, 0.45)
+}
+
 /// Cor aproximada da barra de tarefas atrás do widget.
 fn taskbar_base(colors: &Colors) -> Rgb {
     if colors.light_taskbar { [0.93, 0.93, 0.94] } else { [0.11, 0.11, 0.12] }
@@ -1398,24 +1425,39 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
     }
 
     let dim = |e: bool| if e { 1.0 } else { 0.3 };
+    // Controles na cor escolhida (padrão: branco).
+    let ct = controls_theme(cfg.widget_controls, &cfg.widget_controls_rgb, th, m);
+    // Indisponível (ex.: pular num vídeo do navegador): cinza neutro apagado.
+    let off = off_color(ct.fg, th.dark);
+    let icon = |cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, h: Hit| {
+        let (c, a) = if on { (ct.fg, 1.0) } else { (off, OFF_ALPHA) };
+        ctrl_glyph(cv, tr, r, g, Font::IconSmall, c, a, &it, h, s);
+    };
     // Aleatório/repetir: apagados quando o player não deixa mudar pelo Windows.
     if let Some(r) = l.shuffle {
-        toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &it, Hit::Shuffle);
+        match m.can_shuffle {
+            true => toggle_glyph(cv, tr, r, G_SHUFFLE, f.pb.shuffle, true, &ct, s, &it, Hit::Shuffle),
+            false => icon(cv, tr, r, G_SHUFFLE, false, Hit::Shuffle),
+        }
     }
     if let Some(r) = l.prev {
-        ctrl_glyph(cv, tr, r, G_PREV, Font::IconSmall, th.fg, dim(m.can_prev), &it, Hit::Prev, s);
+        icon(cv, tr, r, G_PREV, m.can_prev, Hit::Prev);
     }
     if let Some(r) = l.play {
         match cfg.taskbar_play {
-            TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, th, &it, f.pb.playing, m.can_toggle, s),
-            TaskbarPlay::Icon => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, th.fg, dim(m.can_toggle), &it, s),
+            TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, &ct, &it, f.pb.playing, m.can_toggle, s),
+            TaskbarPlay::Icon => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, ct.fg, dim(m.can_toggle), &it, s),
         }
     }
     if let Some(r) = l.next {
-        ctrl_glyph(cv, tr, r, G_NEXT, Font::IconSmall, th.fg, dim(m.can_next), &it, Hit::Next, s);
+        icon(cv, tr, r, G_NEXT, m.can_next, Hit::Next);
     }
     if let Some(r) = l.repeat {
-        toggle_glyph(cv, tr, r, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &it, Hit::Repeat);
+        let g = if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL };
+        match m.can_repeat {
+            true => toggle_glyph(cv, tr, r, g, f.pb.repeat != 0, true, &ct, s, &it, Hit::Repeat),
+            false => icon(cv, tr, r, g, false, Hit::Repeat),
+        }
     }
     // Atalhos dos apps de música (opção "Na barra").
     if let Some((x, y0, y1)) = l.launch_divider {
@@ -1803,15 +1845,25 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
             hover_bg(cv, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), k / 2.0, th, f.it.pressed == Some(h));
         }
     }
-    let dim = |e: bool| if e { 1.0 } else { 0.3 };
-    if m.can_shuffle || always {
-        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, m.can_shuffle, th, s, &it, Hit::Shuffle);
+    let ct = controls_theme(cfg.card_controls, &cfg.card_controls_rgb, th, m);
+    let off = off_color(ct.fg, th.dark);
+    let icon = |cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, on: bool, h: Hit| {
+        let (c, a) = if on { (ct.fg, 1.0) } else { (off, OFF_ALPHA) };
+        ctrl_glyph(cv, tr, r, g, font, c, a, &it, h, s);
+    };
+    if m.can_shuffle {
+        toggle_glyph(cv, tr, l.shuffle, G_SHUFFLE, f.pb.shuffle, true, &ct, s, &it, Hit::Shuffle);
+    } else if always {
+        icon(cv, tr, l.shuffle, G_SHUFFLE, Font::IconSmall, false, Hit::Shuffle);
     }
-    ctrl_glyph(cv, tr, l.prev, G_PREV, Font::Icon, th.fg, dim(m.can_prev), &it, Hit::Prev, s);
-    play_button(cv, tr, l.play, l.play_size, cfg.play_shape, th, &it, f.pb.playing, m.can_toggle, s);
-    ctrl_glyph(cv, tr, l.next, G_NEXT, Font::Icon, th.fg, dim(m.can_next), &it, Hit::Next, s);
-    if m.can_repeat || always {
-        toggle_glyph(cv, tr, l.repeat, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &it, Hit::Repeat);
+    icon(cv, tr, l.prev, G_PREV, Font::Icon, m.can_prev, Hit::Prev);
+    play_button(cv, tr, l.play, l.play_size, cfg.play_shape, &ct, &it, f.pb.playing, m.can_toggle, s);
+    icon(cv, tr, l.next, G_NEXT, Font::Icon, m.can_next, Hit::Next);
+    let g = if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL };
+    if m.can_repeat {
+        toggle_glyph(cv, tr, l.repeat, g, f.pb.repeat != 0, true, &ct, s, &it, Hit::Repeat);
+    } else if always {
+        icon(cv, tr, l.repeat, g, Font::IconSmall, false, Hit::Repeat);
     }
 
     // Progresso com tempos embaixo.

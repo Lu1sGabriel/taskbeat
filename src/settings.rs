@@ -83,6 +83,8 @@ enum Key {
     WidgetDivider,
     TaskbarShuffle,
     TaskbarPlay,
+    WidgetControls,
+    WidgetControlsRgb,
     CardShuffle,
     Marquee,
     TitleWidth,
@@ -96,6 +98,8 @@ enum Key {
     Accent,
     Corners,
     PlayShape,
+    CardControls,
+    CardControlsRgb,
     CardSeek,
     ShowVolume,
     Autoclose,
@@ -149,6 +153,8 @@ enum Kind {
     Info,
     /// Lista dos apps de música achados: interruptor em cada um e arrastar para reordenar.
     AppList,
+    /// Seletor de cor: amostras, matiz/saturação, brilho e código hex.
+    Color,
 }
 
 enum Item {
@@ -202,6 +208,9 @@ const BARS: &[usize] = &[6, 8, 10, 12, 16, 24, 32];
 const SIZES: &[&str] = &["Pequeno", "Normal", "Grande"];
 const COVER_SIZES: &[&str] = &["Pequena", "Normal", "Grande"];
 const SECOND_LINES: &[&str] = &["Artista", "Artista · Álbum", "Álbum", "Tempo"];
+const CONTROL_COLORS: &[&str] = &["Branco", "Branco e destaque", "Cor da capa", "Cor de destaque", "Personalizada"];
+/// Cores prontas do seletor de cor.
+const SWATCHES: [u32; 12] = [0xFFFFFF, 0xC8C8CC, 0xFF6B9A, 0xFF4D4D, 0xFF9F43, 0xFFD93D, 0x4CD964, 0x2ED3B7, 0x4CC9F0, 0x5EB1FF, 0x7C83FD, 0xC77DFF];
 const LAUNCHER_PLACES: &[&str] = &["No card", "Na barra", "Nos dois"];
 const ICON_STYLES: &[&str] = &["Preenchidos", "Contorno"];
 const TINTS: &[&str] = &["Neutro", "Cor da capa", "Cor de destaque", "Gradiente da capa", "Capa desfocada"];
@@ -224,7 +233,9 @@ const PAGES: &[Page] = &[
             Section("Botões na barra"),
             Row { icon: "\u{E768}", title: "Botões de controle na barra", desc: "Anterior, play e próximo dentro do widget; desligados, ficam só no card", key: Key::TaskbarControls, kind: Kind::Toggle },
             Row { icon: "\u{E8B1}", title: "Aleatório e repetir na barra", desc: "Junto dos botões; no YouTube Music do navegador eles apertam os botões da própria página", key: Key::TaskbarShuffle, kind: Kind::Toggle },
-            Row { icon: "\u{E768}", title: "Botão play", desc: "Círculo na cor de destaque ou só o ícone, como os outros", key: Key::TaskbarPlay, kind: Kind::Segmented(TASKBAR_PLAYS) },
+            Row { icon: "\u{E768}", title: "Botão play", desc: "Preenchido, na cor dos controles, ou só o ícone, como os outros", key: Key::TaskbarPlay, kind: Kind::Segmented(TASKBAR_PLAYS) },
+            Row { icon: "\u{E790}", title: "Cor dos controles", desc: "Aleatório, anterior, play, próximo e repetir; o branco fica escuro sobre fundos claros", key: Key::WidgetControls, kind: Kind::Choice(CONTROL_COLORS) },
+            Row { icon: "\u{E2B1}", title: "Cor personalizada", desc: "Qualquer cor: amostras, matiz e saturação, brilho ou o código hex", key: Key::WidgetControlsRgb, kind: Kind::Color },
             Row { icon: "\u{E7FB}", title: "Separador", desc: "Linha fina entre a música e os botões", key: Key::WidgetDivider, kind: Kind::Toggle },
             Section("Capa e texto"),
             Row { icon: "\u{E91B}", title: "Formato da capa", desc: "Como a capa aparece na barra", key: Key::CoverShape, kind: Kind::Segmented(SHAPES) },
@@ -260,6 +271,8 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E790}", title: "Cor de destaque", desc: "Botões e progresso na cor da capa ou do Windows", key: Key::Accent, kind: Kind::Segmented(ACCENTS) },
             Row { icon: "\u{E7FB}", title: "Cantos", desc: "Raio das bordas do card", key: Key::Corners, kind: Kind::Segmented(CORNERS) },
             Row { icon: "\u{E768}", title: "Botão play", desc: "Formato do botão principal", key: Key::PlayShape, kind: Kind::Segmented(PLAY_SHAPES) },
+            Row { icon: "\u{E790}", title: "Cor dos controles", desc: "Ícones, play e botões ligados do card; o branco fica escuro sobre fundos claros", key: Key::CardControls, kind: Kind::Choice(CONTROL_COLORS) },
+            Row { icon: "\u{E2B1}", title: "Cor personalizada", desc: "Qualquer cor: amostras, matiz e saturação, brilho ou o código hex", key: Key::CardControlsRgb, kind: Kind::Color },
             Row { icon: "\u{E945}", title: "Animar ícones", desc: "Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar (no card e na barra)", key: Key::IconAnim, kind: Kind::Toggle },
             Row { icon: "\u{E8D3}", title: "Estilo dos ícones", desc: "Formas preenchidas e encorpadas ou o contorno fino do Fluent (no card e na barra)", key: Key::IconStyle, kind: Kind::Segmented(ICON_STYLES) },
             Row { icon: "\u{E9E9}", title: "Barras no card", desc: "Mini visualizador ao lado do título, reagindo ao som", key: Key::CardViz, kind: Kind::Toggle },
@@ -377,6 +390,7 @@ const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
 const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbow, Palette::Neon, Palette::Mono];
 const SIZE_V: &[Size3] = &[Size3::Small, Size3::Normal, Size3::Large];
 const SECOND_V: &[SecondLine] = &[SecondLine::Artist, SecondLine::ArtistAlbum, SecondLine::Album, SecondLine::Time];
+const CONTROL_V: &[ControlColor] = &[ControlColor::White, ControlColor::WhiteAccent, ControlColor::Album, ControlColor::Accent, ControlColor::Custom];
 const LAUNCHER_PLACE_V: &[LauncherPlace] = &[LauncherPlace::Card, LauncherPlace::Taskbar, LauncherPlace::Both];
 const ICON_STYLE_V: &[IconStyle] = &[IconStyle::Filled, IconStyle::Fluent];
 const TINT_V: &[WidgetTint] = &[WidgetTint::Neutral, WidgetTint::Album, WidgetTint::Accent, WidgetTint::Gradient, WidgetTint::Artwork];
@@ -407,6 +421,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::WidgetDivider => c.widget_divider as i32,
         Key::TaskbarShuffle => c.taskbar_shuffle_repeat as i32,
         Key::TaskbarPlay => idx(TASKBAR_PLAY_V, c.taskbar_play),
+        Key::WidgetControls => idx(CONTROL_V, c.widget_controls),
+        Key::WidgetControlsRgb => rgb_of(&c.widget_controls_rgb) as i32,
         Key::CardShuffle => idx(SHUFFLE_V, c.card_shuffle_repeat),
         Key::Marquee => c.marquee as i32,
         Key::TitleWidth => c.title_width,
@@ -419,6 +435,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::Accent => idx(ACCENT_V, c.accent_source),
         Key::Corners => idx(CORNER_V, c.corners),
         Key::PlayShape => idx(PLAY_V, c.play_shape),
+        Key::CardControls => idx(CONTROL_V, c.card_controls),
+        Key::CardControlsRgb => rgb_of(&c.card_controls_rgb) as i32,
         Key::CardSeek => c.card_seek as i32,
         Key::ShowVolume => c.show_volume as i32,
         Key::Autoclose => c.card_autoclose,
@@ -489,6 +507,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::WidgetDivider => c.widget_divider = v != 0,
         Key::TaskbarShuffle => c.taskbar_shuffle_repeat = v != 0,
         Key::TaskbarPlay => c.taskbar_play = pick(TASKBAR_PLAY_V, i),
+        Key::WidgetControls => c.widget_controls = pick(CONTROL_V, i),
+        Key::WidgetControlsRgb => c.widget_controls_rgb = hex_of(v as u32),
         Key::CardShuffle => c.card_shuffle_repeat = pick(SHUFFLE_V, i),
         Key::Marquee => c.marquee = v != 0,
         Key::TitleWidth => c.title_width = v,
@@ -501,6 +521,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::Accent => c.accent_source = pick(ACCENT_V, i),
         Key::Corners => c.corners = pick(CORNER_V, i),
         Key::PlayShape => c.play_shape = pick(PLAY_V, i),
+        Key::CardControls => c.card_controls = pick(CONTROL_V, i),
+        Key::CardControlsRgb => c.card_controls_rgb = hex_of(v as u32),
         Key::CardSeek => c.card_seek = v != 0,
         Key::ShowVolume => c.show_volume = v != 0,
         Key::Autoclose => c.card_autoclose = v,
@@ -549,6 +571,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
 fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     use Key::*;
     const MEDIA: &str = "Ligue \"Mostrar música na barra\" para usar esta opção";
+    const CUSTOM: &str = "Escolha \"Personalizada\" em \"Cor dos controles\" para usar esta opção";
     const LAUNCH: &str = "Ligue \"Atalhos dos apps de música\" para usar esta opção";
     const CONTROLS: &str = "Os botões estão desligados: ligue \"Botões de controle na barra\" para usar esta opção";
     const PILL: &str = "Ligue \"Fundo em pílula\" para usar esta opção";
@@ -561,12 +584,14 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     const VIZ: &str = "Ligue \"Mostrar barras dinâmicas\" para usar esta opção";
     let osd_on = c.caps_lock_osd || c.num_lock_osd;
     match key {
-        AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
+        AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetControls | WidgetControlsRgb | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
             if !c.show_media =>
         {
             Some(MEDIA)
         }
-        TaskbarShuffle | TaskbarPlay | WidgetDivider if !c.taskbar_controls => Some(CONTROLS),
+        TaskbarShuffle | TaskbarPlay | WidgetDivider | WidgetControls | WidgetControlsRgb if !c.taskbar_controls => Some(CONTROLS),
+        WidgetControlsRgb if c.widget_controls != ControlColor::Custom => Some(CUSTOM),
+        CardControlsRgb if c.card_controls != ControlColor::Custom => Some(CUSTOM),
         WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder if !c.widget_pill => Some(PILL),
         WidgetIntensity | WidgetGlow if !c.widget_tint.is_rich() => Some(RICH),
         WidgetOpacity if c.widget_tint.is_rich() => Some(CLASSIC),
@@ -601,6 +626,8 @@ enum Hit {
     Off(usize),
     /// App `k` da lista de atalhos da linha `ri` (clique liga/desliga; arrastar reordena).
     App(usize, usize),
+    /// Parte `k` do seletor de cor da linha `ri` (ver `PICK_*`).
+    Pick(usize, usize),
 }
 
 /// Camada já desenhada guardada em memória.
@@ -730,6 +757,10 @@ struct Ui {
     pressed: Option<Hit>,
     drag: Option<usize>,
     app_drag: Option<AppDrag>,
+    /// Arrastando no quadro de matiz/saturação ou no brilho: (linha, parte).
+    color_drag: Option<(usize, usize)>,
+    /// Editando o código hex de um seletor: (linha, texto digitado).
+    hex_edit: Option<(usize, String)>,
     tracking: bool,
     surface: Option<Surface>,
     text: TextRenderer,
@@ -891,6 +922,8 @@ pub fn open(shared: Arc<Shared>, icon: HICON) {
                 pressed: None,
                 drag: None,
                 app_drag: None,
+                color_drag: None,
+                hex_edit: None,
                 tracking: false,
                 surface: None,
                 text,
@@ -1084,9 +1117,17 @@ impl Ui {
                     sections.push((i, y));
                     y += 30.0 * s;
                 }
-                Row { kind, .. } => {
+                Row { kind, key, .. } => {
                     let apps = if matches!(kind, Kind::AppList) { self.shared.launchers.lock().unwrap().len().max(1) } else { 0 };
-                    let card_h = if apps > 0 { 66.0 * s + apps as f32 * 44.0 * s + 10.0 * s } else { 66.0 * s };
+                    // O seletor de cor só abre quando a opção vale ("Personalizada").
+                    let picker = matches!(kind, Kind::Color) && requirement(&cfg, *key).is_none();
+                    let card_h = if apps > 0 {
+                        66.0 * s + apps as f32 * 44.0 * s + 10.0 * s
+                    } else if picker {
+                        PICKER_H * s
+                    } else {
+                        66.0 * s
+                    };
                     let card = RectF::new(x0, y.round(), x1 - x0, card_h.round());
                     let right = card.right() - 18.0 * s;
                     let mut segs = Vec::new();
@@ -1115,6 +1156,13 @@ impl Ui {
                                 segs.push(RectF::new(card.x + 48.0 * s, card.y + 62.0 * s + k as f32 * 44.0 * s, card.w - 66.0 * s, 40.0 * s));
                             }
                             RectF::default()
+                        }
+                        Kind::Color => {
+                            if picker {
+                                segs = picker_parts(card, s);
+                            }
+                            // Amostra da cor atual (à direita do cabeçalho).
+                            RectF::new(right - 32.0 * s, card.y + 17.0 * s, 32.0 * s, 32.0 * s)
                         }
                     };
                     rows.push(RowL { item: i, card, ctl, segs });
@@ -1164,6 +1212,11 @@ impl Ui {
                 Kind::Choice(_) | Kind::Slider { .. } | Kind::Button(_) => {
                     if r.ctl.contains(x, y) {
                         return Some(Hit::Row(ri));
+                    }
+                }
+                Kind::Color => {
+                    if let Some(k) = r.segs.iter().position(|sr| sr.contains(x, y)) {
+                        return Some(Hit::Pick(ri, k));
                     }
                 }
                 Kind::AppList => {
@@ -1271,7 +1324,11 @@ impl Ui {
             hover: q(a.hover),
             toggle: q(a.toggle),
             seg: (a.seg * 96.0).round() as i16,
-            extra: if matches!(kind, Kind::AppList) { self.app_list_sig(ri, cfg) } else { 0 },
+            extra: match kind {
+                Kind::AppList => self.app_list_sig(ri, cfg),
+                Kind::Color => self.picker_sig(ri, cfg, key),
+                _ => 0,
+            },
         }
     }
 
@@ -1628,7 +1685,127 @@ impl Ui {
             }
             Kind::Info => {}
             Kind::AppList => self.draw_app_list(cv, ri, r, en),
+            Kind::Color => self.draw_picker(cv, ri, r, *key, en),
         }
+    }
+
+    /// Resumo do que o seletor de cor mostra (para só redesenhar quando muda).
+    fn picker_sig(&self, ri: usize, cfg: &Config, key: Key) -> u64 {
+        let hover = match self.hover {
+            Some(Hit::Pick(r, k)) if r == ri => k as i32,
+            _ => -1,
+        };
+        let edit = self.hex_edit.as_ref().filter(|(r, _)| *r == ri).map(|(_, t)| t.clone());
+        ui::layer_key((get(cfg, key), hover, self.color_drag.filter(|(r, _)| *r == ri), edit))
+    }
+
+    /// Seletor de cor: amostra e código no cabeçalho; aberto, as cores prontas,
+    /// o quadro de matiz (horizontal) e saturação (vertical), o brilho e o hex.
+    fn draw_picker(&mut self, cv: &mut Canvas, ri: usize, r: &RowL, key: Key, en: f32) {
+        let s = self.scale;
+        let fg = self.fg();
+        let cfg = self.cfg();
+        let rgb = get(&cfg, key) as u32;
+        let cur = rgb_f(rgb);
+        // Cabeçalho: amostra arredondada e o código.
+        let sw = r.ctl;
+        cv.fill_round(sw, 8.0 * s, cur, en.max(0.5));
+        cv.stroke_round(sw, 8.0 * s, s, fg, 0.25);
+        self.label_right(cv, &hex_of(rgb), Font::Body, sw.x - 12.0 * s, sw.cy(), 22.0 * s, fg, 0.8 * en);
+        if r.segs.len() <= PICK_HEX {
+            return;
+        }
+        let hover = match self.hover {
+            Some(Hit::Pick(h, k)) if h == ri => Some(k),
+            _ => None,
+        };
+        // Cores prontas (anel na escolhida e sob o mouse).
+        for (k, &c) in SWATCHES.iter().enumerate() {
+            let b = r.segs[k];
+            let chosen = c == rgb;
+            if chosen || hover == Some(k) {
+                cv.stroke_round(b.inset(-3.0 * s), b.w / 2.0 + 3.0 * s, (if chosen { 2.0 } else { 1.0 }) * s, if chosen { self.accent } else { fg }, if chosen { 1.0 } else { 0.4 });
+            }
+            cv.fill_circle(b.cx(), b.cy(), b.w / 2.0, rgb_f(c), 1.0);
+            cv.stroke_round(b, b.w / 2.0, s, fg, 0.18);
+        }
+        let (h, sat, v) = render::rgb_to_hsv(cur);
+        // Matiz × saturação (no brilho máximo).
+        let bx = r.segs[PICK_BOX];
+        let (x0, y0) = (bx.x, bx.y);
+        cv.fill_rrect_ca(bx.x, bx.y, bx.right(), bx.bottom(), 8.0 * s, |x, y| {
+            let hh = ((x - x0) / bx.w).clamp(0.0, 1.0) * 360.0;
+            let ss = 1.0 - ((y - y0) / bx.h).clamp(0.0, 1.0);
+            (render::hsv(hh, ss, 1.0), 1.0)
+        });
+        cv.stroke_round(bx, 8.0 * s, s, fg, 0.18);
+        let (mx, my) = (bx.x + h / 360.0 * bx.w, bx.y + (1.0 - sat) * bx.h);
+        cv.fill_circle(mx, my, 8.0 * s, [0.0; 3], 0.35);
+        cv.fill_circle(mx, my, 7.0 * s, [1.0; 3], 1.0);
+        cv.fill_circle(mx, my, 5.0 * s, render::hsv(h, sat, 1.0), 1.0);
+        // Brilho: do preto à cor no máximo.
+        let br = r.segs[PICK_BRIGHT];
+        let full = render::hsv(h, sat, 1.0);
+        let track = RectF::new(br.x, br.cy() - 6.0 * s, br.w, 12.0 * s);
+        let tx0 = track.x;
+        cv.fill_rrect_ca(track.x, track.y, track.right(), track.bottom(), 6.0 * s, |x, _| (lerp3([0.0; 3], full, ((x - tx0) / track.w).clamp(0.0, 1.0)), 1.0));
+        cv.stroke_round(track, 6.0 * s, s, fg, 0.18);
+        let kx = track.x + v * track.w;
+        cv.fill_circle(kx, track.cy(), 9.0 * s, [0.0; 3], 0.3);
+        cv.fill_circle(kx, track.cy(), 8.0 * s, [1.0; 3], 1.0);
+        cv.fill_circle(kx, track.cy(), 5.5 * s, cur, 1.0);
+        // Código hex (clique para digitar).
+        let hx = r.segs[PICK_HEX];
+        let editing = self.hex_edit.as_ref().filter(|(r, _)| *r == ri).map(|(_, t)| t.clone());
+        self.draw_box(cv, hx, if hover == Some(PICK_HEX) { 1.0 } else { 0.0 }, en);
+        if editing.is_some() {
+            cv.stroke_round(hx, 5.0 * s, 2.0 * s, self.accent, 1.0);
+        }
+        let shown = match &editing {
+            Some(t) => format!("#{t}"),
+            None => hex_of(rgb),
+        };
+        self.label(cv, &shown, Font::Body, hx.x + 12.0 * s, hx.y, hx.w - 20.0 * s, hx.h, fg, en);
+        if editing.is_some() {
+            let tw = self.text.mask(&shown, Font::Body, (hx.w - 20.0 * s) as i32, hx.h as i32, Align::Left).used_width();
+            let cx = hx.x + 13.0 * s + tw;
+            cv.fill_rrect(cx, hx.y + 8.0 * s, cx + 1.5 * s, hx.bottom() - 8.0 * s, 0.5 * s, 1.0, fg);
+        }
+        self.label(cv, tr("Clique e digite o código (ex.: FF6B9A)"), Font::Caption, hx.x, hx.bottom() + 4.0 * s, 300.0 * s, 18.0 * s, fg, 0.5 * en);
+    }
+
+    /// Cor sob o mouse num seletor (quadro ou brilho), sem gravar.
+    fn pick_at(&mut self, ri: usize, part: usize, x: f32, y: f32) {
+        let Some((key, _)) = self.row(ri) else { return };
+        let y = y + self.scroll_px();
+        let l = self.layout();
+        let Some(r) = l.rows.get(ri) else { return };
+        let Some(b) = r.segs.get(part).copied() else { return };
+        let cfg = self.cfg();
+        let (h, sat, v) = render::rgb_to_hsv(rgb_f(get(&cfg, key) as u32));
+        let c = if part == PICK_BOX {
+            let hh = ((x - b.x) / b.w).clamp(0.0, 0.999) * 360.0;
+            let ss = 1.0 - ((y - b.y) / b.h).clamp(0.0, 1.0);
+            // Vindo do preto, o quadro mostra a cor no brilho máximo.
+            render::hsv(hh, ss, if v < 0.05 { 1.0 } else { v })
+        } else {
+            render::hsv(h, sat, ((x - b.x) / b.w).clamp(0.0, 1.0))
+        };
+        let v = c.iter().fold(0u32, |a, ch| (a << 8) | (ch.clamp(0.0, 1.0) * 255.0).round() as u32);
+        if get(&cfg, key) != v as i32 {
+            self.shared.preview_config(|cf| set(cf, key, v as i32));
+        }
+    }
+
+    /// Termina a edição do código hex: grava se for válido (`apply`).
+    fn end_hex_edit(&mut self, apply: bool) {
+        let Some((ri, t)) = self.hex_edit.take() else { return };
+        if let (true, Some((key, _)), Some(_)) = (apply, self.row(ri), parse_hex(&t)) {
+            let v = rgb_of(&t) as i32;
+            self.shared.update_config(|c| set(c, key, v));
+        }
+        let r = self.row_window_rect(ri);
+        invalidate_rect(self.hwnd, r);
     }
 
     /// Todos os apps de música achados, na ordem escolhida, com "à mostra?".
@@ -2107,6 +2284,31 @@ impl Ui {
     }
 }
 
+/// Altura (px lógicos) da linha do seletor de cor aberto.
+const PICKER_H: f32 = 268.0;
+/// Partes do seletor de cor: 0..12 = cores prontas; depois o quadro, o brilho e o hex.
+const PICK_BOX: usize = SWATCHES.len();
+const PICK_BRIGHT: usize = PICK_BOX + 1;
+const PICK_HEX: usize = PICK_BOX + 2;
+
+/// Retângulos das partes do seletor de cor aberto numa linha `card`.
+fn picker_parts(card: RectF, s: f32) -> Vec<RectF> {
+    let x0 = card.x + 60.0 * s;
+    let y0 = card.y + 64.0 * s;
+    let mut parts: Vec<RectF> = (0..SWATCHES.len()).map(|k| RectF::new(x0 + k as f32 * 36.0 * s, y0, 26.0 * s, 26.0 * s)).collect();
+    let bw = (card.w - 60.0 * s - 260.0 * s).clamp(160.0 * s, 440.0 * s);
+    let bx = RectF::new(x0, y0 + 42.0 * s, bw, 110.0 * s);
+    parts.push(bx);
+    parts.push(RectF::new(x0, bx.bottom() + 12.0 * s, bw, 26.0 * s));
+    parts.push(RectF::new(bx.right() + 28.0 * s, bx.y, 150.0 * s, 34.0 * s));
+    parts
+}
+
+/// 0xRRGGBB em 0..1.
+fn rgb_f(v: u32) -> Rgb {
+    [((v >> 16) & 0xff) as f32 / 255.0, ((v >> 8) & 0xff) as f32 / 255.0, (v & 0xff) as f32 / 255.0]
+}
+
 /// Logo do app: "squircle" em gradiente (roxo → rosa → laranja) com barras brancas.
 pub fn draw_logo(cv: &mut Canvas, r: RectF) {
     let (x0, y0, w) = (r.x, r.y, r.w);
@@ -2192,6 +2394,17 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
             Action::Redraw
         }
         Hit::Off(_) => Action::None,
+        Hit::Pick(ri, k) => {
+            let Some((key, _)) = u.row(ri) else { return Action::None };
+            if k < PICK_BOX {
+                u.shared.update_config(|c| set(c, key, SWATCHES[k] as i32));
+            } else if k == PICK_HEX {
+                let cur = hex_of(get(&u.cfg(), key) as u32);
+                u.hex_edit = Some((ri, cur.trim_start_matches('#').to_string()));
+            }
+            u.schedule();
+            Action::Redraw
+        }
         Hit::App(_, k) => {
             let cfg = u.cfg();
             if let Some((app, on)) = u.app_list(&cfg).get(k) {
@@ -2483,7 +2696,7 @@ impl Ui {
                     let s = self.scale;
                     invalidate_rect(self.hwnd, RectF::new(0.0, 0.0, NAV_W * s, self.client().1));
                 }
-                Hit::Row(ri) | Hit::Seg(ri, _) | Hit::Off(ri) | Hit::App(ri, _) => {
+                Hit::Row(ri) | Hit::Seg(ri, _) | Hit::Off(ri) | Hit::App(ri, _) | Hit::Pick(ri, _) => {
                     let r = self.row_window_rect(ri);
                     invalidate_rect(self.hwnd, r);
                 }
@@ -2588,6 +2801,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         let _ = TrackMouseEvent(&mut tme);
                         u.tracking = true;
                     }
+                    if let Some((ri, part)) = u.color_drag {
+                        u.pick_at(ri, part, x, y);
+                        let r = u.row_window_rect(ri);
+                        invalidate_rect(hwnd, r);
+                        if let Some(hero) = u.layout().hero {
+                            invalidate_rect(hwnd, hero);
+                        }
+                        drag_changed = true;
+                        return;
+                    }
                     if let Some(d) = u.app_drag.as_mut() {
                         d.y = y;
                         if !d.active && (y - d.y0).abs() > 4.0 * u.scale {
@@ -2642,6 +2865,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 with_ui(|u| {
                     let h = u.hit(x, y);
                     u.pressed = h;
+                    // Clicou fora do campo hex: termina a edição (grava se válido).
+                    if u.hex_edit.is_some() && !matches!(h, Some(Hit::Pick(_, PICK_HEX))) {
+                        u.end_hex_edit(true);
+                    }
+                    if let Some(Hit::Pick(ri, part @ (PICK_BOX | PICK_BRIGHT))) = h {
+                        u.color_drag = Some((ri, part));
+                        u.pick_at(ri, part, x, y);
+                        let r = u.row_window_rect(ri);
+                        invalidate_rect(hwnd, r);
+                        if let Some(hero) = u.layout().hero {
+                            invalidate_rect(hwnd, hero);
+                        }
+                    }
                     if let Some(Hit::App(ri, k)) = h {
                         let cfg = u.cfg();
                         if let Some((app, _)) = u.app_list(&cfg).get(k) {
@@ -2669,6 +2905,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let _ = ReleaseCapture();
                 let (x, y) = xy(lp);
                 let action = with_ui(|u| {
+                    if let Some((ri, _)) = u.color_drag.take() {
+                        u.shared.save_config();
+                        u.pressed = None;
+                        let r = u.row_window_rect(ri);
+                        invalidate_rect(hwnd, r);
+                        return Action::None;
+                    }
                     if let Some(d) = u.app_drag.take()
                         && d.active
                     {
@@ -2723,6 +2966,36 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     }
                 }
                 LRESULT(0)
+            }
+            // Digitando o código hex de uma cor.
+            WM_CHAR => {
+                let ch = wp.0 as u32;
+                let used = with_ui(|u| {
+                    let Some((ri, t)) = u.hex_edit.as_mut() else { return false };
+                    let ri = *ri;
+                    match ch {
+                        8 => {
+                            t.pop();
+                        }
+                        13 => {
+                            u.end_hex_edit(true);
+                            return true;
+                        }
+                        27 => {
+                            u.end_hex_edit(false);
+                            return true;
+                        }
+                        _ => match char::from_u32(ch).filter(|c| c.is_ascii_hexdigit()) {
+                            Some(c) if t.len() < 6 => t.push(c.to_ascii_uppercase()),
+                            _ => return true,
+                        },
+                    }
+                    let r = u.row_window_rect(ri);
+                    invalidate_rect(hwnd, r);
+                    true
+                })
+                .unwrap_or(false);
+                if used { LRESULT(0) } else { DefWindowProcW(hwnd, msg, wp, lp) }
             }
             WM_MOUSEWHEEL => {
                 let delta = ((wp.0 >> 16) & 0xffff) as i16 as f32;
@@ -2850,6 +3123,7 @@ mod tests {
             }
         }
         check("Nenhum app de música encontrado");
+        check("Clique e digite o código (ex.: FF6B9A)");
         missing.sort();
         missing.dedup();
         assert!(missing.is_empty(), "sem tradução: {missing:#?}");

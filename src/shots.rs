@@ -419,6 +419,76 @@ fn widget_tints() {
     save_png("widget-tints.png", img.0, img.1, &img.2);
 }
 
+/// Cores dos controles do widget (cada opção, com fundos diferentes, alguns
+/// botões apagados como num vídeo do navegador) e do card.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test --release control_colors -- --ignored`
+#[test]
+#[ignore]
+fn control_colors() {
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let choices = [ControlColor::White, ControlColor::WhiteAccent, ControlColor::Album, ControlColor::Accent, ControlColor::Custom];
+    let red = tinted_art([0.80, 0.10, 0.15], [0.35, 0.02, 0.10]);
+    let wh = 40.0 * S;
+    let bar_h = 48.0 * S;
+    let mut rows = Vec::new();
+    for (light, tint, art, browser) in [
+        (false, WidgetTint::Artwork, Some(red.clone()), true),
+        (false, WidgetTint::Album, None, false),
+        (false, WidgetTint::Gradient, Some(red.clone()), false),
+        (true, WidgetTint::Album, None, false),
+    ] {
+        for choice in choices {
+            let mut media = ui::sample_media();
+            if let Some(a) = &art {
+                media.art = Some(a.clone());
+            }
+            // Vídeo no navegador: não dá para pular nem aleatório/repetir.
+            if browser {
+                (media.can_prev, media.can_next, media.can_shuffle, media.can_repeat) = (false, false, false, false);
+            }
+            let cfg = Config { widget_tint: tint, widget_controls: choice, taskbar_shuffle_repeat: true, accent_source: AccentSource::Album, ..Config::default() };
+            let mut c = colors(&cfg, &media);
+            c.light_taskbar = light;
+            let l = WLayout::build(S, wh, &cfg, true, false);
+            rows.push((light, render(l.width, wh, |cv| {
+                let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb: Playback { repeat: 2, ..playback(&media) }, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
+                ui::draw_widget(cv, &mut tr, &l, &f);
+            })));
+        }
+    }
+    let w = rows.iter().map(|r| r.1.0).max().unwrap() as f32 + 16.0 * S;
+    let img = render(w, bar_h * rows.len() as f32, |cv| {
+        for (i, (light, r)) in rows.into_iter().enumerate() {
+            let y = i as f32 * bar_h;
+            cv.fill_rrect(0.0, y, w, y + bar_h, 0.0, 1.0, if light { [0.93, 0.93, 0.94] } else { [0.11, 0.11, 0.12] });
+            blit(cv, 8.0 * S, y + 4.0 * S, r);
+        }
+    });
+    save_png("control-colors.png", img.0, img.1, &img.2);
+
+    // Card com cada opção.
+    let media = ui::sample_media();
+    let mut cards = Vec::new();
+    for choice in choices {
+        let cfg = Config { card_controls: choice, ..Config::default() };
+        let c = colors(&cfg, &media);
+        let cl = CLayout::build(S, &cfg, true);
+        cards.push(render(cl.w, cl.h, |cv| {
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb: playback(&media), s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ) };
+            ui::draw_card(cv, &mut tr, &cl, &f);
+        }));
+    }
+    let (cw, ch) = (cards[0].0 as f32, cards[0].1 as f32);
+    let img = render(cw * cards.len() as f32, ch, |cv| {
+        cv.fill_rrect(0.0, 0.0, cw * 5.0, ch, 0.0, 1.0, [0.16, 0.18, 0.24]);
+        for (i, card) in cards.into_iter().enumerate() {
+            blit(cv, i as f32 * cw, 0.0, card);
+        }
+    });
+    save_png("control-colors-card.png", img.0, img.1, &img.2);
+}
+
 /// Widget em pílula com cada formato e tamanho de capa (conferir que a capa
 /// fica dentro da ponta arredondada).
 #[test]

@@ -136,6 +136,44 @@ pub enum WidgetShape {
     Square,
 }
 
+/// Cor dos controles (aleatório, anterior, play, próximo, repetir).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlColor {
+    /// Tudo branco (escuro sobre fundos claros), play branco com o ícone escuro.
+    White,
+    /// Ícones brancos; play e botões ligados na cor de destaque.
+    WhiteAccent,
+    /// Tudo na cor viva da capa.
+    Album,
+    /// Tudo na cor de destaque (Windows ou capa, conforme "Cor de destaque").
+    Accent,
+    /// Tudo numa cor escolhida.
+    Custom,
+}
+
+/// Cor "#RRGGBB" (ou "#RGB") em 0..1.
+pub fn parse_hex(s: &str) -> Option<[f32; 3]> {
+    let h = s.trim().trim_start_matches('#');
+    let full: String = match h.len() {
+        3 => h.chars().flat_map(|c| [c, c]).collect(),
+        6 => h.to_string(),
+        _ => return None,
+    };
+    let v = u32::from_str_radix(&full, 16).ok()?;
+    Some([((v >> 16) & 0xff) as f32 / 255.0, ((v >> 8) & 0xff) as f32 / 255.0, (v & 0xff) as f32 / 255.0])
+}
+
+/// Cor 0xRRGGBB como "#RRGGBB".
+pub fn hex_of(rgb: u32) -> String {
+    format!("#{:06X}", rgb & 0xff_ffff)
+}
+
+/// "#RRGGBB" como 0xRRGGBB (preto se não der para ler).
+pub fn rgb_of(s: &str) -> u32 {
+    parse_hex(s).map(|c| c.iter().fold(0u32, |a, v| (a << 8) | (v * 255.0).round() as u32)).unwrap_or(0)
+}
+
 /// Botão play no widget da barra.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -328,6 +366,10 @@ pub struct Config {
     pub taskbar_shuffle_repeat: bool,
     /// Botão play da barra: preenchido com a cor de destaque ou só o ícone.
     pub taskbar_play: TaskbarPlay,
+    /// Cor dos controles do widget (padrão: branco).
+    pub widget_controls: ControlColor,
+    /// Cor dos controles do widget na opção "Personalizada" ("#RRGGBB").
+    pub widget_controls_rgb: String,
     /// O que aparece embaixo do título (com "Mostrar artista" ligado).
     pub second_line: SecondLine,
     /// Tamanho do título e da segunda linha.
@@ -365,6 +407,10 @@ pub struct Config {
     pub accent_source: AccentSource,
     pub corners: Corners,
     pub play_shape: Shape,
+    /// Cor dos controles do card (padrão: branco, como no widget).
+    pub card_controls: ControlColor,
+    /// Cor dos controles do card na opção "Personalizada" ("#RRGGBB").
+    pub card_controls_rgb: String,
     pub card_seek: bool,
     /// Mostra de qual app vem a música (nome no card, ícone sobre a capa).
     pub show_source: bool,
@@ -475,6 +521,8 @@ impl Default for Config {
             widget_divider: false,
             taskbar_shuffle_repeat: false,
             taskbar_play: TaskbarPlay::Filled,
+            widget_controls: ControlColor::White,
+            widget_controls_rgb: "#5EB1FF".into(),
             second_line: SecondLine::Artist,
             text_size: Size3::Normal,
             cover_size: Size3::Normal,
@@ -497,6 +545,8 @@ impl Default for Config {
             accent_source: AccentSource::Windows,
             corners: Corners::Medium,
             play_shape: Shape::Rounded,
+            card_controls: ControlColor::White,
+            card_controls_rgb: "#5EB1FF".into(),
             card_seek: true,
             show_source: false,
             show_volume: true,
@@ -643,6 +693,11 @@ impl Config {
     }
 
     fn sanitize(&mut self) {
+        for c in [&mut self.widget_controls_rgb, &mut self.card_controls_rgb] {
+            if parse_hex(c).is_none() {
+                *c = "#5EB1FF".into();
+            }
+        }
         self.width = self.width.clamp(20, 600);
         self.bars = self.bars.clamp(4, 128);
         self.sensitivity_db = self.sensitivity_db.clamp(-24.0, 24.0);
@@ -689,6 +744,19 @@ mod tests {
         };
         let text = toml::to_string_pretty(&c2).unwrap();
         assert_eq!(toml::from_str::<Config>(&text).unwrap(), c2);
+    }
+
+    /// Os controles vêm brancos (também para quem já tinha config). Cores em
+    /// hex vão e voltam.
+    #[test]
+    fn cor_dos_controles() {
+        use super::{ControlColor, hex_of, parse_hex, rgb_of};
+        let c: Config = toml::from_str("widget_tint = \"artwork\"\nversion = 5\n").unwrap();
+        assert_eq!((c.widget_controls, c.card_controls), (ControlColor::White, ControlColor::White));
+        assert_eq!(parse_hex("#fff"), Some([1.0; 3]));
+        assert_eq!(parse_hex("12"), None);
+        assert_eq!(rgb_of("#5EB1FF"), 0x5EB1FF);
+        assert_eq!(hex_of(0x5eb1ff), "#5EB1FF");
     }
 
     #[test]
