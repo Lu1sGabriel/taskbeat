@@ -440,7 +440,7 @@ fn demo_gif() {
             let mut cv = Canvas::new(W as usize, H as usize, &mut px);
             let widget = layer(wl.width, 40.0 * s, |c| {
                 let it = Interact { hover: on_widget.then_some(Hit::Info), pressed: (on_widget && pressed(t, 1.25)).then_some(Hit::Info), drag: None, ..Default::default() };
-                let fr = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &colors, &media), colors: &colors, it, pb, time: t, viz: None, flyout_open: open > 0.5, s, change: None };
+                let fr = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &colors, &media), colors: &colors, it, pb, time: t, viz: None, flyout_open: open > 0.5, s, change: None, launchers: &[] };
                 ui::draw_widget(c, &mut tr, &wl, &fr);
             });
             cv.draw_image(wrect, &widget, 0.0, 1.0);

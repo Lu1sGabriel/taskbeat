@@ -201,6 +201,27 @@ pub enum IconStyle {
     Fluent,
 }
 
+/// Onde ficam os atalhos dos apps de música.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LauncherPlace {
+    /// Linha embaixo do card.
+    Card,
+    /// Botões pequenos dentro do widget da barra.
+    Taskbar,
+    /// Nos dois lugares.
+    Both,
+}
+
+impl LauncherPlace {
+    pub fn card(self) -> bool {
+        matches!(self, LauncherPlace::Card | LauncherPlace::Both)
+    }
+    pub fn taskbar(self) -> bool {
+        matches!(self, LauncherPlace::Taskbar | LauncherPlace::Both)
+    }
+}
+
 /// Aleatório e repetir: sempre (apagados quando o player não deixa) ou só quando dá.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -323,6 +344,8 @@ pub struct Config {
     pub widget_glow: bool,
     /// Contorno fino em volta do fundo.
     pub widget_border: bool,
+    /// Arrastar o widget para mudar o lugar dele na barra (clique simples abre o card).
+    pub widget_drag: bool,
     /// Desenho dos ícones de controle (na barra e no card).
     pub icon_style: IconStyle,
     /// Anima a troca de música no widget (texto desliza, capa esmaece).
@@ -353,6 +376,13 @@ pub struct Config {
     pub card_autoclose: i32,
     /// Atalhos para abrir os apps de música instalados (linha embaixo do card).
     pub card_launchers: bool,
+    /// Onde os atalhos aparecem (card, barra ou os dois).
+    pub launcher_place: LauncherPlace,
+    /// Ordem escolhida dos atalhos (AUMID de cada app). Apps achados depois
+    /// entram no fim, na ordem de sempre.
+    pub launcher_order: Vec<String>,
+    /// Atalhos escondidos (AUMID).
+    pub launcher_hidden: Vec<String>,
     /// Mini barras de áudio no card, ao lado do título (com as barras ligadas).
     pub card_viz: bool,
 
@@ -453,6 +483,7 @@ impl Default for Config {
             widget_intensity: 80,
             widget_glow: true,
             widget_border: true,
+            widget_drag: true,
             icon_style: IconStyle::Filled,
             track_anim: true,
             icon_anim: true,
@@ -472,6 +503,9 @@ impl Default for Config {
             card_shuffle_repeat: ShuffleRepeat::Always,
             card_autoclose: 6,
             card_launchers: true,
+            launcher_place: LauncherPlace::Card,
+            launcher_order: Vec::new(),
+            launcher_hidden: Vec::new(),
             card_viz: true,
 
             next_track_popup: true,
@@ -641,15 +675,16 @@ mod tests {
     /// as novas vão e voltam do arquivo.
     #[test]
     fn config_antiga_carrega_e_opcoes_novas_sao_gravadas() {
-        use super::{IconStyle, WidgetTint};
+        use super::{IconStyle, LauncherPlace, WidgetTint};
         let old = "show_media = true\nwidget_tint = \"album\"\nwidget_opacity = 6\nversion = 5\n";
         let c: Config = toml::from_str(old).unwrap();
-        assert_eq!((c.widget_opacity, c.widget_intensity, c.icon_style), (6, 80, IconStyle::Filled));
-        assert!(c.card_viz && c.widget_glow);
+        assert_eq!((c.widget_opacity, c.widget_intensity, c.icon_style, c.launcher_place), (6, 80, IconStyle::Filled, LauncherPlace::Card));
+        assert!(c.launcher_order.is_empty() && c.card_viz && c.widget_drag);
         let c2 = Config {
+            launcher_order: vec!["Brave._crx_x".into(), "Spotify.exe".into()],
+            launcher_hidden: vec!["VideoLAN.VLC".into()],
             widget_tint: WidgetTint::Gradient,
-            icon_style: IconStyle::Fluent,
-            card_viz: false,
+            launcher_place: LauncherPlace::Both,
             ..Config::default()
         };
         let text = toml::to_string_pretty(&c2).unwrap();

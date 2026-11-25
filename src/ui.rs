@@ -72,6 +72,8 @@ pub struct Interact {
     pub vector: bool,
     /// Botão play com brilho na cor de destaque em vez da sombra preta (Windows).
     pub glow: bool,
+    /// Posição x do mouse enquanto um atalho é arrastado (`drag` = `Launch`).
+    pub drag_x: f32,
 }
 
 impl Interact {
@@ -984,6 +986,10 @@ pub struct WLayout {
     pub play: Option<RectF>,
     pub next: Option<RectF>,
     pub repeat: Option<RectF>,
+    /// Atalhos dos apps de música dentro do widget (opção "Na barra").
+    pub launch: Vec<RectF>,
+    /// Separador antes dos atalhos: (x, y0, y1).
+    pub launch_divider: Option<(f32, f32, f32)>,
     pub viz: Option<RectF>,
 }
 
@@ -1013,7 +1019,14 @@ fn pill_lead(bh: f32, art: f32, rc: f32, s: f32) -> f32 {
 }
 
 impl WLayout {
+    /// Sem atalhos dentro do widget (capturas e testes).
+    #[cfg(test)]
     pub fn build(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool) -> Self {
+        Self::build_with(s, h, cfg, panel, viz, 0)
+    }
+
+    /// Como `build`, com `launchers` atalhos de apps de música dentro do widget.
+    pub fn build_with(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool, launchers: usize) -> Self {
         let mut l = WLayout::default();
         let (top, bh) = (3.0 * s, h - 6.0 * s);
         l.radius = match cfg.widget_shape {
@@ -1071,6 +1084,16 @@ impl WLayout {
                 }
                 x += 2.0 * s;
             }
+            // Atalhos dos apps de música, pequenos, depois dos botões.
+            if launchers > 0 {
+                l.launch_divider = Some((x.round() + 0.5, h * 0.32, h * 0.68));
+                x += 5.0 * s;
+                for _ in 0..launchers {
+                    l.launch.push(RectF::new(x, top, 26.0 * s, bh));
+                    x += 26.0 * s;
+                }
+                x += 3.0 * s;
+            }
         }
         if viz {
             let vw = cfg.width as f32 * s;
@@ -1090,6 +1113,9 @@ impl WLayout {
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
+        if let Some(i) = self.launch.iter().position(|r| r.contains(x, y)) {
+            return Some(Hit::Launch(i as u8));
+        }
         [
             (self.shuffle, Hit::Shuffle),
             (self.prev, Hit::Prev),
@@ -1130,6 +1156,8 @@ pub struct WidgetFrame<'a> {
     /// Troca de música em andamento: (música anterior, progresso do texto e
     /// da capa, 0..1; 1 = sem animação).
     pub change: Option<(&'a MediaInfo, f32, f32)>,
+    /// Atalhos dos apps de música à mostra no widget (em `l.launch`).
+    pub launchers: &'a [crate::shared::Launcher],
 }
 
 /// Fontes do título e da segunda linha do widget, e a altura de cada linha.
@@ -1388,6 +1416,21 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
     }
     if let Some(r) = l.repeat {
         toggle_glyph(cv, tr, r, if f.pb.repeat == 1 { G_REPEAT_ONE } else { G_REPEAT_ALL }, f.pb.repeat != 0, m.can_repeat, th, s, &it, Hit::Repeat);
+    }
+    // Atalhos dos apps de música (opção "Na barra").
+    if let Some((x, y0, y1)) = l.launch_divider {
+        cv.fill_rrect(x - 0.5 * s, y0, x + 0.5 * s, y1, 0.5 * s, 0.14, th.fg);
+    }
+    for (i, r) in l.launch.iter().enumerate() {
+        let Some(app) = f.launchers.get(i) else { break };
+        let h = Hit::Launch(i as u8);
+        let hot = it.hover == Some(h);
+        if hot {
+            let k = (r.w.min(r.h) - 3.0 * s).max(1.0);
+            hover_bg(cv, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), k / 2.0, th, it.pressed == Some(h));
+        }
+        let k = if hot && it.pressed == Some(h) { 15.0 * s } else { 17.0 * s };
+        launcher_icon(cv, tr, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), app, th, 1.0);
     }
     if let (Some(r), Some((values, peaks))) = (l.viz, f.viz) {
         draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s });
@@ -1828,28 +1871,62 @@ fn launcher_row(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFra
     // Linha fina separando dos controles.
     let y = l.launch[0].y - 1.0 * s;
     cv.fill_rrect(l.card.x + 16.0 * s, y, l.card.right() - 16.0 * s, y + 1.0 * s, 0.5 * s, if th.dark { 0.10 } else { 0.08 }, th.fg);
+    let n = l.launch.len().min(f.launchers.len());
+    // Arrastando um atalho: os outros abrem espaço onde ele vai cair.
+    let dragging = match f.it.drag {
+        Some(Hit::Launch(i)) if (i as usize) < n => Some((i as usize, launch_drop_slot(&l.launch[..n], f.it.drag_x))),
+        _ => None,
+    };
     let mut label: Option<&str> = None;
-    for (i, r) in l.launch.iter().enumerate() {
-        let Some(app) = f.launchers.get(i) else { break };
+    for i in 0..n {
+        let app = &f.launchers[i];
         let h = Hit::Launch(i as u8);
-        let hot = f.it.hover == Some(h);
+        let slot = match dragging {
+            Some((from, _)) if i == from => continue,
+            Some((from, to)) if from < to && i > from && i <= to => i - 1,
+            Some((from, to)) if to < from && i >= to && i < from => i + 1,
+            _ => i,
+        };
+        let r = l.launch[slot];
+        let hot = f.it.hover == Some(h) && dragging.is_none();
         if hot {
             label = Some(&app.name);
             hover_bg(cv, r.inset(2.0 * s), 8.0 * s, th, f.it.pressed == Some(h));
         }
         let k = if f.it.pressed == Some(h) && hot { 18.0 * s } else { 20.0 * s };
-        let ir = RectF::new((r.cx() - k / 2.0).round(), (r.cy() - k / 2.0).round(), k.round(), k.round());
-        match &app.icon {
-            Some(img) => cv.draw_image(ir, img, 0.0, 1.0),
-            None => {
-                cv.fill_round(ir, k / 2.0, th.accent, 0.9);
-                let first: String = app.name.chars().take(1).collect();
-                text_center(cv, tr, &first, Font::Caption, ir, th.on_accent, 1.0);
-            }
-        }
+        launcher_icon(cv, tr, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), app, th, 1.0);
+    }
+    // O arrastado vai por cima, um pouco maior e com sombra, seguindo o mouse.
+    if let Some((from, _)) = dragging {
+        let app = &f.launchers[from];
+        label = Some(&app.name);
+        let r = l.launch[from];
+        let cx = f.it.drag_x.clamp(l.launch[0].cx(), l.launch[n - 1].cx());
+        let k = 23.0 * s;
+        let ir = RectF::new(cx - k / 2.0, r.cy() - k / 2.0 - 2.0 * s, k, k);
+        cv.drop_shadow(ir, 6.0 * s, 8.0 * s, 3.0 * s, 0.45);
+        launcher_icon(cv, tr, ir, app, th, 1.0);
     }
     let msg = label.unwrap_or(crate::i18n::tr("Abrir um app de música"));
     text(cv, tr, msg, Font::Small, l.launch_label.x, l.launch_label.y, l.launch_label.w, l.launch_label.h, th.fg, if label.is_some() { 0.85 } else { 0.5 });
+}
+
+/// Em qual posição da linha de atalhos cai um atalho solto no x `x`.
+pub fn launch_drop_slot(slots: &[RectF], x: f32) -> usize {
+    slots.iter().enumerate().min_by(|a, b| (a.1.cx() - x).abs().total_cmp(&(b.1.cx() - x).abs())).map(|(i, _)| i).unwrap_or(0)
+}
+
+/// Ícone de um app de música (ou a inicial dele num círculo).
+fn launcher_icon(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, app: &crate::shared::Launcher, th: &Theme, a: f32) {
+    let ir = RectF::new(r.x.round(), r.y.round(), r.w.round(), r.h.round());
+    match &app.icon {
+        Some(img) => cv.draw_image(ir, img, 0.0, a),
+        None => {
+            cv.fill_round(ir, ir.w / 2.0, th.accent, 0.9 * a);
+            let first: String = app.name.chars().take(1).collect();
+            text_center(cv, tr, &first, Font::Caption, ir, th.on_accent, a);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- "A seguir"

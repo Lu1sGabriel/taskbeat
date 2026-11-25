@@ -42,6 +42,32 @@ pub struct Placement {
     pub mon_right: i32,
     pub mon_top: i32,
     pub mon_bottom: i32,
+    /// Onde o widget ficaria sem o deslocamento do usuário (para gravar o
+    /// deslocamento depois de arrastar).
+    pub base_x: i32,
+    /// Até onde dá para arrastar sem cobrir o botão Iniciar nem a bandeja.
+    pub min_x: i32,
+    pub max_x: i32,
+}
+
+/// Mantém `x` (largura `w`) dentro de `[lo, hi]` e fora dos retângulos
+/// `avoid` (vai para o lado mais perto de cada um, se couber).
+fn keep_clear(mut x: i32, w: i32, lo: i32, hi: i32, avoid: &[(i32, i32)], margin: i32) -> i32 {
+    x = x.clamp(lo, hi.max(lo));
+    for &(l, r) in avoid {
+        if l < x + w + margin && r + margin > x {
+            let left = l - margin - w;
+            let right = r + margin;
+            let go_left = (x - left).abs() <= (right - x).abs();
+            x = match (go_left && left >= lo, right <= hi) {
+                (true, _) => left,
+                (false, true) => right,
+                _ if left >= lo => left,
+                _ => x,
+            };
+        }
+    }
+    x
 }
 
 pub fn taskbar_hwnd() -> Option<HWND> {
@@ -88,29 +114,44 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
     let offset = (cfg.offset as f32 * scale).round() as i32;
 
     let (x, y, w, h);
+    let (mut base_x, mut min_x, mut max_x) = (0, 0, 0);
     if horizontal {
         h = (on.bottom - on.top - 2 * pad).max(8);
         y = on.top + pad;
         w = length;
-        let mut base = match cfg.anchor {
-            Anchor::BeforeTray => match notify {
-                Some(n) => n.left - margin - w,
-                None => tb.right - (400.0 * scale) as i32 - w,
-            },
+        let tray_left = notify.map(|n| n.left).unwrap_or(tb.right - (400.0 * scale) as i32);
+        let base = match cfg.anchor {
+            Anchor::BeforeTray => tray_left - margin - w,
             Anchor::Left => tb.left + margin,
         };
+        // Deslocamento gravado ao arrastar = posição final - este ponto.
+        base_x = base;
+        // Nunca sobre a bandeja nem para fora da barra.
+        (min_x, max_x) = (on.left + margin, tray_left - margin - w);
+        let on_bar = |r: &RECT| r.top < tb.bottom && r.bottom > tb.top;
+        let mut avoid = Vec::new();
+        // Botão Iniciar: lido só depois que o widget foi arrastado para longe do
+        // lugar de sempre (o lugar padrão nunca chega nele).
+        if offset != 0 {
+            if let Some(sr) = start_rect().filter(on_bar) {
+                avoid.push((sr.left, sr.right));
+            }
+        }
         // Botão de Widgets do Windows (o do tempo): com a barra alinhada à
         // esquerda ele fica ao lado da bandeja; centralizada, no canto
-        // esquerdo. Se ficaria por baixo do nosso, passa para o lado dele.
-        if let Some(wr) = widgets_rect().filter(|r| r.top < tb.bottom && r.bottom > tb.top) {
-            if wr.left < base + w + margin && wr.right + margin > base {
-                base = match cfg.anchor {
+        // esquerdo. Se ficaria por baixo do nosso, passa para o lado dele
+        // (no lugar padrão, sempre para o lado de dentro da barra).
+        let mut want = base + offset;
+        if let Some(wr) = widgets_rect().filter(on_bar) {
+            if offset == 0 && wr.left < base + w + margin && wr.right + margin > base {
+                want = match cfg.anchor {
                     Anchor::BeforeTray => wr.left - margin - w,
                     Anchor::Left => wr.right + margin,
                 };
             }
+            avoid.push((wr.left, wr.right));
         }
-        x = base + offset;
+        x = keep_clear(want, w, min_x, max_x, &avoid, margin);
     } else {
         w = (on.right - on.left - 2 * pad).max(8);
         x = on.left + pad;
@@ -146,7 +187,41 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
         mon_right: screen.right,
         mon_top: screen.top,
         mon_bottom: screen.bottom,
+        base_x,
+        min_x,
+        max_x,
     })
+}
+
+// ---------------------------------------------------------------- botão Iniciar
+
+/// Retângulo do botão Iniciar e quando foi lido.
+static START: Mutex<Option<(Option<RECT>, Instant)>> = Mutex::new(None);
+
+/// Botão Iniciar na barra (para o widget arrastado não ficar por cima dele).
+/// Lido pela UI Automation numa thread à parte, no máximo uma vez por minuto, e só
+/// quando alguém pede (o widget saiu do lugar padrão).
+pub fn start_rect() -> Option<RECT> {
+    let mut g = START.lock().unwrap_or_else(|e| e.into_inner());
+    let stale = g.as_ref().is_none_or(|(_, t)| t.elapsed() > Duration::from_secs(60));
+    let cur = g.as_ref().and_then(|(r, _)| *r);
+    if stale {
+        // Marca como lido agora (evita várias buscas ao mesmo tempo).
+        *g = Some((cur, Instant::now()));
+        drop(g);
+        let _ = std::thread::Builder::new().name("taskbar-start".into()).spawn(|| {
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            }
+            let r = unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
+                .ok()
+                .and_then(|uia| find_on_taskbar(&uia, &VARIANT::from("StartButton")))
+                .and_then(|e| unsafe { e.CurrentBoundingRectangle() }.ok())
+                .filter(|r| r.right > r.left);
+            *START.lock().unwrap_or_else(|e| e.into_inner()) = Some((r, Instant::now()));
+        });
+    }
+    cur
 }
 
 // ---------------------------------------------------------------- botão de Widgets
@@ -287,6 +362,21 @@ pub fn taskbar_is_above(ours: HWND, tray: HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// O widget arrastado fica dentro dos limites e não cobre o que deve evitar.
+    #[test]
+    fn widget_arrastado_fica_livre() {
+        // Barra de 0 a 1000, widget de 100, margem 8, botão em 400..440.
+        let k = |x| keep_clear(x, 100, 8, 892, &[(400, 440)], 8);
+        assert_eq!(k(-50), 8);
+        assert_eq!(k(950), 892);
+        assert_eq!(k(100), 100);
+        // Por cima do botão: vai para o lado mais perto.
+        assert_eq!(k(330), 292);
+        assert_eq!(k(390), 448);
+        // Sem espaço à esquerda: vai para a direita.
+        assert_eq!(keep_clear(20, 100, 8, 892, &[(30, 60)], 8), 68);
+    }
 
     /// Mede a busca e a leitura do retângulo pela UI Automation (com o botão
     /// Iniciar, que sempre existe). `cargo test --release uia_cost -- --ignored --nocapture`

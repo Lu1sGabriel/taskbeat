@@ -88,6 +88,8 @@ enum Key {
     TitleWidth,
     Anchor,
     Offset,
+    WidgetDrag,
+    ResetPos,
     CardStyle,
     CardLayout,
     Theme,
@@ -98,6 +100,8 @@ enum Key {
     ShowVolume,
     Autoclose,
     Launchers,
+    LauncherPlace,
+    LauncherApps,
     Popup,
     PopupSecs,
     ShowSource,
@@ -143,6 +147,8 @@ enum Kind {
     Slider { min: i32, max: i32, step: i32, unit: &'static str },
     Button(&'static str),
     Info,
+    /// Lista dos apps de música achados: interruptor em cada um e arrastar para reordenar.
+    AppList,
 }
 
 enum Item {
@@ -196,6 +202,7 @@ const BARS: &[usize] = &[6, 8, 10, 12, 16, 24, 32];
 const SIZES: &[&str] = &["Pequeno", "Normal", "Grande"];
 const COVER_SIZES: &[&str] = &["Pequena", "Normal", "Grande"];
 const SECOND_LINES: &[&str] = &["Artista", "Artista · Álbum", "Álbum", "Tempo"];
+const LAUNCHER_PLACES: &[&str] = &["No card", "Na barra", "Nos dois"];
 const ICON_STYLES: &[&str] = &["Preenchidos", "Contorno"];
 const TINTS: &[&str] = &["Neutro", "Cor da capa", "Cor de destaque", "Gradiente da capa", "Capa desfocada"];
 
@@ -236,6 +243,8 @@ const PAGES: &[Page] = &[
             Section("Posição"),
             Row { icon: "\u{E7C4}", title: "Posição na barra", desc: "Onde o widget fica na barra de tarefas", key: Key::Anchor, kind: Kind::Segmented(ANCHORS) },
             Row { icon: "\u{E8AB}", title: "Ajuste horizontal", desc: "Desloca o widget para a esquerda ou para a direita", key: Key::Offset, kind: Kind::Slider { min: -1200, max: 1200, step: 10, unit: "px" } },
+            Row { icon: "\u{E7C2}", title: "Arrastar para mover", desc: "Aperte e arraste o widget pela barra; um clique simples continua abrindo o card", key: Key::WidgetDrag, kind: Kind::Toggle },
+            Row { icon: "\u{E72C}", title: "Restaurar posição", desc: "Volta o widget para o lado do relógio", key: Key::ResetPos, kind: Kind::Button("Restaurar") },
         ],
     },
     Page {
@@ -259,7 +268,9 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e botão de mudo", key: Key::ShowVolume, kind: Kind::Toggle },
             Row { icon: "\u{E7F4}", title: "Mostrar app de origem", desc: "Selo com o app (Spotify, Brave…) no card, no \"A seguir\" e sobre a capa na barra", key: Key::ShowSource, kind: Kind::Toggle },
             Row { icon: "\u{E916}", title: "Fechar sozinho após", desc: "Tempo sem o mouse em cima do card", key: Key::Autoclose, kind: Kind::Slider { min: 2, max: 20, step: 1, unit: "s" } },
-            Row { icon: "\u{E71D}", title: "Atalhos dos apps de música", desc: "Ícones dos players instalados (Spotify, YouTube Music, Media Player…) embaixo do card, para abrir com um clique", key: Key::Launchers, kind: Kind::Toggle },
+            Row { icon: "\u{E71D}", title: "Atalhos dos apps de música", desc: "Ícones dos players instalados (Spotify, YouTube Music…) para abrir com um clique", key: Key::Launchers, kind: Kind::Toggle },
+            Row { icon: "\u{E7C4}", title: "Onde ficam os atalhos", desc: "Embaixo do card, dentro do widget na barra ou nos dois", key: Key::LauncherPlace, kind: Kind::Segmented(LAUNCHER_PLACES) },
+            Row { icon: "\u{E8FD}", title: "Apps nos atalhos", desc: "Ligue só os que você quer; arraste para mudar a ordem (no card também dá para arrastar os ícones)", key: Key::LauncherApps, kind: Kind::AppList },
             Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "Funcionam no Spotify e no Media Player; navegadores (Brave, Chrome) não deixam: ficam apagados e o clique traz o player para a frente", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
         ],
     },
@@ -366,6 +377,7 @@ const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
 const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbow, Palette::Neon, Palette::Mono];
 const SIZE_V: &[Size3] = &[Size3::Small, Size3::Normal, Size3::Large];
 const SECOND_V: &[SecondLine] = &[SecondLine::Artist, SecondLine::ArtistAlbum, SecondLine::Album, SecondLine::Time];
+const LAUNCHER_PLACE_V: &[LauncherPlace] = &[LauncherPlace::Card, LauncherPlace::Taskbar, LauncherPlace::Both];
 const ICON_STYLE_V: &[IconStyle] = &[IconStyle::Filled, IconStyle::Fluent];
 const TINT_V: &[WidgetTint] = &[WidgetTint::Neutral, WidgetTint::Album, WidgetTint::Accent, WidgetTint::Gradient, WidgetTint::Artwork];
 
@@ -400,6 +412,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::TitleWidth => c.title_width,
         Key::Anchor => idx(ANCHOR_V, c.anchor),
         Key::Offset => c.offset,
+        Key::WidgetDrag => c.widget_drag as i32,
         Key::CardStyle => idx(STYLE_V, c.card_style),
         Key::CardLayout => idx(LAYOUT_V, c.card_layout),
         Key::Theme => idx(THEME_V, c.theme),
@@ -410,6 +423,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::ShowVolume => c.show_volume as i32,
         Key::Autoclose => c.card_autoclose,
         Key::Launchers => c.card_launchers as i32,
+        Key::LauncherPlace => idx(LAUNCHER_PLACE_V, c.launcher_place),
         Key::Popup => c.next_track_popup as i32,
         Key::PopupSecs => c.popup_secs,
         Key::ShowSource => c.show_source as i32,
@@ -441,7 +455,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::Autostart => AUTOSTART.with(|a| a.get()) as i32,
         Key::Fullscreen => c.hide_on_fullscreen as i32,
         Key::Language => idx(LANG_V, c.language),
-        Key::Reset | Key::About | Key::OsdTest | Key::Licenses => 0,
+        Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => 0,
     }
 }
 
@@ -480,6 +494,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::TitleWidth => c.title_width = v,
         Key::Anchor => c.anchor = pick(ANCHOR_V, i),
         Key::Offset => c.offset = v,
+        Key::WidgetDrag => c.widget_drag = v != 0,
         Key::CardStyle => c.card_style = pick(STYLE_V, i),
         Key::CardLayout => c.card_layout = pick(LAYOUT_V, i),
         Key::Theme => c.theme = pick(THEME_V, i),
@@ -490,6 +505,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::ShowVolume => c.show_volume = v != 0,
         Key::Autoclose => c.card_autoclose = v,
         Key::Launchers => c.card_launchers = v != 0,
+        Key::LauncherPlace => c.launcher_place = pick(LAUNCHER_PLACE_V, i),
         Key::Popup => c.next_track_popup = v != 0,
         Key::PopupSecs => c.popup_secs = v,
         Key::ShowSource => c.show_source = v != 0,
@@ -523,7 +539,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
             c.language = pick(LANG_V, i);
             crate::i18n::apply(c.language);
         }
-        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses => {}
+        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => {}
     }
 }
 
@@ -533,6 +549,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
 fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     use Key::*;
     const MEDIA: &str = "Ligue \"Mostrar música na barra\" para usar esta opção";
+    const LAUNCH: &str = "Ligue \"Atalhos dos apps de música\" para usar esta opção";
     const CONTROLS: &str = "Os botões estão desligados: ligue \"Botões de controle na barra\" para usar esta opção";
     const PILL: &str = "Ligue \"Fundo em pílula\" para usar esta opção";
     const RICH: &str = "Escolha \"Gradiente da capa\" ou \"Capa desfocada\" em \"Cor do fundo\" para usar esta opção";
@@ -555,6 +572,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         WidgetOpacity if c.widget_tint.is_rich() => Some(CLASSIC),
         SecondLine if !c.show_artist => Some(ARTIST),
         PopupSecs if !c.next_track_popup => Some(POPUP),
+        LauncherPlace | LauncherApps if !c.card_launchers => Some(LAUNCH),
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdShape | OsdSize | OsdTheme | OsdDuration | OsdSwitch | OsdMaterial | OsdOpacity | OsdBlur | OsdIcon | OsdAnim if !osd_on => Some(OSD),
         OsdBlur if c.osd_material != crate::config::OsdMaterial::Acrylic => Some(BLUR),
         Style | Palette | Bars | Width | Sens | OnlyMedia | PlayerOnly | Peaks | CardViz if !c.show_visualizer => Some(VIZ),
@@ -581,6 +599,8 @@ enum Hit {
     Seg(usize, usize),
     /// Linha desativada (mostra a dica do motivo).
     Off(usize),
+    /// App `k` da lista de atalhos da linha `ri` (clique liga/desliga; arrastar reordena).
+    App(usize, usize),
 }
 
 /// Camada já desenhada guardada em memória.
@@ -618,6 +638,8 @@ struct RowState {
     hover: u8,
     toggle: u8,
     seg: i16,
+    /// Lista de apps: ordem, escolhas, mouse e arrasto (resumidos).
+    extra: u64,
 }
 
 /// Valores animados de uma linha.
@@ -666,6 +688,27 @@ struct LayoutKey {
 }
 
 /// Dica de opção desativada.
+/// Como desenhar um app da lista de atalhos.
+#[derive(Clone, Copy)]
+struct AppRow {
+    /// À mostra nos atalhos.
+    on: bool,
+    /// Mouse em cima.
+    hot: bool,
+    /// Sendo arrastado (por cima dos outros, com sombra).
+    lifted: bool,
+}
+
+/// Arrastando um app da lista de atalhos (y da janela).
+struct AppDrag {
+    ri: usize,
+    id: String,
+    y0: f32,
+    y: f32,
+    /// Já andou o suficiente para ser arrasto (senão é clique).
+    active: bool,
+}
+
 struct Tip {
     ri: usize,
     x: f32,
@@ -686,6 +729,7 @@ struct Ui {
     hover: Option<Hit>,
     pressed: Option<Hit>,
     drag: Option<usize>,
+    app_drag: Option<AppDrag>,
     tracking: bool,
     surface: Option<Surface>,
     text: TextRenderer,
@@ -846,6 +890,7 @@ pub fn open(shared: Arc<Shared>, icon: HICON) {
                 hover: None,
                 pressed: None,
                 drag: None,
+                app_drag: None,
                 tracking: false,
                 surface: None,
                 text,
@@ -960,8 +1005,19 @@ impl Ui {
 
     /// Card da prévia, com os atalhos dos apps de música desta máquina.
     fn preview_card(&self, s: f32, cfg: &Config) -> ui::CLayout {
-        let n = if cfg.card_launchers { self.shared.launchers.lock().unwrap().len().min(crate::launchers::MAX) } else { 0 };
+        let n = if cfg.card_launchers && cfg.launcher_place.card() { self.shown_launchers(cfg).len() } else { 0 };
         ui::CLayout::build(s, cfg, true).with_launchers(n, s)
+    }
+
+    /// Atalhos à mostra, na ordem escolhida.
+    fn shown_launchers(&self, cfg: &Config) -> Vec<crate::shared::Launcher> {
+        let found = self.shared.launchers.lock().unwrap().clone();
+        crate::launchers::shown(&found, cfg)
+    }
+
+    /// Quantos atalhos vão dentro do widget da barra.
+    fn bar_launchers(&self, cfg: &Config) -> usize {
+        if cfg.card_launchers && cfg.launcher_place.taskbar() { self.shown_launchers(cfg).len() } else { 0 }
     }
 
     fn hero_height_at(&self, page: &Page, cfg: &Config, s: f32) -> f32 {
@@ -1029,7 +1085,9 @@ impl Ui {
                     y += 30.0 * s;
                 }
                 Row { kind, .. } => {
-                    let card = RectF::new(x0, y.round(), x1 - x0, 66.0 * s);
+                    let apps = if matches!(kind, Kind::AppList) { self.shared.launchers.lock().unwrap().len().max(1) } else { 0 };
+                    let card_h = if apps > 0 { 66.0 * s + apps as f32 * 44.0 * s + 10.0 * s } else { 66.0 * s };
+                    let card = RectF::new(x0, y.round(), x1 - x0, card_h.round());
                     let right = card.right() - 18.0 * s;
                     let mut segs = Vec::new();
                     let ctl = match kind {
@@ -1052,9 +1110,15 @@ impl Ui {
                             r
                         }
                         Kind::Info => RectF::default(),
+                        Kind::AppList => {
+                            for k in 0..apps {
+                                segs.push(RectF::new(card.x + 48.0 * s, card.y + 62.0 * s + k as f32 * 44.0 * s, card.w - 66.0 * s, 40.0 * s));
+                            }
+                            RectF::default()
+                        }
                     };
                     rows.push(RowL { item: i, card, ctl, segs });
-                    y += 70.0 * s;
+                    y += card.h + 4.0 * s;
                 }
             }
         }
@@ -1100,6 +1164,13 @@ impl Ui {
                 Kind::Choice(_) | Kind::Slider { .. } | Kind::Button(_) => {
                     if r.ctl.contains(x, y) {
                         return Some(Hit::Row(ri));
+                    }
+                }
+                Kind::AppList => {
+                    if let Some(k) = r.segs.iter().position(|sr| sr.contains(x, y))
+                        && k < self.shared.launchers.lock().unwrap().len()
+                    {
+                        return Some(Hit::App(ri, k));
                     }
                 }
                 Kind::Info => {}
@@ -1200,6 +1271,7 @@ impl Ui {
             hover: q(a.hover),
             toggle: q(a.toggle),
             seg: (a.seg * 96.0).round() as i16,
+            extra: if matches!(kind, Kind::AppList) { self.app_list_sig(ri, cfg) } else { 0 },
         }
     }
 
@@ -1530,9 +1602,9 @@ impl Ui {
         cv.fill_round(r.card, 7.0 * s, [1.0; 3], card_a + 0.025 * card_hover);
         cv.stroke_round(r.card, 7.0 * s, s, [0.0; 3], border_a);
 
-        ui::glyph(cv, &mut self.text, RectF::new(r.card.x + 18.0 * s, r.card.y, 26.0 * s, r.card.h), icon, Font::IconMd, fg, 0.92 * en);
+        ui::glyph(cv, &mut self.text, RectF::new(r.card.x + 18.0 * s, r.card.y, 26.0 * s, 66.0 * s), icon, Font::IconMd, fg, 0.92 * en);
         let tx = r.card.x + 60.0 * s;
-        let tw = if matches!(kind, Kind::Info) { r.card.right() - tx - 20.0 * s } else { r.ctl.x - tx - 24.0 * s };
+        let tw = if matches!(kind, Kind::Info | Kind::AppList) { r.card.right() - tx - 20.0 * s } else { r.ctl.x - tx - 24.0 * s };
         self.label(cv, tr(title), Font::Body, tx, r.card.y + 12.0 * s, tw, 21.0 * s, fg, en);
         self.label(cv, tr(desc), Font::Caption, tx, r.card.y + 34.0 * s, tw, 19.0 * s, fg, 0.62 * en);
 
@@ -1555,7 +1627,92 @@ impl Ui {
                 ui::text_center(cv, &mut self.text, tr(t), Font::Body, r.ctl, fg, en);
             }
             Kind::Info => {}
+            Kind::AppList => self.draw_app_list(cv, ri, r, en),
         }
+    }
+
+    /// Todos os apps de música achados, na ordem escolhida, com "à mostra?".
+    fn app_list(&self, cfg: &Config) -> Vec<(crate::shared::Launcher, bool)> {
+        let found = self.shared.launchers.lock().unwrap().clone();
+        crate::launchers::arrange(&found, &cfg.launcher_order, &cfg.launcher_hidden)
+    }
+
+    /// Resumo do que a lista de apps mostra (para só redesenhar quando muda).
+    fn app_list_sig(&self, ri: usize, cfg: &Config) -> u64 {
+        let apps: Vec<(String, bool)> = self.app_list(cfg).into_iter().map(|(l, on)| (l.id, on)).collect();
+        let hover = match self.hover {
+            Some(Hit::App(r, k)) if r == ri => k as i32,
+            _ => -1,
+        };
+        let drag = self.app_drag.as_ref().filter(|d| d.ri == ri && d.active).map(|d| (d.id.clone(), (d.y + self.scroll_px()).round() as i32));
+        ui::layer_key((apps, hover, drag))
+    }
+
+    /// Lista dos apps nos atalhos: alça para arrastar, ícone, nome e interruptor.
+    fn draw_app_list(&mut self, cv: &mut Canvas, ri: usize, r: &RowL, en: f32) {
+        let s = self.scale;
+        let fg = self.fg();
+        let cfg = self.cfg();
+        let apps = self.app_list(&cfg);
+        if apps.is_empty() {
+            if let Some(row) = r.segs.first() {
+                self.label(cv, tr("Nenhum app de música encontrado"), Font::Caption, row.x + 12.0 * s, row.y, row.w, row.h, fg, 0.6 * en);
+            }
+            return;
+        }
+        // Coordenadas da camada (sem rolagem) = janela + rolagem.
+        let drag = self.app_drag.as_ref().filter(|d| d.ri == ri && d.active).map(|d| (d.id.clone(), d.y + self.scroll_px()));
+        let hover = match self.hover {
+            Some(Hit::App(h, k)) if h == ri => Some(k),
+            _ => None,
+        };
+        for (k, (app, on)) in apps.iter().enumerate() {
+            let Some(row) = r.segs.get(k).copied() else { break };
+            if drag.as_ref().is_some_and(|(id, _)| *id == app.id) {
+                // Lugar onde o app vai cair.
+                cv.stroke_round(row, 7.0 * s, s, fg, 0.18);
+                continue;
+            }
+            self.draw_app_row(cv, row, app, AppRow { on: *on, hot: hover == Some(k), lifted: false }, en);
+        }
+        if let Some((id, y)) = drag
+            && let (Some((app, on)), Some(first), Some(last)) = (apps.iter().find(|(a, _)| a.id == id), r.segs.first(), r.segs.get(apps.len() - 1))
+        {
+            let ty = (y - first.h / 2.0).clamp(first.y, last.y);
+            let row = RectF::new(first.x, ty, first.w, first.h);
+            self.draw_app_row(cv, row, app, AppRow { on: *on, hot: true, lifted: true }, en);
+        }
+    }
+
+    fn draw_app_row(&mut self, cv: &mut Canvas, row: RectF, app: &crate::shared::Launcher, st: AppRow, en: f32) {
+        let AppRow { on, hot, lifted } = st;
+        let s = self.scale;
+        let fg = self.fg();
+        if lifted {
+            cv.drop_shadow(row, 7.0 * s, 12.0 * s, 4.0 * s, if self.dark { 0.5 } else { 0.18 });
+            cv.fill_round(row, 7.0 * s, if self.dark { [0.20, 0.20, 0.22] } else { [1.0; 3] }, 1.0);
+            cv.stroke_round(row, 7.0 * s, s, self.accent, 0.6);
+        } else {
+            cv.fill_round(row, 7.0 * s, fg, (if hot { 0.065 } else { 0.03 }) * en);
+        }
+        // Alça (seis pontinhos) para arrastar.
+        for (dx, dy) in [(0.0, -5.0), (0.0, 0.0), (0.0, 5.0), (5.0, -5.0), (5.0, 0.0), (5.0, 5.0)] {
+            cv.fill_circle(row.x + 13.0 * s + dx * s, row.cy() + dy * s, 1.4 * s, fg, (if hot || lifted { 0.7 } else { 0.4 }) * en);
+        }
+        let k = 22.0 * s;
+        let ir = RectF::new((row.x + 34.0 * s).round(), (row.cy() - k / 2.0).round(), k.round(), k.round());
+        match &app.icon {
+            Some(img) => cv.draw_image(ir, img, 0.0, if on { en } else { 0.5 * en }),
+            None => {
+                cv.fill_round(ir, k / 2.0, self.accent, 0.9 * en);
+                let first: String = app.name.chars().take(1).collect();
+                let oa = self.on_accent();
+                ui::text_center(cv, &mut self.text, &first, Font::Caption, ir, oa, en);
+            }
+        }
+        let sw = RectF::new(row.right() - 52.0 * s, row.cy() - 10.0 * s, 40.0 * s, 20.0 * s);
+        self.label(cv, &app.name, Font::Body, ir.right() + 12.0 * s, row.y, sw.x - ir.right() - 110.0 * s, row.h, fg, if on { en } else { 0.55 * en });
+        self.draw_toggle(cv, sw, on, if on { 1.0 } else { 0.0 }, if hot { 1.0 } else { 0.0 }, en);
     }
 
     /// Dica (tooltip) sobre uma opção desativada: explica o que ligar antes.
@@ -1667,7 +1824,7 @@ impl Ui {
                 }
                 let bar = RectF::new(r.x, r.bottom() - 48.0 * s, r.w, 48.0 * s);
                 let wh = 40.0 * s;
-                let l = ui::WLayout::build(s, wh, &c2, c2.show_media, c2.show_visualizer);
+                let l = ui::WLayout::build_with(s, wh, &c2, c2.show_media, c2.show_visualizer, self.bar_launchers(&c2));
                 let wx = (bar.right() - 76.0 * s - l.width).max(bar.x + 8.0 * s);
                 RectF::new(wx, bar.y + 4.0 * s, l.width, wh)
             }
@@ -1786,7 +1943,7 @@ impl Ui {
                 }
                 let bar = RectF::new(r.x, r.bottom() - 48.0 * s, r.w, 48.0 * s);
                 let wh = 40.0 * s;
-                let l = ui::WLayout::build(s, wh, &c2, c2.show_media, c2.show_visualizer);
+                let l = ui::WLayout::build_with(s, wh, &c2, c2.show_media, c2.show_visualizer, self.bar_launchers(&c2));
                 let wx = (bar.right() - 76.0 * s - l.width).max(bar.x + 8.0 * s);
                 let wy = bar.y + 4.0 * s;
                 // Pausada de verdade: barras em repouso, como na barra (a página
@@ -1796,6 +1953,7 @@ impl Ui {
                     .map(|i| if rest { 0.0 } else { (0.5 + 0.45 * ((t * 5.0 + i as f32 * 0.9).sin() * (t * 2.3 + i as f32 * 0.4).cos())).clamp(0.05, 1.0) })
                     .collect();
                 let theme = ui::widget_theme(&c2, &colors, &media);
+                let bar_apps = self.shown_launchers(&c2);
                 let mut sub = SubCanvas::new(wx, wy, l.width, wh);
                 let f = ui::WidgetFrame {
                     cfg: &c2,
@@ -1809,13 +1967,14 @@ impl Ui {
                     flyout_open: false,
                     s,
                     change: None,
+                    launchers: &bar_apps,
                 };
                 ui::draw_widget(&mut sub.canvas(), &mut self.preview_text, &l, &f);
                 sub.commit(cv);
             }
             Preview::Card => {
                 let l = self.preview_card(s, cfg);
-                let launchers = self.shared.launchers.lock().unwrap().clone();
+                let launchers = self.shown_launchers(cfg);
                 let th = ui::card_theme(cfg, &colors, &media);
                 let mut m2 = media.clone();
                 m2.dur = m2.dur.max(1.0);
@@ -2033,6 +2192,20 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
             Action::Redraw
         }
         Hit::Off(_) => Action::None,
+        Hit::App(_, k) => {
+            let cfg = u.cfg();
+            if let Some((app, on)) = u.app_list(&cfg).get(k) {
+                let (id, on) = (app.id.clone(), *on);
+                u.shared.update_config(|c| {
+                    c.launcher_hidden.retain(|h| *h != id);
+                    if on {
+                        c.launcher_hidden.push(id);
+                    }
+                });
+            }
+            u.schedule();
+            Action::Redraw
+        }
         Hit::Row(ri) => {
             let Some((key, kind)) = u.row(ri) else { return Action::None };
             let cfg = u.cfg();
@@ -2065,6 +2238,14 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                     // O padrão também é iniciar com o Windows.
                     system::set_autostart(true);
                     AUTOSTART.with(|a| a.set(system::autostart_enabled()));
+                    u.schedule();
+                    Action::Redraw
+                }
+                Kind::Button(_) if key == Key::ResetPos => {
+                    u.shared.update_config(|c| {
+                        c.anchor = Anchor::BeforeTray;
+                        c.offset = 0;
+                    });
                     u.schedule();
                     Action::Redraw
                 }
@@ -2257,6 +2438,23 @@ impl Ui {
         }
     }
 
+    /// Arrastando um app da lista: põe ele na posição sob o mouse (sem gravar).
+    fn drag_app_to(&mut self, y: f32) {
+        let Some(d) = &self.app_drag else { return };
+        let (ri, id) = (d.ri, d.id.clone());
+        let cy = y + self.scroll_px();
+        let l = self.layout();
+        let Some(row) = l.rows.get(ri) else { return };
+        let cfg = self.cfg();
+        let apps = self.app_list(&cfg);
+        let n = apps.len().min(row.segs.len());
+        let Some(to) = (0..n).min_by(|a, b| (row.segs[*a].cy() - cy).abs().total_cmp(&(row.segs[*b].cy() - cy).abs())) else { return };
+        if apps.iter().position(|(a, _)| a.id == id) != Some(to) {
+            let order = crate::launchers::moved(&apps, &id, to);
+            self.shared.preview_config(|c| c.launcher_order = order);
+        }
+    }
+
     fn set_hover(&mut self, h: Option<Hit>, x: f32, y: f32) -> bool {
         if h == self.hover {
             return false;
@@ -2285,7 +2483,7 @@ impl Ui {
                     let s = self.scale;
                     invalidate_rect(self.hwnd, RectF::new(0.0, 0.0, NAV_W * s, self.client().1));
                 }
-                Hit::Row(ri) | Hit::Seg(ri, _) | Hit::Off(ri) => {
+                Hit::Row(ri) | Hit::Seg(ri, _) | Hit::Off(ri) | Hit::App(ri, _) => {
                     let r = self.row_window_rect(ri);
                     invalidate_rect(self.hwnd, r);
                 }
@@ -2390,6 +2588,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         let _ = TrackMouseEvent(&mut tme);
                         u.tracking = true;
                     }
+                    if let Some(d) = u.app_drag.as_mut() {
+                        d.y = y;
+                        if !d.active && (y - d.y0).abs() > 4.0 * u.scale {
+                            d.active = true;
+                        }
+                        if d.active {
+                            let ri = d.ri;
+                            u.drag_app_to(y);
+                            let r = u.row_window_rect(ri);
+                            invalidate_rect(hwnd, r);
+                            if let Some(hero) = u.layout().hero {
+                                invalidate_rect(hwnd, hero);
+                            }
+                            drag_changed = true;
+                            return;
+                        }
+                    }
                     if let Some(ri) = u.drag {
                         if let (Some(v), Some((key, _))) = (u.slider_value(ri, x), u.row(ri)) {
                             if get(&u.cfg(), key) != v {
@@ -2427,6 +2642,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 with_ui(|u| {
                     let h = u.hit(x, y);
                     u.pressed = h;
+                    if let Some(Hit::App(ri, k)) = h {
+                        let cfg = u.cfg();
+                        if let Some((app, _)) = u.app_list(&cfg).get(k) {
+                            u.app_drag = Some(AppDrag { ri, id: app.id.clone(), y0: y, y, active: false });
+                        }
+                    }
                     if let Some(Hit::Row(ri)) = h {
                         if let Some((key, Kind::Slider { .. })) = u.row(ri) {
                             u.drag = Some(ri);
@@ -2448,6 +2669,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let _ = ReleaseCapture();
                 let (x, y) = xy(lp);
                 let action = with_ui(|u| {
+                    if let Some(d) = u.app_drag.take()
+                        && d.active
+                    {
+                        u.shared.save_config();
+                        u.pressed = None;
+                        let r = u.row_window_rect(d.ri);
+                        invalidate_rect(hwnd, r);
+                        u.schedule();
+                        return Action::None;
+                    }
                     if let Some(ri) = u.drag.take() {
                         u.shared.save_config();
                         u.pressed = None;
@@ -2618,6 +2849,7 @@ mod tests {
                 }
             }
         }
+        check("Nenhum app de música encontrado");
         missing.sort();
         missing.dedup();
         assert!(missing.is_empty(), "sem tradução: {missing:#?}");

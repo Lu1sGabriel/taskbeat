@@ -130,7 +130,7 @@ fn shots() {
             ui::draw_card(cv, &mut tr, &cl, &f);
         });
         let widget = render(wl.width, 40.0 * S, |cv| {
-            let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: true, s: S, change: None };
+            let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: true, s: S, change: None, launchers: &[] };
             ui::draw_widget(cv, &mut tr, &wl, &f);
         });
         let img = render(iw, ih, |cv| {
@@ -221,7 +221,7 @@ fn shots() {
                 let c = colors(cfg, &shuffled);
                 let l = WLayout::build(S, wh, cfg, true, false);
                 render(l.width, wh, |cv| {
-                    let f = WidgetFrame { cfg, media: &shuffled, theme: ui::widget_theme(cfg, &c, &shuffled), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None };
+                    let f = WidgetFrame { cfg, media: &shuffled, theme: ui::widget_theme(cfg, &c, &shuffled), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
                     ui::draw_widget(cv, &mut tr, &l, &f);
                 })
             })
@@ -395,7 +395,7 @@ fn widget_tints() {
                 c.light_taskbar = light;
                 let l = WLayout::build(S, wh, &cfg, true, false);
                 col.push(render(l.width, wh, |cv| {
-                    let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb: playback(&media), time: 1.0, viz: None, flyout_open: false, s: S, change: None };
+                    let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb: playback(&media), time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
                     ui::draw_widget(cv, &mut tr, &l, &f);
                 }));
             }
@@ -436,7 +436,7 @@ fn pill_covers() {
             let c = colors(&cfg, &media);
             let wl = WLayout::build(S, h, &cfg, true, false);
             rows.push(render(wl.width, h, |cv| {
-                let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None };
+                let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
                 ui::draw_widget(cv, &mut tr, &wl, &f);
             }));
         }
@@ -470,19 +470,44 @@ fn card_launchers() {
         let c = colors(&cfg, &media);
         let cl = CLayout::build(S, &cfg, true).with_launchers(launchers.len(), S);
         let mut cards = Vec::new();
-        for hover in [None, Some(Hit::Launch(0))] {
+        // Parado; mouse sobre o primeiro; o primeiro sendo arrastado para a direita.
+        let drag_x = cl.launch.last().map(|r| r.cx() - 6.0 * S).unwrap_or(0.0);
+        for (hover, drag) in [(None, None), (Some(Hit::Launch(0)), None), (None, Some(Hit::Launch(0)))] {
             cards.push(render(cl.w, cl.h, |cv| {
-                let it = Interact { hover, ..Interact::default() };
+                let it = Interact { hover, drag, drag_x, ..Interact::default() };
                 let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it, pb, s: S, backdrop: None, hint: None, launchers: &launchers, viz: Some(VIZ) };
                 ui::draw_card(cv, &mut tr, &cl, &f);
             }));
         }
-        let img = render(cl.w * 2.0, cl.h, |cv| {
-            cv.fill_rrect(0.0, 0.0, cl.w * 2.0, cl.h, 0.0, 1.0, [0.16, 0.18, 0.24]);
+        let n = cards.len() as f32;
+        let img = render(cl.w * n, cl.h, |cv| {
+            cv.fill_rrect(0.0, 0.0, cl.w * n, cl.h, 0.0, 1.0, [0.16, 0.18, 0.24]);
             for (i, card) in cards.into_iter().enumerate() {
                 blit(cv, i as f32 * cl.w, 0.0, card);
             }
         });
         save_png(name, img.0, img.1, &img.2);
     }
+    // Atalhos dentro do widget da barra (só o primeiro à mostra, e todos).
+    let wh = 40.0 * S;
+    let mut rows = Vec::new();
+    for (k, hover) in [(1usize, None), (launchers.len(), Some(Hit::Launch(0)))] {
+        let cfg = Config { launcher_place: LauncherPlace::Taskbar, ..Config::default() };
+        let apps = &launchers[..k.min(launchers.len())];
+        let c = colors(&cfg, &media);
+        let l = WLayout::build_with(S, wh, &cfg, true, false, apps.len());
+        rows.push(render(l.width, wh, |cv| {
+            let it = Interact { hover, ..Interact::default() };
+            let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it, pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: apps };
+            ui::draw_widget(cv, &mut tr, &l, &f);
+        }));
+    }
+    let w = rows.iter().map(|r| r.0).max().unwrap() as f32 + 16.0 * S;
+    let img = render(w, wh * rows.len() as f32, |cv| {
+        cv.fill_rrect(0.0, 0.0, w, wh * rows.len() as f32, 0.0, 1.0, [0.11, 0.11, 0.12]);
+        for (i, r) in rows.into_iter().enumerate() {
+            blit(cv, 8.0 * S, i as f32 * wh, r);
+        }
+    });
+    save_png("widget-launchers.png", img.0, img.1, &img.2);
 }

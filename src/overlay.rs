@@ -14,7 +14,7 @@ use crate::audio::log;
 use crate::config::{Config, OsdAnim, OsdPosition};
 use crate::dsp::{Analyzer, FFT_SIZE};
 use crate::render::{self, Canvas, Colors, Image, RectF};
-use crate::shared::{MediaCmd, MediaInfo, Shared};
+use crate::shared::{Launcher, MediaCmd, MediaInfo, Shared};
 use crate::system;
 use crate::taskbar::{self, Placement};
 use crate::text::TextRenderer;
@@ -57,10 +57,11 @@ enum Win {
 
 #[derive(Clone, Copy, Debug)]
 enum Ev {
-    Move(f32, f32),
+    /// (x, y) na janela e x na tela, na hora da mensagem.
+    Move(f32, f32, i32),
     Leave,
-    Down(f32, f32),
-    Up(f32, f32),
+    Down(f32, f32, i32),
+    Up(f32, f32, i32),
     Wheel(i16),
     Deactivate,
     Escape,
@@ -79,6 +80,11 @@ thread_local! {
 
 fn push(win: Win, ev: Ev) {
     EVENTS.with(|e| e.borrow_mut().push((win, ev)));
+}
+
+/// x do mouse na tela quando a mensagem atual foi gerada.
+fn screen_x() -> i32 {
+    (unsafe { GetMessagePos() } & 0xffff) as u16 as i16 as i32
 }
 
 fn xy(lp: LPARAM) -> (f32, f32) {
@@ -103,7 +109,7 @@ unsafe fn mouse(win: Win, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Optio
                     TRACKING.with(|c| c.set(t));
                 }
                 let (x, y) = xy(lp);
-                push(win, Ev::Move(x, y));
+                push(win, Ev::Move(x, y, screen_x()));
             }
             WM_MOUSELEAVE => {
                 let mut t = TRACKING.with(|t| t.get());
@@ -114,12 +120,12 @@ unsafe fn mouse(win: Win, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Optio
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
                 SetCapture(hwnd);
                 let (x, y) = xy(lp);
-                push(win, Ev::Down(x, y));
+                push(win, Ev::Down(x, y, screen_x()));
             }
             WM_LBUTTONUP => {
                 let _ = ReleaseCapture();
                 let (x, y) = xy(lp);
-                push(win, Ev::Up(x, y));
+                push(win, Ev::Up(x, y, screen_x()));
             }
             WM_MOUSEWHEEL => push(win, Ev::Wheel(((wp.0 >> 16) & 0xffff) as i16)),
             _ => return None,
@@ -555,7 +561,27 @@ struct Overlay {
     trimmed: bool,
     /// Animação dos ícones dos botões (widget e card).
     icons: ui::IconAnims,
+    /// Atalhos dos apps de música à mostra (ordem e escolhas do usuário).
+    apps: Arc<Vec<Launcher>>,
+    /// Atalho do card apertado: (índice, x) — vira arrasto se o mouse andar.
+    launch_press: Option<(u8, f32)>,
+    /// Posição x do mouse arrastando um atalho.
+    drag_x: f32,
+    /// Widget apertado/arrastado pela barra.
+    wdrag: Option<WidgetDrag>,
 }
+
+/// Arrasto do widget pela barra: começa ao apertar; vira arrasto quando o
+/// mouse anda alguns pixels (antes disso, soltar é um clique normal).
+#[derive(Clone, Copy, Debug)]
+struct WidgetDrag {
+    /// Mouse (x na tela) e widget (x) quando apertou.
+    cursor0: i32,
+    x0: i32,
+    dx: i32,
+    active: bool,
+}
+
 
 /// Tudo que muda a aparência do widget quando nada está animando.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -657,8 +683,13 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         art_change: None,
         trimmed: false,
         icons: ui::IconAnims::default(),
+        apps: Arc::new(Vec::new()),
+        launch_press: None,
+        drag_x: 0.0,
+        wdrag: None,
         shared,
     };
+    ov.refresh_launchers();
     ov.set_period(ACTIVE_PERIOD_MS);
     ov.update_hook();
     ov.attach_to_taskbar();
@@ -820,14 +851,28 @@ impl Overlay {
         }
     }
 
+    /// Atalhos à mostra, na ordem escolhida (a lista dos apps achados muda raramente).
+    fn refresh_launchers(&mut self) {
+        let found = self.shared.launchers.lock().unwrap().clone();
+        self.apps = Arc::new(crate::launchers::shown(&found, &self.cfg));
+    }
+
+    /// Quantos atalhos vão no card e na barra.
+    fn card_launchers(&self) -> usize {
+        if self.cfg.card_launchers && self.cfg.launcher_place.card() { self.apps.len() } else { 0 }
+    }
+
+    fn bar_launchers(&self) -> usize {
+        if self.cfg.card_launchers && self.cfg.launcher_place.taskbar() { self.apps.len() } else { 0 }
+    }
+
     fn card_layout(&self) -> CLayout {
-        let n = if self.cfg.card_launchers { self.shared.launchers.lock().unwrap().len().min(crate::launchers::MAX) } else { 0 };
-        CLayout::build(self.scale(), &self.cfg, self.media.dur > 0.0).with_launchers(n, self.scale())
+        CLayout::build(self.scale(), &self.cfg, self.media.dur > 0.0).with_launchers(self.card_launchers(), self.scale())
     }
 
     fn widget_layout(&self) -> Option<WLayout> {
         let p = self.placement?;
-        Some(WLayout::build(p.scale, p.h as f32, &self.cfg, self.panel, self.viz))
+        Some(WLayout::build_with(p.scale, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers()))
     }
 
     fn frame(&mut self) {
@@ -842,6 +887,7 @@ impl Overlay {
             self.colors = system::colors(self.cfg.palette);
             self.last_layout = now - Duration::from_secs(10);
             self.update_hook();
+            self.refresh_launchers();
         }
         if COLORS_DIRTY.with(|c| c.replace(false)) || now - self.last_colors > Duration::from_secs(30) {
             self.last_colors = now;
@@ -933,7 +979,7 @@ impl Overlay {
             self.panel = panel;
             self.viz = viz;
             self.last_layout = now;
-            let logical = WLayout::build(1.0, 40.0, &self.cfg, panel, viz).width.ceil() as i32;
+            let logical = WLayout::build_with(1.0, 40.0, &self.cfg, panel, viz, self.bar_launchers()).width.ceil() as i32;
             self.placement = taskbar::compute(&self.cfg, logical.max(1));
             self.attach_to_taskbar();
             let mon = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTOPRIMARY) };
@@ -943,6 +989,10 @@ impl Overlay {
                     p.set_monitor(mon);
                 }
             }
+        }
+
+        if let (Some(d), Some(p)) = (self.wdrag.filter(|d| d.active), self.placement.as_mut()) {
+            p.x = (d.x0 + d.dx).clamp(p.min_x, p.max_x.max(p.min_x));
         }
 
         // Áudio -> espectro (só com o visualizador ligado).
@@ -1007,6 +1057,7 @@ impl Overlay {
         let busy = (viz && sound)
             || self.hover_w.is_some()
             || self.drag.is_some()
+            || self.wdrag.is_some()
             || flyout_active
             || popup_active
             || self.popup_wait.is_some()
@@ -1057,7 +1108,7 @@ impl Overlay {
         self.text.set_scale(p.scale);
         Surface::ensure(&mut self.surface, p.w, p.h);
         let Some(mut surface) = self.surface.take() else { return };
-        let layout = WLayout::build(p.scale, p.h as f32, &self.cfg, panel, viz);
+        let layout = WLayout::build_with(p.scale, p.h as f32, &self.cfg, panel, viz, self.bar_launchers());
         {
             let mut cv = surface.canvas();
             cv.fill_raw(0x0100_0000); // alfa 1/255: invisível, mas recebe cliques
@@ -1076,6 +1127,7 @@ impl Overlay {
                 flyout_open: self.flyout_open,
                 s: p.scale,
                 change: change.map(|(a, b)| (&self.prev_media, a, b)),
+                launchers: &self.apps,
             };
             ui::draw_widget(&mut cv, &mut self.text, &layout, &f);
         }
@@ -1251,16 +1303,27 @@ impl Overlay {
         let wl = self.widget_layout().unwrap_or_default();
         let cl = self.card_layout();
         for (win, ev) in events {
+            if win == Win::Widget && self.widget_drag_event(ev, s, now) {
+                continue;
+            }
             let hit_at = |x: f32, y: f32| match win {
                 Win::Widget => wl.hit(x, y),
                 Win::Flyout => cl.hit(x, y),
             };
             match ev {
-                Ev::Move(x, y) => {
+                Ev::Move(x, y, _) => {
                     if win == Win::Flyout {
                         self.flyout_last_hover = now;
+                        // Atalho apertado e o mouse andou: vira arrasto (reordena).
+                        if let Some((i, x0)) = self.launch_press
+                            && self.drag.is_none()
+                            && (x - x0).abs() > 5.0 * s
+                        {
+                            self.drag = Some(Hit::Launch(i));
+                        }
                     }
                     match self.drag {
+                        Some(Hit::Launch(_)) => self.drag_x = x,
                         Some(Hit::Vol) => {
                             if let Some(v) = Self::frac(x, cl.vol_track(s)) {
                                 self.volume.set(v);
@@ -1281,7 +1344,7 @@ impl Overlay {
                         }
                     }
                 }
-                Ev::Down(x, y) => {
+                Ev::Down(x, y, _) => {
                     let h = hit_at(x, y);
                     self.pressed = h.map(|h| (win, h));
                     if win == Win::Flyout {
@@ -1296,13 +1359,19 @@ impl Overlay {
                                 self.drag = Some(Hit::Seek);
                                 self.seek_preview = Self::frac(x, cl.seek_track(s));
                             }
+                            Some(Hit::Launch(i)) => {
+                                self.launch_press = Some((i, x));
+                                self.drag_x = x;
+                            }
                             _ => {}
                         }
                     }
                 }
-                Ev::Up(x, y) => {
+                Ev::Up(x, y, _) => {
                     let up = hit_at(x, y);
+                    self.launch_press = None;
                     match self.drag.take() {
+                        Some(Hit::Launch(i)) => self.drop_launcher(i, &cl.launch, x),
                         Some(Hit::Seek) => {
                             if let Some(f) = self.seek_preview.take() {
                                 let secs = f as f64 * self.media.dur;
@@ -1385,7 +1454,7 @@ impl Overlay {
             Hit::VolBtn => self.volume.toggle_mute(),
             // Abre o app de música e fecha o card (a janela do app aparece).
             Hit::Launch(i) => {
-                if let Some(app) = self.shared.launchers.lock().unwrap().get(i as usize) {
+                if let Some(app) = self.apps.get(i as usize) {
                     log::info(&format!("abrindo {} ({})", app.name, app.id));
                     crate::launchers::open(&app.id);
                 }
@@ -1393,6 +1462,63 @@ impl Overlay {
             }
             _ => {}
         }
+    }
+
+    /// Arrastar o widget pela barra. Devolve `true` quando o evento foi do
+    /// arrasto (não vira clique nem mexe no "mouse em cima").
+    fn widget_drag_event(&mut self, ev: Ev, s: f32, now: Instant) -> bool {
+        match ev {
+            Ev::Down(_, _, sx) => {
+                if let Some(p) = self.placement.filter(|_| self.cfg.widget_drag) {
+                    self.wdrag = Some(WidgetDrag { cursor0: sx, x0: p.x, dx: 0, active: false });
+                }
+                false
+            }
+            Ev::Move(_, _, sx) => {
+                let Some(d) = self.wdrag.as_mut() else { return false };
+                d.dx = sx - d.cursor0;
+                if !d.active && d.dx.abs() as f32 > 6.0 * s {
+                    d.active = true;
+                    self.pressed = None;
+                    self.flyout_open = false;
+                    self.popup_start = None;
+                }
+                d.active
+            }
+            Ev::Up(_, _, sx) => {
+                let Some(mut d) = self.wdrag.take() else { return false };
+                d.dx = sx - d.cursor0;
+                if !d.active {
+                    return false;
+                }
+                self.pressed = None;
+                if let Some(p) = self.placement {
+                    let x = (d.x0 + d.dx).clamp(p.min_x, p.max_x.max(p.min_x));
+                    let off = (((x - p.base_x) as f32) / p.scale).round() as i32;
+                    log::info(&format!("widget arrastado para x={x} (deslocamento {off})"));
+                    self.shared.update_config(|c| c.offset = off.clamp(-4000, 4000));
+                    self.last_layout = now - Duration::from_secs(10);
+                }
+                true
+            }
+            Ev::Leave => self.wdrag.is_some_and(|d| d.active),
+            _ => false,
+        }
+    }
+
+    /// Solta o atalho `i` arrastado na linha do card: muda a ordem e grava.
+    fn drop_launcher(&mut self, i: u8, slots: &[RectF], x: f32) {
+        let Some(app) = self.apps.get(i as usize).cloned() else { return };
+        let to = ui::launch_drop_slot(&slots[..slots.len().min(self.apps.len())], x);
+        if to == i as usize {
+            return;
+        }
+        let found = self.shared.launchers.lock().unwrap().clone();
+        let all = crate::launchers::arrange(&found, &self.cfg.launcher_order, &self.cfg.launcher_hidden);
+        let Some(full) = crate::launchers::full_index(&all, to) else { return };
+        let order = crate::launchers::moved(&all, &app.id, full);
+        log::info(&format!("atalho {} movido para a posição {}", app.name, to + 1));
+        self.shared.update_config(|c| c.launcher_order = order);
     }
 
     // ------------------------------------------------------------ card expandido
@@ -1418,7 +1544,7 @@ impl Overlay {
         let m = ui::SHADOW_MARGIN * s;
         // Abre com "decelerate" (Fluent) e fecha com "accelerate".
         let e = if opening { ui::ease_enter(self.flyout_anim) } else { 1.0 - ui::ease_exit(1.0 - self.flyout_anim) };
-        let wl = WLayout::build(s, p.h as f32, &self.cfg, self.panel, self.viz);
+        let wl = WLayout::build_with(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers());
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - l.w as i32 + m as i32 - (8.0 * s) as i32);
         let slide = (1.0 - e) * if opening { 24.0 } else { 12.0 } * s;
@@ -1445,13 +1571,13 @@ impl Overlay {
             let mut cv = surf.canvas();
             cv.clear();
             let pressed = self.pressed.filter(|(w, _)| *w == Win::Flyout).map(|(_, h)| h);
-            let launchers = self.shared.launchers.lock().unwrap().clone();
+            let launchers = self.apps.clone();
             let f = ui::CardFrame {
                 cfg: &self.cfg,
                 colors: &self.colors,
                 media: &self.media,
                 theme: ui::card_theme(&self.cfg, &self.colors, &self.media),
-                it: Interact { hover: self.hover_f, pressed, drag: self.drag, fx: self.icons.fx(self.cfg.icon_anim), ..Default::default() },
+                it: Interact { hover: self.hover_f, pressed, drag: self.drag, drag_x: self.drag_x, fx: self.icons.fx(self.cfg.icon_anim), ..Default::default() },
                 pb,
                 s,
                 backdrop: backdrop.as_deref(),
@@ -1484,7 +1610,7 @@ impl Overlay {
         let s = p.scale;
         let m = ui::SHADOW_MARGIN * s;
         let gap = 10.0 * s;
-        let wl = WLayout::build(s, p.h as f32, &self.cfg, self.panel, self.viz);
+        let wl = WLayout::build_with(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers());
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - w as i32 + m as i32 - (8.0 * s) as i32);
         let (y, dir) = match (self.flyout_box, p.taskbar_bottom_edge) {

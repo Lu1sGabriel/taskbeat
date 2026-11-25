@@ -78,7 +78,8 @@ fn display(item: &IShellItem, kind: SIGDN) -> String {
     }
 }
 
-/// Players conhecidos instalados, na ordem de `KNOWN` (um de cada).
+/// Players conhecidos instalados, na ordem de `KNOWN` (um de cada; todos: o
+/// limite de `MAX` vale só para os que ficam à mostra).
 pub fn scan() -> Vec<Launcher> {
     let mut found: Vec<(usize, Launcher)> = Vec::new();
     unsafe {
@@ -101,7 +102,43 @@ pub fn scan() -> Vec<Launcher> {
         }
     }
     found.sort_by_key(|(k, _)| *k);
-    found.into_iter().map(|(_, l)| l).take(MAX).collect()
+    found.into_iter().map(|(_, l)| l).collect()
+}
+
+/// Todos os apps achados na ordem escolhida pelo usuário, cada um com "à
+/// mostra?". Os que estão em `order` vêm primeiro, nessa ordem; os outros
+/// (achados depois, nunca mexidos) entram no fim, na ordem de sempre, à mostra.
+pub fn arrange(found: &[Launcher], order: &[String], hidden: &[String]) -> Vec<(Launcher, bool)> {
+    let mut out: Vec<(Launcher, bool)> = order.iter().filter_map(|id| found.iter().find(|l| &l.id == id)).map(|l| (l.clone(), true)).collect();
+    for l in found {
+        if !out.iter().any(|(o, _)| o.id == l.id) {
+            out.push((l.clone(), true));
+        }
+    }
+    for (l, on) in &mut out {
+        *on = !hidden.contains(&l.id);
+    }
+    out
+}
+
+/// Os atalhos à mostra, na ordem escolhida (no máximo `MAX`).
+pub fn shown(found: &[Launcher], cfg: &crate::config::Config) -> Vec<Launcher> {
+    arrange(found, &cfg.launcher_order, &cfg.launcher_hidden).into_iter().filter(|(_, on)| *on).map(|(l, _)| l).take(MAX).collect()
+}
+
+/// Ordem nova (todos os ids) com o app `id` movido para a posição `to` da lista completa.
+pub fn moved(all: &[(Launcher, bool)], id: &str, to: usize) -> Vec<String> {
+    let mut ids: Vec<String> = all.iter().map(|(l, _)| l.id.clone()).collect();
+    if let Some(from) = ids.iter().position(|i| i == id) {
+        let item = ids.remove(from);
+        ids.insert(to.min(ids.len()), item);
+    }
+    ids
+}
+
+/// Posição na lista completa do `k`-ésimo atalho à mostra.
+pub fn full_index(all: &[(Launcher, bool)], k: usize) -> Option<usize> {
+    all.iter().enumerate().filter(|(_, (_, on))| *on).nth(k).map(|(i, _)| i)
 }
 
 /// Procura os apps em segundo plano: logo ao abrir e de tempos em tempos.
@@ -277,6 +314,29 @@ mod tests {
             String::from_utf16_lossy(&buf[..n as usize])
         });
         println!("{aumid} \"{title}\" → {name:?} ({:?})", t.elapsed());
+    }
+
+    #[test]
+    fn ordem_e_atalhos_escondidos() {
+        use super::{arrange, full_index, moved};
+        use crate::shared::Launcher;
+        let l = |id: &str| Launcher { name: id.into(), id: id.into(), icon: None };
+        // Achados na ordem de sempre: YouTube Music, Media Player, VLC.
+        let found = [l("ytm"), l("zune"), l("vlc")];
+        // Nada escolhido: todos à mostra, na ordem de sempre.
+        let all = arrange(&found, &[], &[]);
+        assert_eq!(all.iter().map(|(l, on)| (l.id.as_str(), *on)).collect::<Vec<_>>(), [("ytm", true), ("zune", true), ("vlc", true)]);
+        // Só o YouTube Music à mostra; VLC antes do Media Player; um app que
+        // não está mais instalado na ordem é ignorado; um novo entra no fim.
+        let order = ["vlc".to_string(), "gone".into(), "zune".into(), "ytm".into()];
+        let hidden = ["vlc".to_string(), "zune".into()];
+        let found2 = [l("ytm"), l("zune"), l("vlc"), l("spotify")];
+        let all = arrange(&found2, &order, &hidden);
+        assert_eq!(all.iter().map(|(l, on)| (l.id.as_str(), *on)).collect::<Vec<_>>(), [("vlc", false), ("zune", false), ("ytm", true), ("spotify", true)]);
+        // O 2º à mostra (spotify) é o 4º da lista; arrastá-lo para o começo.
+        assert_eq!(full_index(&all, 1), Some(3));
+        assert_eq!(moved(&all, "spotify", 0), ["spotify", "vlc", "zune", "ytm"]);
+        assert_eq!(moved(&all, "vlc", 9), ["zune", "ytm", "spotify", "vlc"]);
     }
 
     #[test]
