@@ -36,9 +36,10 @@ pub fn spawn(shared: Arc<Shared>) -> std::thread::JoinHandle<()> {
             }
             crate::system::background_thread();
             while shared.is_running() {
-                // Visualizador desligado (padrão): nada de capturar áudio.
-                if !shared.config.lock().unwrap().show_visualizer {
-                    std::thread::sleep(Duration::from_millis(400));
+                // Visualizador desligado e card fechado (ou sem as barras):
+                // nada de capturar áudio.
+                if !shared.wants_audio() {
+                    std::thread::sleep(Duration::from_millis(150));
                     continue;
                 }
                 match capture_any(&shared) {
@@ -216,10 +217,7 @@ fn process_capture(shared: &Shared, app: &str, pid: u32, st: Started) -> Result<
                 let _ = WaitForSingleObject(st.event, 100);
                 if last_check.elapsed() > Duration::from_millis(1000) {
                     last_check = Instant::now();
-                    let cfg_on = {
-                        let c = shared.config.lock().unwrap();
-                        c.show_visualizer && c.viz_player_only
-                    };
+                    let cfg_on = shared.wants_audio() && shared.player_only();
                     if !cfg_on || media_app(shared) != app {
                         return Ok(());
                     }
@@ -301,12 +299,9 @@ fn capture(shared: &Shared, player: Option<&str>) -> Result<()> {
 
             if last_device_check.elapsed() > Duration::from_millis(1500) {
                 last_device_check = Instant::now();
-                let (viz, only) = {
-                    let c = shared.config.lock().unwrap();
-                    (c.show_visualizer, c.viz_player_only)
-                };
+                let (viz, only) = (shared.wants_audio(), shared.player_only());
                 if !viz {
-                    break Ok(()); // desligaram o visualizador: solta o dispositivo
+                    break Ok(()); // desligaram o visualizador (ou fecharam o card): solta o dispositivo
                 }
                 // Ligaram "Só o som do player", ou o player mudou: escolhe de novo.
                 if only && player.is_none_or(|p| media_app(shared) != p) {

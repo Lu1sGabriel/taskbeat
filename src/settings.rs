@@ -622,7 +622,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         LauncherPlace | LauncherApps if !c.card_launchers => Some(LAUNCH),
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdShape | OsdSize | OsdTheme | OsdDuration | OsdSwitch | OsdMaterial | OsdOpacity | OsdBlur | OsdIcon | OsdAnim if !osd_on => Some(OSD),
         OsdBlur if c.osd_material != crate::config::OsdMaterial::Acrylic => Some(BLUR),
-        Style | Palette | Bars | Width | Sens | OnlyMedia | PlayerOnly | Peaks | CardViz if !c.show_visualizer => Some(VIZ),
+        Style | Palette | Bars | Width | Sens | OnlyMedia | Peaks if !c.show_visualizer => Some(VIZ),
         _ => None,
     }
 }
@@ -2181,7 +2181,7 @@ impl Ui {
                 let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(l.card.offset(sub.x, sub.y), ui::GLASS_BLUR * s)).flatten();
                 // Mini barras paradas num desenho de exemplo (a prévia do card não anima a 60 fps).
                 const BARS: &[f32] = &[0.55, 0.9, 0.62, 0.38, 0.74, 0.5];
-                let viz = cfg.show_visualizer.then_some(if self.media_paused() { &[0.0; 6][..] } else { BARS });
+                let viz = cfg.card_viz.then_some(if self.media_paused() { &[0.0; 6][..] } else { BARS });
                 let empty_mixer = crate::shared::MixerState::default();
                 let f = ui::CardFrame { cfg, colors: &colors, media: &m2, theme: th, it: Interact::default(), pb, s, backdrop: backdrop.as_deref(), hint: None, launchers: &launchers, viz, mixer: Some(&empty_mixer) };
                 ui::draw_card(&mut sub.canvas(), &mut self.preview_text, &l, &f);

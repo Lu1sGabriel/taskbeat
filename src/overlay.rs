@@ -1212,8 +1212,11 @@ impl Overlay {
             p.x = (d.x0 + d.dx).clamp(p.min_x, p.max_x.max(p.min_x));
         }
 
-        // Áudio -> espectro (só com o visualizador ligado).
-        if viz {
+        // Áudio -> espectro: com o visualizador da barra ligado ou com o card
+        // aberto com as barras dele (aí a captura roda só enquanto ele está aberto).
+        let card_bars = self.cfg.card_viz && self.flyout_open;
+        self.shared.card_bars.store(card_bars, Ordering::Relaxed);
+        if viz || card_bars {
             let rate = self.shared.sample_rate.load(Ordering::Relaxed);
             self.analyzer.configure(self.cfg.bars, rate);
             {
@@ -1266,7 +1269,7 @@ impl Overlay {
         }
         let icons_active = self.cfg.icon_anim && self.icons.running();
         // Barras no card mexendo (card aberto, barras ligadas e som tocando).
-        let live_bars = self.cfg.card_viz && viz && sound;
+        let live_bars = card_bars && sound;
         let flyout_active = self.update_flyout(now, dt, placement, pb, live_bars);
         let popup_active = self.update_popup(now, placement);
         let osd_active = self.update_osd(now, placement);
@@ -2013,7 +2016,7 @@ impl Overlay {
                     (k < 2.8).then(|| (msg, (1.0 - (k - 2.4) / 0.4).clamp(0.0, 1.0)))
                 }),
                 launchers: &launchers,
-                viz: (self.cfg.card_viz && self.viz).then_some(&self.analyzer.values[..]),
+                viz: self.cfg.card_viz.then_some(&self.analyzer.values[..]),
                 mixer: self.cfg.card_mixer.then_some(&self.mix_view),
             };
             ui::draw_card(&mut cv, &mut self.text, &l, &f);

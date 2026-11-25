@@ -203,6 +203,19 @@ impl MediaInfo {
     }
 }
 
+impl Shared {
+    /// Capturar o som: visualizador da barra ligado, ou o card aberto com as
+    /// barras ligadas.
+    pub fn wants_audio(&self) -> bool {
+        self.config.lock().unwrap().show_visualizer || self.card_bars.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Só o som do player (com a captura ligada).
+    pub fn player_only(&self) -> bool {
+        self.config.lock().unwrap().viz_player_only
+    }
+}
+
 impl MediaInfo {
     pub fn present(&self) -> bool {
         !self.title.is_empty() || !self.aumid.is_empty()
@@ -277,6 +290,9 @@ pub struct Shared {
     pub mixer_tx: Mutex<Option<Sender<MixCmd>>>,
     /// Vezes que trocar a saída de áudio falhou (o card mostra um aviso).
     pub output_failed: AtomicU64,
+    /// O card está aberto com as barras ligadas: o som é capturado mesmo com
+    /// o visualizador da barra desligado (só enquanto o card fica aberto).
+    pub card_bars: AtomicBool,
 }
 
 impl Shared {
@@ -299,6 +315,7 @@ impl Shared {
             mixer_version: AtomicU64::new(0),
             mixer_tx: Mutex::new(None),
             output_failed: AtomicU64::new(0),
+            card_bars: AtomicBool::new(false),
         }
     }
 
