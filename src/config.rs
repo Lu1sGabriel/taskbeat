@@ -529,11 +529,35 @@ pub struct Config {
 
 const CONFIG_VERSION: u32 = 5;
 
-/// Padrões: a configuração que o usuário deixou "certinha" (2026-11-24 e
-/// 2026-11-25), sem o que é só da máquina dele (posição do arrasto, a lista
-/// de atalhos escolhida, marcas internas).
+/// Padrões. No Windows: a configuração que o usuário deixou "certinha"
+/// (2026-11-24 e 2026-11-25), sem o que é só da máquina dele (posição do
+/// arrasto, a lista de atalhos escolhida, marcas internas). No Mac ficam os de
+/// antes (decisão dele: "Mac keeps old ones"); ver `with_mac_defaults`.
 impl Default for Config {
     fn default() -> Self {
+        let c = Self::windows_defaults();
+        if cfg!(target_os = "macos") { c.with_mac_defaults() } else { c }
+    }
+}
+
+impl Config {
+    /// Os padrões do Mac: os de antes da config do usuário virar o padrão do
+    /// Windows (f0746a0) em tudo que muda o Mac; o resto é igual.
+    pub fn with_mac_defaults(self) -> Self {
+        Self {
+            playing_indicator: true,
+            taskbar_shuffle_repeat: false,
+            text_size: Size3::Normal,
+            widget_tint: WidgetTint::Album,
+            accent_source: AccentSource::Windows,
+            show_visualizer: true,
+            style: Style::Bars,
+            bars: 6,
+            ..self
+        }
+    }
+
+    fn windows_defaults() -> Self {
         Self {
             show_media: true,
             always_show_widget: true,
@@ -792,6 +816,99 @@ mod tests {
         assert_eq!(parse_hex("12"), None);
         assert_eq!(rgb_of("#5EB1FF"), 0x5EB1FF);
         assert_eq!(hex_of(0x5eb1ff), "#5EB1FF");
+    }
+
+    /// Padrões de antes (f0746a0, `toml::to_string(&Config::default())`),
+    /// com que o Mac continua (decisão do usuário: "Mac keeps old ones").
+    const DEFAULTS_F0746A0: &str = r#"
+show_media = true
+always_show_widget = true
+taskbar_controls = true
+cover_shape = "rounded"
+show_artist = true
+marquee = false
+playing_indicator = true
+taskbar_progress = false
+widget_pill = true
+widget_shape = "rounded"
+widget_divider = false
+taskbar_shuffle_repeat = false
+taskbar_play = "filled"
+second_line = "artist"
+text_size = "normal"
+cover_size = "normal"
+widget_tint = "album"
+widget_opacity = 6
+widget_border = true
+track_anim = true
+icon_anim = true
+title_width = 120
+anchor = "before_tray"
+offset = 0
+card_style = "artwork"
+card_layout = "horizontal"
+theme = "dark"
+accent_source = "windows"
+corners = "medium"
+play_shape = "rounded"
+card_seek = true
+show_source = false
+show_volume = true
+card_shuffle_repeat = "always"
+card_autoclose = 6
+card_launchers = true
+next_track_popup = true
+popup_secs = 5
+caps_lock_osd = true
+num_lock_osd = true
+osd_position = "bottom"
+osd_offset_x = 0
+osd_offset_y = 0
+osd_shape = "rounded"
+osd_size = "compact"
+osd_theme = "auto"
+osd_duration = 18
+osd_show_off = true
+osd_switch = true
+osd_material = "acrylic"
+osd_opacity = 96
+osd_blur = 20
+osd_icon = "lock"
+osd_anim = "zoom"
+show_visualizer = true
+style = "bars"
+palette = "album"
+width = 52
+bars = 6
+sensitivity_db = 0.0
+only_when_media = false
+viz_player_only = true
+show_peaks = true
+notch_hover = true
+notch_bg = "album"
+menu_bar_icon = true
+login_default_applied = false
+hide_on_fullscreen = true
+language = "auto"
+version = 5
+"#;
+
+    /// No Mac os padrões são os de f0746a0 em todo campo que já existia; no
+    /// Windows só mudam os oito que vieram da config do usuário.
+    #[test]
+    fn padroes_do_mac_sao_os_de_antes() {
+        let old: toml::Table = toml::from_str(DEFAULTS_F0746A0).unwrap();
+        let table = |c: &Config| -> toml::Table { toml::from_str(&toml::to_string(c).unwrap()).unwrap() };
+        let mac = table(&Config::windows_defaults().with_mac_defaults());
+        for (k, v) in &old {
+            assert_eq!(mac.get(k), Some(v), "padrão do Mac diferente do de antes em `{k}`");
+        }
+        let win = table(&Config::windows_defaults());
+        let mut changed: Vec<&str> = old.iter().filter(|(k, v)| win.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect();
+        changed.sort();
+        assert_eq!(changed, ["accent_source", "bars", "playing_indicator", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
+        let here = if cfg!(target_os = "macos") { mac } else { win };
+        assert_eq!(table(&Config::default()), here);
     }
 
     /// Botões laterais: na cor do botão do meio e tão fortes quanto ele (também

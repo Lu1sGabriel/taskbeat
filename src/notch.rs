@@ -631,7 +631,8 @@ mod tests {
         let notch = Geom { notch_w: 196.0 * S, notch_h: 32.0 * S };
         let flat = Geom { notch_w: 0.0, notch_h: 24.0 * S };
         let media = ui::sample_media();
-        let cfg = Config::default();
+        // A ilha é do Mac: os padrões dele em qualquer sistema.
+        let cfg = Config::default().with_mac_defaults();
         scene("notch-closed.png", notch, &cfg, &media, 0.0, 0.0);
         scene("notch-open.png", notch, &cfg, &media, 1.0, 0.0);
         scene("notch-opening.png", notch, &cfg, &media, grow(0.45), 0.0);
