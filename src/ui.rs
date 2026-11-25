@@ -805,8 +805,8 @@ fn rect_bits(r: RectF) -> [u32; 4] {
 }
 
 /// Compõe a camada `key` (do tamanho do canvas) com opacidade `alpha`,
-/// desenhando-a antes com `draw` se ainda não estiver guardada. Guarda até
-/// duas por tipo (a troca de capa anima entre a antiga e a nova).
+/// desenhando-a antes com `draw` se ainda não estiver guardada (quantas
+/// ficam guardadas por tipo: ver `layer`).
 fn cached_layer(cv: &mut Canvas, tag: LayerTag, key: u64, alpha: f32, draw: impl FnOnce(&mut Canvas)) {
     let (w, h) = (cv.w, cv.h);
     with_layer(tag, key, w, h, draw, |px, w, h| cv.composite(0, 0, px, w, h, alpha));
@@ -824,17 +824,27 @@ fn layer(tag: LayerTag, key: u64, w: usize, h: usize, draw: impl FnOnce(&mut Can
     if let Some(px) = LAYERS.with(|cell| cell.borrow().iter().find(|l| l.tag == tag && l.key == key && l.w == w && l.h == h).map(|l| l.px.clone())) {
         return px;
     }
-    let mut px = vec![0u32; w * h];
-    draw(&mut Canvas::new(w, h, &mut px));
-    let px = Rc::new(px);
-    LAYERS.with(|cell| {
+    // Quantas guardar por tipo: o widget, 2 (a troca de capa cruza a antiga
+    // com a nova); o card e o "A seguir", uma só (são desenhados uma vez por
+    // quadro, inteiros). A que sai tem a memória reaproveitada se ninguém
+    // mais a usa (abrindo o mixer, a camada final é refeita a cada quadro).
+    let keep = if tag == LayerTag::Widget { 2 } else { 1 };
+    let recycled = LAYERS.with(|cell| {
         let mut layers = cell.borrow_mut();
         let same: Vec<usize> = layers.iter().enumerate().filter(|(_, l)| l.tag == tag).map(|(i, _)| i).collect();
-        if same.len() >= 2 {
-            layers.remove(same[0]);
-        }
-        layers.push(Layer { tag, key, w, h, px: px.clone() });
+        (same.len() >= keep).then(|| layers.remove(same[0])).and_then(|old| Rc::try_unwrap(old.px).ok())
     });
+    let mut px = match recycled {
+        Some(mut v) => {
+            v.clear();
+            v.resize(w * h, 0);
+            v
+        }
+        None => vec![0u32; w * h],
+    };
+    draw(&mut Canvas::new(w, h, &mut px));
+    let px = Rc::new(px);
+    LAYERS.with(|cell| cell.borrow_mut().push(Layer { tag, key, w, h, px: px.clone() }));
     px
 }
 
