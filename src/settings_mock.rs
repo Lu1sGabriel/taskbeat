@@ -7,6 +7,8 @@
 //! $env:TASKBEAT_SHOTS_DIR="..."; cargo test settings_mock -- --ignored --nocapture
 //! ```
 
+#![allow(clippy::too_many_arguments, clippy::if_same_then_else)]
+
 use crate::config::*;
 use crate::render::*;
 use crate::shared::MediaInfo;
