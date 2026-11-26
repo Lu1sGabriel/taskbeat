@@ -14,6 +14,7 @@
 //! refeita quando o quadro dela muda. As animações seguem o vblank do monitor
 //! (`vsync.rs`) e param quando não há nada mexendo (0% de CPU).
 
+use crate::anim::{self, Phase, Pose};
 use crate::config::*;
 use crate::i18n::tr;
 use crate::menu;
@@ -54,6 +55,11 @@ const SLOW_TIMER: usize = 1;
 const WARM_TIMER: usize = 2;
 /// Espera antes de mostrar a dica de uma opção desativada.
 const TIP_DELAY: f32 = 0.45;
+/// Miniatura da animação de abrir e fechar do card (px lógicos).
+const ANIM_TILE: (f32, f32) = (112.0, 50.0);
+/// Uma volta da miniatura: fechado, abre, fica aberto, fecha, fechado (s).
+const DEMO_GAP: f32 = 0.25;
+const DEMO_HOLD: f32 = 0.7;
 
 // ---------------------------------------------------------------- modelo
 
@@ -130,6 +136,8 @@ enum Key {
     OsdBlur,
     OsdIcon,
     OsdAnim,
+    CardAnim,
+    AnimSpeed,
     OsdTest,
     ShowViz,
     Style,
@@ -175,6 +183,9 @@ enum Kind {
     Color,
     /// Abre e fecha o grupo que vem logo depois (as opções raras da página).
     Expander,
+    /// Lista como `Choice`, com uma miniatura do card abrindo e fechando ao
+    /// lado (toca ao trocar de estilo e com o mouse em cima).
+    Anim(&'static [&'static str]),
 }
 
 enum Item {
@@ -233,6 +244,8 @@ const SHUFFLE_MODES: &[&str] = &["Sempre", "Quando o player permite"];
 const OSD_MATERIALS: &[&str] = &["Sólido", "Acrílico", "Cor de destaque"];
 const OSD_ICONS: &[&str] = &["Letra", "Cadeado", "Teclado"];
 const OSD_ANIMS: &[&str] = &["Deslizar", "Zoom", "Esmaecer"];
+const CARD_ANIMS: &[&str] = &["Suave", "Deslizar da barra", "Subir", "Descer", "Estourar", "Zoom", "Esmaecer", "Nenhuma"];
+const ANIM_SPEEDS: &[&str] = &["Rápida", "Normal", "Lenta"];
 const VIZ_STYLES: &[&str] = &["Barras", "Espelhado", "Onda"];
 const PALETTES: &[&str] = &["Cor da capa", "Cor de destaque do Windows", "Arco-íris", "Neon", "Monocromático"];
 const LANGS: &[&str] = &["Automático (idioma do Windows)", "Português (Brasil)", "English", "Español", "Deutsch"];
@@ -325,6 +338,9 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e botão de mudo", key: Key::ShowVolume, kind: Kind::Toggle },
             Row { icon: "\u{E9F5}", title: "Mixer de volume", desc: "Setinha embaixo do card que abre o volume de cada app com som", key: Key::CardMixer, kind: Kind::Toggle },
             Row { icon: "\u{E9E9}", title: "Barras no card", desc: "Mini visualizador ao lado do título, reagindo ao som", key: Key::CardViz, kind: Kind::Toggle },
+            Section("Animação"),
+            Row { icon: "\u{E768}", title: "Abrir e fechar", desc: "Como o card e o \"A seguir\" entram e saem da tela", key: Key::CardAnim, kind: Kind::Anim(CARD_ANIMS) },
+            Row { icon: "\u{E916}", title: "Velocidade", desc: "Duração das animações de abrir e fechar", key: Key::AnimSpeed, kind: Kind::Segmented(ANIM_SPEEDS) },
             ADVANCED,
             Row { icon: "\u{E706}", title: "Força dos botões laterais", desc: "100% é tão forte quanto o botão do meio; menos deixa os do lado mais suaves", key: Key::CardSidesAlpha, kind: Kind::Slider { min: 20, max: 100, step: 5, unit: "%" } },
             Row { icon: "\u{E890}", title: "Desfoque do acrílico", desc: "Quanto o fundo Acrílico desfoca o que está atrás do card e do \"A seguir\"", key: Key::GlassBlur, kind: Kind::Slider { min: 0, max: 100, step: 5, unit: "%" } },
@@ -491,6 +507,8 @@ const SHUFFLE_V: &[ShuffleRepeat] = &[ShuffleRepeat::Always, ShuffleRepeat::When
 const OSD_MATERIAL_V: &[OsdMaterial] = &[OsdMaterial::Solid, OsdMaterial::Acrylic, OsdMaterial::Accent];
 const OSD_ICON_V: &[OsdIcon] = &[OsdIcon::Letter, OsdIcon::Lock, OsdIcon::Keyboard];
 const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
+const CARD_ANIM_V: &[CardAnim] = &[CardAnim::Smooth, CardAnim::Slide, CardAnim::Rise, CardAnim::Drop, CardAnim::Pop, CardAnim::Zoom, CardAnim::Fade, CardAnim::None];
+const ANIM_SPEED_V: &[AnimSpeed] = &[AnimSpeed::Fast, AnimSpeed::Normal, AnimSpeed::Slow];
 const PALETTE_V: &[Palette] = &[Palette::Album, Palette::Accent, Palette::Rainbow, Palette::Neon, Palette::Mono];
 const SIZE_V: &[Size3] = &[Size3::Small, Size3::Normal, Size3::Large];
 const SECOND_V: &[SecondLine] = &[SecondLine::Artist, SecondLine::ArtistAlbum, SecondLine::Album, SecondLine::Time];
@@ -571,6 +589,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::OsdBlur => c.osd_blur,
         Key::OsdIcon => idx(OSD_ICON_V, c.osd_icon),
         Key::OsdAnim => idx(OSD_ANIM_V, c.osd_anim),
+        Key::CardAnim => idx(CARD_ANIM_V, c.card_anim),
+        Key::AnimSpeed => idx(ANIM_SPEED_V, c.anim_speed),
         Key::ShowViz => c.show_visualizer as i32,
         Key::Style => idx(VIZ_V, c.style),
         Key::Palette => idx(PALETTE_V, c.palette),
@@ -670,6 +690,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::OsdBlur => c.osd_blur = v,
         Key::OsdIcon => c.osd_icon = pick(OSD_ICON_V, i),
         Key::OsdAnim => c.osd_anim = pick(OSD_ANIM_V, i),
+        Key::CardAnim => c.card_anim = pick(CARD_ANIM_V, i),
+        Key::AnimSpeed => c.anim_speed = pick(ANIM_SPEED_V, i),
         Key::ShowViz => c.show_visualizer = v != 0,
         Key::Style => c.style = pick(VIZ_V, i),
         Key::Palette => c.palette = pick(PALETTE_V, i),
@@ -717,6 +739,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     const GLASS: &str = "Só vale para o fundo \"Acrílico\" do card";
     const ARTWORK: &str = "Só vale para o fundo \"Capa desfocada\" do card";
     const WAVE: &str = "As pontas não valem para o estilo \"Onda\"";
+    const NO_ANIM: &str = "Escolha uma animação em \"Abrir e fechar\" para usar esta opção";
     let osd_on = c.caps_lock_osd || c.num_lock_osd;
     match key {
         AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetControls | WidgetControlsRgb | WidgetSides | WidgetSidesAlpha | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
@@ -741,7 +764,35 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         GlassBlur | GlassTint if c.card_style != crate::config::CardStyle::Glass => Some(GLASS),
         ArtworkDim if c.card_style != crate::config::CardStyle::Artwork => Some(ARTWORK),
         Lyrics(k) => lyrics_page::requirement(c, k),
+        AnimSpeed if c.card_anim == crate::config::CardAnim::None => Some(NO_ANIM),
         _ => None,
+    }
+}
+
+/// Uma volta da miniatura da animação do card (s).
+fn demo_len(cfg: &Config) -> f32 {
+    let d = |ph| anim::duration(cfg.card_anim, ph, cfg.anim_speed, anim::Which::Card);
+    DEMO_GAP + d(Phase::Open) + DEMO_HOLD + d(Phase::Close) + DEMO_GAP
+}
+
+/// Pose da miniatura `t` segundos depois de começar a volta.
+fn demo_pose(cfg: &Config, t: f32, ctx: anim::Ctx) -> Pose {
+    let (style, which) = (cfg.card_anim, anim::Which::Card);
+    let d_open = anim::duration(style, Phase::Open, cfg.anim_speed, which);
+    let d_close = anim::duration(style, Phase::Close, cfg.anim_speed, which);
+    let closed = anim::pose(style, Phase::Close, 1.0, which, ctx);
+    let opened = DEMO_GAP + d_open;
+    let closing = opened + DEMO_HOLD;
+    if t < DEMO_GAP {
+        closed
+    } else if t < opened {
+        anim::pose(style, Phase::Open, (t - DEMO_GAP) / d_open, which, ctx)
+    } else if t < closing {
+        Pose::REST
+    } else if t < closing + d_close {
+        anim::pose(style, Phase::Close, (t - closing) / d_close, which, ctx)
+    } else {
+        closed
     }
 }
 
@@ -957,6 +1008,10 @@ struct Ui {
     hero_frame: Option<Cached<HeroSig>>,
     /// Onde o componente da prévia foi desenhado no último quadro (coordenadas da prévia).
     hero_comp: Option<RectF>,
+    /// Miniatura da animação do card tocando: desde quando (uma volta; com o
+    /// mouse em cima, em laço) e a última escolha vista (trocar toca de novo).
+    anim_demo: Option<Instant>,
+    anim_seen: Option<(CardAnim, AnimSpeed)>,
     /// Fundo acrílico da prévia (o "papel de parede" desfocado atrás do componente).
     backdrop: Option<(BackdropKey, Arc<Image>)>,
     /// Indicador do menu lateral (posição animada, em índice de página).
@@ -1136,6 +1191,8 @@ pub fn open(shared: Arc<Shared>, icon: HICON) {
                 hero_bg: None,
                 hero_frame: None,
                 hero_comp: None,
+                anim_demo: None,
+                anim_seen: None,
                 backdrop: None,
                 nav_pos: page as f32,
                 page_anim: None,
@@ -1423,6 +1480,12 @@ impl Ui {
                     let ctl = match kind {
                         Kind::Toggle => RectF::new(right - 40.0 * s, cy - 10.0 * s, 40.0 * s, 20.0 * s),
                         Kind::Choice(_) => RectF::new(right - 250.0 * s, cy - 16.0 * s, 250.0 * s, 32.0 * s),
+                        Kind::Anim(_) => {
+                            // Miniatura à esquerda da lista.
+                            let ctl = RectF::new(right - 250.0 * s, cy - 16.0 * s, 250.0 * s, 32.0 * s);
+                            segs.push(RectF::new((ctl.x - 14.0 * s - ANIM_TILE.0 * s).round(), (cy - ANIM_TILE.1 * s / 2.0).round(), (ANIM_TILE.0 * s).round(), (ANIM_TILE.1 * s).round()));
+                            ctl
+                        }
                         Kind::Slider { .. } => RectF::new(right - 230.0 * s, cy - 16.0 * s, 230.0 * s, 32.0 * s),
                         Kind::Button(_) => RectF::new(right - 150.0 * s, cy - 16.0 * s, 150.0 * s, 32.0 * s),
                         Kind::Expander => RectF::new(right - 32.0 * s, cy - 16.0 * s, 32.0 * s, 32.0 * s),
@@ -1509,6 +1572,11 @@ impl Ui {
                 }
                 Kind::Choice(_) | Kind::Slider { .. } | Kind::Button(_) => {
                     if r.ctl.contains(x, y) && !(*key == Key::BrowserExt && ext_connected()) {
+                        return Some(Hit::Row(ri));
+                    }
+                }
+                Kind::Anim(_) => {
+                    if r.ctl.contains(x, y) || r.segs.iter().any(|t| t.contains(x, y)) {
                         return Some(Hit::Row(ri));
                     }
                 }
@@ -1627,6 +1695,8 @@ impl Ui {
                 Kind::Color => self.picker_sig(ri, cfg, key),
                 // Redesenha quando a extensão conecta ou desconecta.
                 Kind::Button(_) if key == Key::BrowserExt => crate::webext::connected().join(",").bytes().fold(1u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)),
+                // Quadro da miniatura (0 = parada).
+                Kind::Anim(_) => self.anim_demo.map_or(0, |t| (t.elapsed().as_secs_f64() * 60.0) as u64 + 1),
                 _ => 0,
             },
         }
@@ -1750,7 +1820,9 @@ impl Ui {
         let cfg = self.cfg();
         let fps = if minimized { 0.0 } else { self.hero_fps(&cfg) };
         let tip_pending = self.tip.is_some() && self.tip_alpha() < 1.0;
+        let anim_tile = self.anim_demo.is_some() || self.anim_hovered() || self.anim_seen.is_some_and(|v| v != (cfg.card_anim, cfg.anim_speed));
         let busy = !minimized
+                || anim_tile
             && ((self.scroll_target - self.scroll).abs() > 0.5
                 || self.anims_moving()
                 || self.nav_moving()
@@ -2105,7 +2177,11 @@ impl Ui {
         let rh = ROW_H * s;
         ui::glyph(cv, &mut self.text, RectF::new(r.card.x + 18.0 * s, r.card.y, 26.0 * s, rh), icon, Font::IconMd, fg, 0.92 * en);
         let tx = r.card.x + 60.0 * s;
-        let tw = if matches!(kind, Kind::Info | Kind::AppList) { r.card.right() - tx - 20.0 * s } else { r.ctl.x - tx - 24.0 * s };
+        let tw = match kind {
+            Kind::Info | Kind::AppList => r.card.right() - tx - 20.0 * s,
+            Kind::Anim(_) => r.segs.first().map_or(r.ctl.x, |t| t.x) - tx - 16.0 * s,
+            _ => r.ctl.x - tx - 24.0 * s,
+        };
         self.label(cv, tr(title), Font::Body, tx, r.card.y + 11.0 * s, tw, 21.0 * s, fg, en);
         let summary;
         let desc = if matches!(kind, Kind::Expander) {
@@ -2123,11 +2199,14 @@ impl Ui {
         match kind {
             Kind::Toggle => self.draw_toggle(cv, r.ctl, v != 0, a.toggle, card_hover, en),
             Kind::Segmented(opts) => self.draw_segmented(cv, r, opts, v as usize, a.seg, st.seg_hover, en),
-            Kind::Choice(names) => {
+            Kind::Choice(names) | Kind::Anim(names) => {
                 self.draw_box(cv, r.ctl, a.hover, en);
                 let name = tr(names.get(v.max(0) as usize).copied().unwrap_or(""));
                 self.label(cv, name, Font::Body, r.ctl.x + 12.0 * s, r.ctl.y, r.ctl.w - 44.0 * s, r.ctl.h, fg, en);
                 ui::glyph(cv, &mut self.text, RectF::new(r.ctl.right() - 32.0 * s, r.ctl.y, 24.0 * s, r.ctl.h), "\u{E70D}", Font::IconSmall, fg, 0.8 * en);
+                if let (Kind::Anim(_), Some(&tile)) = (kind, r.segs.first()) {
+                    self.draw_anim_tile(cv, tile, en);
+                }
             }
             Kind::Slider { min, max, .. } => {
                 self.draw_slider(cv, r.ctl, (v - min) as f32 / (max - min) as f32, a.hover, en);
@@ -2879,6 +2958,111 @@ impl Ui {
         Some(img)
     }
 
+    /// Linha da miniatura da animação do card nesta página.
+    fn anim_row(&self) -> Option<usize> {
+        (0..self.row_count()).find(|&ri| matches!(self.row(ri), Some((_, Kind::Anim(_)))))
+    }
+
+    fn anim_hovered(&self) -> bool {
+        matches!(self.hover, Some(Hit::Row(r)) if Some(r) == self.anim_row())
+    }
+
+    /// Avança a miniatura: toca uma volta quando a escolha muda e em laço
+    /// com o mouse em cima. Parada, não pede quadros.
+    fn step_anim_demo(&mut self) {
+        let Some(ri) = self.anim_row() else {
+            self.anim_demo = None;
+            return;
+        };
+        let cfg = self.cfg();
+        let sel = (cfg.card_anim, cfg.anim_speed);
+        let was = self.anim_demo.is_some();
+        if self.anim_seen != Some(sel) {
+            if self.anim_seen.is_some() {
+                self.anim_demo = Some(Instant::now());
+            }
+            self.anim_seen = Some(sel);
+        }
+        let hovered = self.anim_hovered();
+        match self.anim_demo {
+            Some(t0) if t0.elapsed().as_secs_f32() >= demo_len(&cfg) => self.anim_demo = hovered.then(Instant::now),
+            None if hovered => self.anim_demo = Some(Instant::now()),
+            _ => {}
+        }
+        if was || self.anim_demo.is_some() {
+            let r = self.row_window_rect(ri);
+            invalidate_rect(self.hwnd, r);
+        }
+    }
+
+    /// Miniatura do card abrindo e fechando no estilo escolhido, sobre uma
+    /// barra de tarefas de brinquedo (parada: o card aberto). Só formas
+    /// simples: cada quadro custa quase nada.
+    fn draw_anim_tile(&mut self, cv: &mut Canvas, r: RectF, en: f32) {
+        let s = self.scale;
+        let cfg = self.cfg();
+        let rad = 6.0 * s;
+        let (x0, y0) = (r.x, r.y);
+        cv.fill_rrect_ca(r.x, r.y, r.right(), r.bottom(), rad, |x, y| {
+            let u = ((x - x0) / r.w).clamp(0.0, 1.0);
+            let v = ((y - y0) / r.h).clamp(0.0, 1.0);
+            (lerp3([0.05, 0.09, 0.26], [0.22, 0.12, 0.42], (u * 0.7 + v * 0.3).clamp(0.0, 1.0)), en)
+        });
+        let bar = RectF::new(r.x, r.bottom() - 9.0 * s, r.w, 9.0 * s);
+        cv.fill_rrect_ca(r.x, r.y, r.right(), r.bottom(), rad, |_, y| ([0.11, 0.11, 0.12], if y < bar.y { 0.0 } else { 0.96 * en }));
+        // Widget na barra (de onde o card sai).
+        let wid = RectF::new(r.right() - 46.0 * s, bar.y + 2.0 * s, 32.0 * s, bar.h - 4.0 * s);
+        cv.fill_round(wid, 2.5 * s, [1.0; 3], 0.14 * en);
+        let dot = RectF::new(wid.x + 1.5 * s, wid.y + 1.0 * s, wid.h - 2.0 * s, wid.h - 2.0 * s);
+        cv.fill_round(dot, 1.2 * s, [0.98, 0.62, 0.42], en);
+
+        // Card parado: acima do widget, alinhado à capa dele (como no app).
+        let (cw, ch) = (66.0 * s, 27.0 * s);
+        let body = RectF::new((dot.x - 5.0 * s).clamp(r.x + 5.0 * s, r.right() - 5.0 * s - cw), bar.y - 4.0 * s - ch, cw, ch);
+        // As distâncias da animação são de um card de ~150 px: em miniatura.
+        let k = ch / (150.0 * s);
+        let ctx = anim::Ctx { bar_below: true, travel: (bar.y - body.y) / s / k };
+        let pose = match self.anim_demo {
+            None => Pose::REST,
+            Some(t0) => demo_pose(&cfg, t0.elapsed().as_secs_f32(), ctx),
+        };
+        if pose.alpha <= 0.003 {
+            return;
+        }
+        let old = cv.clip_rect();
+        let mut clip = r.inset(1.0).intersect(old);
+        if pose.clip {
+            clip = clip.intersect(RectF::new(r.x, r.y, r.w, bar.y - r.y));
+        }
+        cv.set_clip(clip);
+        let (ox, oy) = match pose.origin {
+            anim::Origin::Center => (body.cx(), body.cy()),
+            anim::Origin::Anchor => (dot.cx().clamp(body.x, body.right()), body.bottom()),
+        };
+        let sc = pose.scale;
+        let b = RectF::new(ox + (body.x - ox) * sc, oy + (body.y - oy) * sc + pose.dy * k * s, body.w * sc, body.h * sc);
+        let a = pose.alpha * en;
+        let u = sc * s;
+        anim::draw_burst(cv, b, 4.0 * u, pose.glow * a, pose.ring, self.accent, 0.35 * s);
+        cv.drop_shadow(b, 4.0 * u, 5.0 * u, 1.5 * u, 0.4 * a);
+        let (bx, by) = (b.x, b.y);
+        cv.fill_rrect_ca(b.x, b.y, b.right(), b.bottom(), 4.0 * u, |x, y| {
+            let t = (((x - bx) / b.w) * 0.4 + ((y - by) / b.h) * 0.6).clamp(0.0, 1.0);
+            (lerp3([0.36, 0.20, 0.42], [0.16, 0.09, 0.22], t), a)
+        });
+        let art = RectF::new(b.x + 3.5 * u, b.y + 3.5 * u, b.h - 7.0 * u, b.h - 7.0 * u);
+        let (ax, ay) = (art.x, art.y);
+        cv.fill_rrect_ca(art.x, art.y, art.right(), art.bottom(), 2.0 * u, |x, y| {
+            let t = (((y - ay) / art.h) * 0.8 + ((x - ax) / art.w) * 0.2).clamp(0.0, 1.0);
+            (lerp3([0.98, 0.70, 0.45], [0.55, 0.25, 0.55], t), a)
+        });
+        let tx = art.right() + 4.0 * u;
+        cv.fill_round(RectF::new(tx, b.y + 6.0 * u, 26.0 * u, 3.0 * u), 1.5 * u, [1.0; 3], 0.9 * a);
+        cv.fill_round(RectF::new(tx, b.y + 11.5 * u, 16.0 * u, 2.5 * u), 1.2 * u, [1.0; 3], 0.5 * a);
+        cv.fill_circle(b.right() - 9.0 * u, b.bottom() - 7.5 * u, 3.4 * u, [1.0; 3], 0.92 * a);
+        cv.set_clip(old);
+    }
+
     fn draw_box(&mut self, cv: &mut Canvas, r: RectF, hot: f32, en: f32) {
         let s = self.scale;
         let a = if self.dark { 0.061 + 0.023 * hot } else { 0.7 - 0.2 * hot };
@@ -3186,7 +3370,7 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                     u.schedule();
                     Action::Redraw
                 }
-                Kind::Choice(names) => {
+                Kind::Choice(names) | Kind::Anim(names) => {
                     let sc = u.scroll_px();
                     let ctl = u.layout().rows[ri].ctl.offset(0.0, -sc);
                     let mut tl = POINT { x: ctl.x as i32, y: ctl.y as i32 };
@@ -3370,6 +3554,8 @@ impl Ui {
                 invalidate_rect(hwnd, d.offset(hr.x, hr.y).intersect(hr));
             }
         }
+
+        self.step_anim_demo();
 
         // Dica: aparece (esmaecendo) depois de um instante parado sobre a opção.
         if self.tip.is_some() {
@@ -3761,6 +3947,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         with_ui(|u| {
                             u.set_hover(None, 0.0, 0.0);
                             u.tracking = false;
+                            // Escolha nova (a miniatura da animação toca).
+                            u.schedule();
                         });
                     }
                 }
@@ -3913,7 +4101,7 @@ mod tests {
                         check(title);
                         check(desc);
                         match kind {
-                            Kind::Segmented(o) | Kind::Choice(o) => o.iter().for_each(|t| check(t)),
+                            Kind::Segmented(o) | Kind::Choice(o) | Kind::Anim(o) => o.iter().for_each(|t| check(t)),
                             Kind::Button(t) => check(t),
                             _ => {}
                         }

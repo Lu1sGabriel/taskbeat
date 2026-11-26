@@ -9,6 +9,7 @@
 //! widget não rouba foco; o card recebe foco para saber quando o usuário
 //! clicou fora (WM_ACTIVATE). Thread própria com timer de alta resolução.
 
+use crate::anim::{self, Ctx, Pose, Stage, Which};
 use crate::i18n::tr;
 use crate::audio::log;
 use crate::config::{Config, OsdAnim, OsdPosition};
@@ -69,6 +70,18 @@ enum Ev {
     /// Outra janela tomou a captura do mouse no meio de um arrasto (Alt+Tab,
     /// um aviso do sistema): sem o "soltar", o arrasto ficaria preso.
     CaptureLost,
+}
+
+impl Ev {
+    /// O mesmo evento com o y `dy` mais para baixo.
+    fn shifted(self, dy: f32) -> Ev {
+        match self {
+            Ev::Move(x, y, sx) => Ev::Move(x, y + dy, sx),
+            Ev::Down(x, y, sx) => Ev::Down(x, y + dy, sx),
+            Ev::Up(x, y, sx) => Ev::Up(x, y + dy, sx),
+            e => e,
+        }
+    }
 }
 
 thread_local! {
@@ -349,7 +362,35 @@ impl Surface {
         }
     }
 
+    /// Como `present_at`, mas só com a parte do lado de cá da linha `edge` da
+    /// tela (acima dela com `above`; abaixo, sem): o cartão passa por trás da
+    /// barra. Devolve quantas linhas do topo ficaram de fora (a janela começa
+    /// nelas: o mouse soma isso para achar o ponto no cartão).
+    pub(crate) fn present_clipped(&mut self, hwnd: HWND, x: i32, y: f32, alpha: f32, clip: Option<(i32, bool)>) -> i32 {
+        let Some((edge, above)) = clip else {
+            self.present_at(hwnd, x, y, alpha);
+            return 0;
+        };
+        let yf = y.floor();
+        self.shift_down(y - yf);
+        let yi = yf as i32;
+        let cut = (edge - yi).clamp(0, self.h);
+        let (r0, r1) = if above { (0, cut) } else { (cut, self.h) };
+        if r1 <= r0 {
+            // Inteiro atrás da barra: a janela fica, sem nada à mostra.
+            self.present(hwnd, x, yi, 0.0);
+            return 0;
+        }
+        self.present_rows(hwnd, x, yi + r0, alpha, r0, r1 - r0);
+        r0
+    }
+
     fn present(&self, hwnd: HWND, x: i32, y: i32, alpha: f32) {
+        self.present_rows(hwnd, x, y, alpha, 0, self.h);
+    }
+
+    /// Mostra as linhas `row0..row0 + rows` da superfície com o topo em (x, y).
+    fn present_rows(&self, hwnd: HWND, x: i32, y: i32, alpha: f32, row0: i32, rows: i32) {
         let blend = BLENDFUNCTION {
             BlendOp: AC_SRC_OVER as u8,
             BlendFlags: 0,
@@ -357,8 +398,8 @@ impl Surface {
             AlphaFormat: AC_SRC_ALPHA as u8,
         };
         let pos = POINT { x, y };
-        let size = SIZE { cx: self.w, cy: self.h };
-        let src = POINT { x: 0, y: 0 };
+        let size = SIZE { cx: self.w, cy: rows.clamp(1, self.h) };
+        let src = POINT { x: 0, y: row0.clamp(0, self.h - 1) };
         unsafe {
             let _ = UpdateLayeredWindow(hwnd, None, Some(&pos), Some(&size), Some(self.dc), Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA);
         }
@@ -541,7 +582,14 @@ struct Overlay {
     // card expandido
     flyout: Layer,
     flyout_open: bool,
-    flyout_anim: f32,
+    /// Abrindo/fechando: quanto e com qual curva (ver `anim`).
+    flyout_anim: anim::Toggle,
+    /// O card desenhado parado, para escalar (estilos "Estourar" e "Zoom");
+    /// só existe durante a animação.
+    flyout_tmp: Vec<u32>,
+    /// Linhas do topo do card escondidas atrás da barra (no topo da tela)
+    /// enquanto ele desliza: a janela começa nelas, o mouse soma.
+    flyout_src_y: i32,
     flyout_last_hover: Instant,
     /// Superfície do card na posição final (x, y, largura, altura), quando visível.
     flyout_box: Option<(i32, i32, i32, i32)>,
@@ -554,8 +602,11 @@ struct Overlay {
     popup_start: Option<Instant>,
     /// Troca automática detectada; esperando a capa nova chegar (no máximo ~1,5 s).
     popup_wait: Option<Instant>,
-    /// Posição final (x, y) e sentido da entrada, fixados quando o cartão aparece.
-    popup_pos: Option<(i32, i32, i32)>,
+    /// Posição final (x, y), sentido da entrada e a borda por trás da qual ele
+    /// desliza (barra ou card aberto), fixados quando o cartão aparece.
+    popup_pos: Option<(i32, i32, i32, i32)>,
+    /// Como `flyout_tmp`, para o "A seguir".
+    popup_tmp: Vec<u32>,
     // Caps/Num Lock
     osd: Layer,
     osd_start: Option<Instant>,
@@ -772,7 +823,9 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         started: now,
         flyout: Layer::new(flyout),
         flyout_open: false,
-        flyout_anim: 0.0,
+        flyout_anim: anim::Toggle::default(),
+        flyout_tmp: Vec::new(),
+        flyout_src_y: 0,
         flyout_last_hover: now,
         flyout_box: None,
         hint: None,
@@ -781,6 +834,7 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         popup_start: None,
         popup_wait: None,
         popup_pos: None,
+        popup_tmp: Vec::new(),
         osd: Layer::new(osd),
         osd_start: None,
         osd_key: (tr("Caps Lock"), false, false),
@@ -1641,6 +1695,9 @@ impl Overlay {
             if win == Win::Widget && self.widget_drag_event(ev, s, now) {
                 continue;
             }
+            // Card deslizando por trás da barra do topo: a janela começa
+            // algumas linhas para dentro dele.
+            let ev = if win == Win::Flyout { ev.shifted(self.flyout_src_y as f32) } else { ev };
             let hit_at = |x: f32, y: f32| match win {
                 Win::Widget => wl.hit(x, y),
                 Win::Flyout => cl.hit(x, y),
@@ -1959,17 +2016,17 @@ impl Overlay {
     /// redesenhado quando algo nele muda.
     fn update_flyout(&mut self, now: Instant, dt: f32, placement: Option<Placement>, pb: Playback, live_bars: bool) -> bool {
         self.flyout_decorative = false;
-        let target = if self.flyout_open && placement.is_some() { 1.0 } else { 0.0 };
-        let opening = target > 0.5;
-        let speed = if opening { 1.0 / 0.28 } else { 1.0 / 0.16 };
-        self.flyout_anim += (target - self.flyout_anim).clamp(-speed * dt, speed * dt);
-        let Some(p) = placement.filter(|_| self.flyout_anim > 0.001) else {
+        let opening = self.flyout_open && placement.is_some();
+        self.flyout_anim.step(opening, dt, self.cfg.card_anim, self.cfg.anim_speed, Which::Card);
+        let Some(p) = placement.filter(|_| self.flyout_anim.v > 0.0) else {
             if self.flyout.shown {
                 ui::forget_layers(ui::LayerTag::Card);
             }
             self.flyout.hide();
             self.hover_f = None;
-            self.flyout_anim = 0.0;
+            self.flyout_anim = anim::Toggle::default();
+            self.flyout_tmp = Vec::new();
+            self.flyout_src_y = 0;
             self.flyout_open = false;
             self.flyout_box = None;
             self.flyout_sig = None;
@@ -2052,23 +2109,25 @@ impl Overlay {
         let s = p.scale;
         let l = self.card_layout();
         let m = ui::SHADOW_MARGIN * s;
-        // Abre com "decelerate" (Fluent) e fecha com "accelerate".
-        let e = if opening { ui::ease_enter(self.flyout_anim) } else { 1.0 - ui::ease_exit(1.0 - self.flyout_anim) };
         let wl = WLayout::build_for(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers(), self.bar_toggles());
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - l.w as i32 + m as i32 - (8.0 * s) as i32);
-        let slide = (1.0 - e) * if opening { 24.0 } else { 12.0 } * s;
-        let (y, dir) = if p.taskbar_bottom_edge {
-            (p.taskbar_top - (l.h - m) as i32 - (10.0 * s) as i32, 1)
+        let y = if p.taskbar_bottom_edge {
+            p.taskbar_top - (l.h - m) as i32 - (10.0 * s) as i32
         } else {
-            (p.y + p.h + (10.0 * s) as i32 - m as i32, -1)
+            p.y + p.h + (10.0 * s) as i32 - m as i32
         };
         self.flyout_box = Some((x, y, l.w.round() as i32, l.h.round() as i32));
+        // Como ele está agora na animação de abrir/fechar (o estilo escolhido).
+        let edge = bar_edge(&p);
+        let travel = travel_to(edge, p.taskbar_bottom_edge, y as f32 + l.card.y, y as f32 + l.card.bottom(), s);
+        let pose = self.flyout_anim.pose(self.cfg.card_anim, Which::Card, Ctx { bar_below: p.taskbar_bottom_edge, travel });
+        let wy = y as f32 + pose.dy * s;
         // Parado (aberto, sem animação): só redesenha se algo mudou.
         let hint_on = self.hint.is_some_and(|(t, _)| (now - t).as_secs_f32() < 2.8);
         let mixer_moving = self.mixer_anim > 0.0 && self.mixer_anim < 1.0;
         // O que pede o card inteiro a cada quadro; as mini barras sozinhas não.
-        let moving = self.flyout_anim < 0.999 || hint_on || mixer_moving || fills_moving || tip_moving || (self.cfg.icon_anim && self.icons.running());
+        let moving = self.flyout_anim.moving() || hint_on || mixer_moving || fills_moving || tip_moving || (self.cfg.icon_anim && self.icons.running());
         self.flyout_decorative = live_bars && !moving;
         let sig = FlyoutSig {
             place: (x, y, l.w.round() as i32, l.h.round() as i32),
@@ -2091,7 +2150,7 @@ impl Overlay {
         if !moving && self.flyout.shown && self.flyout_sig == Some(sig) {
             // Parado, com as barras tocando: até ~30 quadros por segundo, cada
             // um só com a área delas (o card inteiro custava ~5 ms a 2x).
-            if live_bars && now - self.bars_frame >= Duration::from_millis(33) && self.redraw_card_bars(x, y as f32 + dir as f32 * slide, e, s) {
+            if live_bars && now - self.bars_frame >= Duration::from_millis(33) && self.redraw_card_bars(x, wy, pose.alpha, s) {
                 self.bars_frame = now;
             }
             if live_bars && now - self.bars_frame < Duration::from_millis(33) {
@@ -2116,16 +2175,15 @@ impl Overlay {
         self.text.set_scale(s);
         Surface::ensure(&mut self.flyout.surface, l.w.round() as i32, l.h.round() as i32);
         let Some(mut surf) = self.flyout.surface.take() else { return true };
+        let theme = ui::card_theme(&self.cfg, &self.colors, &self.media);
         {
-            let mut cv = surf.canvas();
-            cv.clear();
             let pressed = self.pressed.filter(|(w, _)| *w == Win::Flyout).map(|(_, h)| h);
             let launchers = self.apps.clone();
             let f = ui::CardFrame {
                 cfg: &self.cfg,
                 colors: &self.colors,
                 media: &self.media,
-                theme: ui::card_theme(&self.cfg, &self.colors, &self.media),
+                theme,
                 it: Interact { hover: self.hover_f, pressed, drag: self.drag, drag_x: self.drag_x, fx: self.icons.fx(self.cfg.icon_anim), vol_fill: Some(self.vol_fill), tip: tip_a, ..Default::default() },
                 pb,
                 s,
@@ -2138,9 +2196,25 @@ impl Overlay {
                 viz: self.cfg.card_viz.then_some(&self.analyzer.values[..]),
                 mixer: self.cfg.card_mixer.then_some(&self.mix_view),
             };
-            ui::draw_card(&mut cv, &mut self.text, &l, &f);
+            if pose.transforms() {
+                // Escalado/com brilho: desenha parado à parte e compõe com a pose.
+                let art_cx = p.x as f32 + wl.art.map(|a| a.cx()).unwrap_or(p.w as f32 / 2.0);
+                let st = Stage { body: l.card, radius: l.radius, anchor_x: art_cx - x as f32, bar_below: p.taskbar_bottom_edge, accent: theme.accent, s };
+                let mut tmp = std::mem::take(&mut self.flyout_tmp);
+                posed(&mut surf, &mut tmp, &st, &pose, |cv| ui::draw_card(cv, &mut self.text, &l, &f));
+                self.flyout_tmp = tmp;
+            } else {
+                let mut cv = surf.canvas();
+                cv.clear();
+                ui::draw_card(&mut cv, &mut self.text, &l, &f);
+            }
         }
-        surf.present_at(self.flyout.hwnd, x, y as f32 + dir as f32 * slide, e);
+        if !self.flyout_anim.moving() {
+            // Parado: o buffer da escala não fica ocupando memória.
+            self.flyout_tmp = Vec::new();
+        }
+        let clip = pose.clip.then_some((edge, p.taskbar_bottom_edge));
+        self.flyout_src_y = surf.present_clipped(self.flyout.hwnd, x, wy, pose.alpha, clip);
         self.flyout.surface = Some(surf);
         self.flyout.show(true);
         moving
@@ -2155,22 +2229,23 @@ impl Overlay {
     }
 
     /// Onde o "A seguir" fica: acima da música na barra ou, com o card aberto,
-    /// empilhado acima (ou abaixo, com a barra no topo) dele.
-    fn popup_home(&self, p: &Placement, w: f32, h: f32) -> (i32, i32, i32) {
+    /// empilhado acima (ou abaixo, com a barra no topo) dele. Devolve (x, y,
+    /// sentido, borda): ao deslizar, ele sai de trás da barra ou do card.
+    fn popup_home(&self, p: &Placement, w: f32, h: f32) -> (i32, i32, i32, i32) {
         let s = p.scale;
         let m = ui::SHADOW_MARGIN * s;
         let gap = 10.0 * s;
         let wl = WLayout::build_for(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers(), self.bar_toggles());
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - w as i32 + m as i32 - (8.0 * s) as i32);
-        let (y, dir) = match (self.flyout_box, p.taskbar_bottom_edge) {
-            (Some((_, fy, _, _)), true) => ((fy as f32 + m - gap - (h - m)) as i32, 1),
-            (Some((_, fy, _, fh)), false) => ((fy as f32 + fh as f32 - m + gap - m) as i32, -1),
-            (None, true) => (p.taskbar_top - (h - m) as i32 - gap as i32, 1),
-            (None, false) => (p.y + p.h + gap as i32 - m as i32, -1),
+        let (y, dir, edge) = match (self.flyout_box, p.taskbar_bottom_edge) {
+            (Some((_, fy, _, _)), true) => ((fy as f32 + m - gap - (h - m)) as i32, 1, fy + m as i32),
+            (Some((_, fy, _, fh)), false) => ((fy as f32 + fh as f32 - m + gap - m) as i32, -1, fy + fh - m as i32),
+            (None, true) => (p.taskbar_top - (h - m) as i32 - gap as i32, 1, bar_edge(p)),
+            (None, false) => (p.y + p.h + gap as i32 - m as i32, -1, bar_edge(p)),
         };
         let y = y.clamp(p.mon_top - m as i32, p.mon_bottom - h as i32 + m as i32);
-        (x, y, dir)
+        (x, y, dir, edge)
     }
 
     fn update_popup(&mut self, now: Instant, placement: Option<Placement>) -> bool {
@@ -2184,21 +2259,15 @@ impl Overlay {
         let Some(p) = placement.filter(|_| t < total) else {
             self.popup_start = None;
             self.popup_pos = None;
+            self.popup_tmp = Vec::new();
             ui::forget_layers(ui::LayerTag::UpNext);
             self.popup.hide();
             return false;
         };
         let s = p.scale;
         let (w, h) = ui::upnext_size(s);
-        let e = if t < 0.5 {
-            ui::ease_enter(t / 0.5)
-        } else if t > total - 0.3 {
-            1.0 - ui::ease_exit((t - (total - 0.3)) / 0.3)
-        } else {
-            1.0
-        };
         // A posição é fixada quando o cartão aparece (não pula se o card fechar).
-        let (x, y, dir) = match self.popup_pos {
+        let (x, y, dir, edge) = match self.popup_pos {
             Some(v) => v,
             None => {
                 let v = self.popup_home(&p, w, h);
@@ -2206,7 +2275,11 @@ impl Overlay {
                 v
             }
         };
-        let slide = (1.0 - e) * 26.0 * s;
+        // Entra e sai no estilo do card (o "Suave" com o ritmo de sempre dele).
+        let body = ui::upnext_card(s);
+        let below = dir > 0;
+        let travel = travel_to(edge, below, y as f32 + body.y, y as f32 + body.bottom(), s);
+        let pose = anim::timed_pose(self.cfg.card_anim, self.cfg.anim_speed, Which::UpNext, t, total, Ctx { bar_below: below, travel });
         let backdrop = if ui::card_wants_backdrop(&self.cfg) {
             let c = ui::upnext_card(s);
             let rect = (x + c.x.round() as i32, y + c.y.round() as i32, c.w.round() as i32, c.h.round() as i32);
@@ -2219,16 +2292,64 @@ impl Overlay {
         Surface::ensure(&mut self.popup.surface, w as i32, h as i32);
         let Some(mut surf) = self.popup.surface.take() else { return true };
         {
-            let mut cv = surf.canvas();
-            cv.clear();
             let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
-            ui::draw_upnext(&mut cv, &mut self.text, &self.cfg, &self.colors, &self.media, &th, s, t, total, backdrop.as_deref());
+            let (cfg, colors, media) = (&self.cfg, &self.colors, &self.media);
+            let draw = |cv: &mut Canvas, tr: &mut TextRenderer| ui::draw_upnext(cv, tr, cfg, colors, media, &th, s, t, total, backdrop.as_deref());
+            if pose.transforms() {
+                let wl = WLayout::build_for(s, p.h as f32, cfg, self.panel, self.viz, self.bar_launchers(), self.bar_toggles());
+                let art_cx = p.x as f32 + wl.art.map(|a| a.cx()).unwrap_or(p.w as f32 / 2.0);
+                let st = Stage { body, radius: cfg.corners.radius() * s, anchor_x: art_cx - x as f32, bar_below: below, accent: th.accent, s };
+                let mut tmp = std::mem::take(&mut self.popup_tmp);
+                posed(&mut surf, &mut tmp, &st, &pose, |cv| draw(cv, &mut self.text));
+                self.popup_tmp = tmp;
+            } else {
+                self.popup_tmp = Vec::new();
+                let mut cv = surf.canvas();
+                cv.clear();
+                draw(&mut cv, &mut self.text);
+            }
         }
-        surf.present_at(self.popup.hwnd, x, y as f32 + dir as f32 * slide, e);
+        // Atrás da barra ou do card só passa quem desliza; o mouse não pega
+        // neste cartão, então o recorte do topo não importa aqui.
+        let clip = pose.clip.then_some((edge, below));
+        surf.present_clipped(self.popup.hwnd, x, y as f32 + pose.dy * s, pose.alpha, clip);
         self.popup.surface = Some(surf);
         self.popup.show(false);
         true
     }
+}
+
+/// Borda da barra de tarefas do lado dos cartões (y da tela): o topo dela,
+/// com a barra embaixo; a base, com ela no topo.
+fn bar_edge(p: &Placement) -> i32 {
+    if p.taskbar_bottom_edge {
+        p.taskbar_top
+    } else {
+        // O widget fica 4 px (lógicos) para dentro da borda de baixo da barra.
+        p.y + p.h + (4.0 * p.scale).round() as i32
+    }
+}
+
+/// Quanto (px lógicos) um cartão parado com o corpo em `top..bottom` (y da
+/// tela) anda até sumir inteiro atrás de `edge`.
+fn travel_to(edge: i32, below: bool, top: f32, bottom: f32, s: f32) -> f32 {
+    (if below { edge as f32 - top } else { bottom - edge as f32 }).max(0.0) / s
+}
+
+/// Desenha um cartão com a escala e o brilho da pose na superfície: `draw`
+/// desenha o cartão parado em `tmp` (reaproveitado durante a animação), que
+/// é composto com a pose. Posição, recorte e opacidade ficam com a janela.
+fn posed(surf: &mut Surface, tmp: &mut Vec<u32>, st: &Stage, pose: &Pose, draw: impl FnOnce(&mut Canvas)) {
+    let (w, h) = (surf.w as usize, surf.h as usize);
+    let mut px = std::mem::take(tmp);
+    px.clear();
+    px.resize(w * h, 0);
+    draw(&mut Canvas::new(w, h, &mut px));
+    let img = Image::plain(w, h, px);
+    let mut cv = surf.canvas();
+    cv.clear();
+    anim::draw_posed(&mut cv, &img, 0.0, 0.0, st, &Pose { dy: 0.0, alpha: 1.0, clip: false, ..*pose }, None);
+    *tmp = img.px;
 }
 
 fn same_art(a: &Option<Arc<Image>>, b: &Option<Arc<Image>>) -> bool {

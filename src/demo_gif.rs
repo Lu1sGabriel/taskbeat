@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 const TRANSPARENT: u8 = 255;
 
-struct Gif {
+pub(crate) struct Gif {
     w: usize,
     h: usize,
     out: Vec<u8>,
@@ -83,7 +83,7 @@ fn rgb(p: u32) -> [u8; 3] {
 }
 
 impl Gif {
-    fn new(w: usize, h: usize, samples: &[&[u32]]) -> Self {
+    pub(crate) fn new(w: usize, h: usize, samples: &[&[u32]]) -> Self {
         let mut colors = Vec::new();
         for f in samples {
             for (i, &p) in f.iter().enumerate() {
@@ -127,7 +127,7 @@ impl Gif {
         self.lut[key]
     }
 
-    fn frame(&mut self, px: &[u32], delay_cs: u16) {
+    pub(crate) fn frame(&mut self, px: &[u32], delay_cs: u16) {
         let (w, h) = (self.w, self.h);
         let mut idx = vec![0u8; w * h];
         for y in 0..h {
@@ -191,7 +191,7 @@ impl Gif {
         self.prev = Some(idx);
     }
 
-    fn finish(mut self) -> Vec<u8> {
+    pub(crate) fn finish(mut self) -> Vec<u8> {
         self.out.push(0x3B);
         self.out
     }
@@ -730,4 +730,162 @@ fn cursor_scaled(cv: &mut Canvas, x: f32, y: f32, k: f32) {
     fill_poly(cv, &shadow, [0.0; 3], 0.25);
     fill_poly(cv, &outer.map(|(a, b)| (x + a * k, y + b * k)), [0.0; 3], 1.0);
     fill_poly(cv, &inner.map(|(a, b)| (x + a * k, y + b * k)), [1.0; 3], 1.0);
+}
+
+// ---------------------------------------------------------------- animações do card
+
+/// Rótulos dos estilos de abrir e fechar do card nos GIFs.
+const ANIM_NAMES: [(CardAnim, &str); 8] = [
+    (CardAnim::Smooth, "Suave (a de hoje)"),
+    (CardAnim::Slide, "Deslizar da barra"),
+    (CardAnim::Rise, "Subir"),
+    (CardAnim::Drop, "Descer"),
+    (CardAnim::Pop, "Estourar"),
+    (CardAnim::Zoom, "Zoom"),
+    (CardAnim::Fade, "Esmaecer"),
+    (CardAnim::None, "Nenhuma"),
+];
+
+/// Quadros de uma grade de cenas (barra + widget + card) em que o card abre,
+/// fica aberto e fecha em cada estilo, todos ao mesmo tempo. `slow`: câmera
+/// lenta (0,35 = quase 3x mais devagar). Devolve (largura, altura, quadros).
+fn anim_grid(styles: &[CardAnim], cols: usize, s: f32, slow: f32, speed: AnimSpeed, fps: f32) -> (usize, usize, Vec<Vec<u32>>) {
+    use crate::anim::{self, Ctx, Stage, Toggle, Which};
+    let cfg = Config::default();
+    let mut tr = TextRenderer::new();
+    tr.set_scale(s);
+    let media = ui::sample_media();
+    let colors = Colors { palette: cfg.palette, accent: [0.93, 0.32, 0.62], accent_light: [0.98, 0.62, 0.80], light_taskbar: false, album: media.art.as_ref().map(|a| a.vibrant) };
+    let pb = Playback { playing: true, shuffle: media.shuffle, repeat: media.repeat, pos: 96.0, seek_preview: None, volume: 0.62, muted: false };
+    let theme = ui::card_theme(&cfg, &colors, &media);
+    let cl = CLayout::build(s, &cfg, true).with_mixer(Some(0), 0.0, 0.0, crate::shared::MIXER_ROWS, s);
+    let wl = WLayout::build(s, 40.0 * s, &cfg, true, false);
+    let m = ui::SHADOW_MARGIN * s;
+
+    // Card parado (o mesmo em todos os quadros) e o widget aberto/fechado.
+    let empty = crate::shared::MixerState::default();
+    let viz: &[f32] = &[0.55, 0.9, 0.62, 0.38, 0.74, 0.5];
+    let card = layer(cl.w, cl.h, |c| {
+        let f = CardFrame { cfg: &cfg, colors: &colors, media: &media, theme, it: Interact::default().styled(&cfg), pb, s, backdrop: None, hint: None, launchers: &[], viz: Some(viz), mixer: Some(&empty) };
+        ui::draw_card(c, &mut tr, &cl, &f);
+    });
+    let widget = |open: bool, tr: &mut TextRenderer| {
+        layer(wl.width, 40.0 * s, |c| {
+            let fr = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &colors, &media), colors: &colors, it: Interact::default().styled(&cfg), pb, time: 1.0, viz: None, flyout_open: open, s, change: None, launchers: &[] };
+            ui::draw_widget(c, tr, &wl, &fr);
+        })
+    };
+    let (w_closed, w_open) = (widget(false, &mut tr), widget(true, &mut tr));
+
+    // Cena: rótulo em cima, espaço para o card e a barra embaixo.
+    let (cw, ch) = ((cl.w + 24.0 * s).ceil(), (30.0 * s + cl.h + 44.0 * s).ceil());
+    let rows = styles.len().div_ceil(cols);
+    let (gw, gh) = ((cw * cols as f32) as usize, (ch * rows as f32) as usize);
+    let cell = |i: usize| ((i % cols) as f32 * cw, (i / cols) as f32 * ch);
+    let bar_h = 48.0 * s;
+    let bg = layer(gw as f32, gh as f32, |cv| {
+        for (i, style) in styles.iter().enumerate() {
+            let (x0, y0) = cell(i);
+            let r = RectF::new(x0, y0, cw, ch);
+            cv.fill_rrect_ca(r.x, r.y, r.right(), r.bottom(), 0.0, |x, y| {
+                let (u, v) = ((x - r.x) / r.w, (y - r.y) / r.h);
+                let c = lerp3([0.05, 0.09, 0.26], [0.22, 0.12, 0.42], (u * 0.7 + v * 0.3).clamp(0.0, 1.0));
+                let glow = (-(((u - 0.3) * 2.0).powi(2) + ((v - 0.3) * 2.4).powi(2))).exp();
+                (lerp3(c, [0.30, 0.45, 0.95], glow * 0.5), 1.0)
+            });
+            let bar = RectF::new(x0, y0 + ch - bar_h, cw, bar_h);
+            cv.fill_round(bar, 0.0, [0.11, 0.11, 0.12], 0.97);
+            cv.fill_rrect(bar.x, bar.y, bar.right(), bar.y + s, 0.0, 0.10, [1.0; 3]);
+            ui::text(cv, &mut tr, "12:34", Font::Caption, bar.right() - 48.0 * s, bar.y + 15.0 * s, 44.0 * s, 18.0 * s, [0.92; 3], 1.0);
+            let name = ANIM_NAMES.iter().find(|(a, _)| a == style).map(|(_, n)| *n).unwrap_or("");
+            ui::text(cv, &mut tr, crate::i18n::tr(name), Font::BodyStrong, x0 + 12.0 * s, y0 + 6.0 * s, cw - 24.0 * s, 22.0 * s, [1.0; 3], 0.95);
+            // Divisória entre as cenas.
+            cv.fill_rrect(x0 + cw - s, y0, x0 + cw, y0 + ch, 0.0, 0.5, [0.0; 3]);
+            cv.fill_rrect(x0, y0 + ch - s, x0 + cw, y0 + ch, 0.0, 0.5, [0.0; 3]);
+        }
+    });
+
+    // Linha do tempo (tempo do app): clica em 0,3 s, fecha em 1,6 s, recomeça em 2,5 s.
+    let (t_open, t_close, t_end) = (0.3, 1.6, 2.5);
+    let frames = (t_end / slow * fps).round() as usize;
+    let dt = slow / fps;
+    let mut toggles = vec![Toggle::default(); styles.len()];
+    let mut out = Vec::with_capacity(frames);
+    for f in 0..frames {
+        let t = f as f32 * dt;
+        let mut px = bg.px.clone();
+        {
+            let mut cv = Canvas::new(gw, gh, &mut px);
+            for (i, style) in styles.iter().enumerate() {
+                let (x0, y0) = cell(i);
+                let open = (t_open..t_close).contains(&t);
+                toggles[i].step(open, dt, *style, speed, Which::Card);
+                let bar_y = y0 + ch - bar_h;
+                let wx = x0 + cw - 56.0 * s - wl.width;
+                cv.set_clip(RectF::new(x0, y0, cw - s, ch - s));
+                let wimg = if toggles[i].v > 0.5 || open { &w_open } else { &w_closed };
+                cv.draw_image(RectF::new(wx, bar_y + 4.0 * s, wl.width.ceil(), (40.0 * s).ceil()), wimg, 0.0, 1.0);
+                // Card acima do widget, como no app (alinhado à capa, sem sair da cena).
+                let art_x = wl.art.map(|a| a.x).unwrap_or(0.0);
+                let card_x = (wx + art_x - m - 6.0 * s).min(x0 + cw - cl.w + m - 8.0 * s).round();
+                let card_y = (bar_y - (cl.h - m) - 10.0 * s).round();
+                let art_cx = wx + wl.art.map(|a| a.cx()).unwrap_or(0.0);
+                let st = Stage { body: cl.card, radius: cl.radius, anchor_x: art_cx - card_x, bar_below: true, accent: theme.accent, s };
+                let ctx = Ctx { bar_below: true, travel: (bar_y - (card_y + cl.card.y)) / s };
+                let pose = toggles[i].pose(*style, Which::Card, ctx);
+                if toggles[i].v > 0.0 {
+                    anim::draw_posed(&mut cv, &card, card_x, card_y, &st, &pose, Some(bar_y));
+                }
+                cv.set_clip(RectF::new(0.0, 0.0, gw as f32, gh as f32));
+            }
+        }
+        out.push(px);
+    }
+    (gw, gh, out)
+}
+
+fn save_gif(dir: &std::path::Path, name: &str, (w, h, frames): (usize, usize, Vec<Vec<u32>>), fps: f32) {
+    let samples: Vec<&[u32]> = frames.iter().step_by(9).map(|v| v.as_slice()).collect();
+    let mut gif = Gif::new(w, h, &samples);
+    for f in &frames {
+        gif.frame(f, (100.0 / fps).round() as u16);
+    }
+    let bytes = gif.finish();
+    let path = dir.join(name);
+    std::fs::write(&path, &bytes).unwrap();
+    println!("{} ({}x{}, {} quadros, {:.1} MB)", path.display(), w, h, frames.len(), bytes.len() as f64 / 1e6);
+}
+
+/// GIFs das animações de abrir e fechar do card: todos os estilos lado a
+/// lado (na velocidade normal e em câmera lenta) e, com `TASKBEAT_ANIM_EACH`,
+/// um de cada estilo. Na pasta `TASKBEAT_SHOTS_DIR` (ou `docs/screenshots`).
+///
+/// ```powershell
+/// $env:TASKBEAT_LANG="pt"; cargo test --release card_anims -- --ignored
+/// ```
+#[test]
+#[ignore]
+fn card_anims() {
+    let dir = std::env::var_os("TASKBEAT_SHOTS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs").join("screenshots"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let all: Vec<CardAnim> = ANIM_NAMES.iter().map(|(a, _)| *a).collect();
+    save_gif(&dir, "card-anims.gif", anim_grid(&all, 4, 1.0, 1.0, AnimSpeed::Normal, 50.0), 50.0);
+    let slow = anim_grid(&all, 4, 1.0, 0.35, AnimSpeed::Normal, 25.0);
+    // Quadros soltos da câmera lenta (para conferir de perto): tempo do app.
+    if std::env::var_os("TASKBEAT_ANIM_FRAMES").is_some() {
+        let dt = 0.35 / 25.0;
+        for t in [0.33f32, 0.37, 0.42, 0.48, 0.56, 0.7, 1.63, 1.67, 1.72, 1.78] {
+            let f = ((t / dt).round() as usize).min(slow.2.len() - 1);
+            crate::png::save(&dir.join(format!("quadro-{:04}.png", (t * 1000.0) as u32)), slow.0, slow.1, &slow.2[f]);
+        }
+    }
+    save_gif(&dir, "card-anims-lento.gif", slow, 25.0);
+    if std::env::var_os("TASKBEAT_ANIM_EACH").is_some() {
+        for (a, _) in ANIM_NAMES {
+            let file = format!("card-anim-{}.gif", format!("{a:?}").to_lowercase());
+            save_gif(&dir, &file, anim_grid(&[a], 1, 1.5, 1.0, AnimSpeed::Normal, 50.0), 50.0);
+        }
+    }
 }

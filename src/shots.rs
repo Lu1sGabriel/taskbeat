@@ -814,3 +814,179 @@ fn store_parts() {
     });
     save_png("store-widget.png", widget.0, widget.1, &widget.2);
 }
+
+/// Verificação ao vivo da animação de abrir e fechar do card, no app que está
+/// rodando: clica no widget por mensagem (o mouse não mexe), grava a tela em
+/// volta dele enquanto o card abre, fica aberto e fecha, e monta um GIF (na
+/// velocidade real e 3x mais lento) e alguns quadros soltos. Não faz nada com
+/// uma janela em tela cheia (jogo, vídeo) em primeiro plano.
+///
+/// ```powershell
+/// $env:TASKBEAT_SHOTS_DIR="..."; $env:TASKBEAT_LIVE_NAME="slide"; cargo test --release live_card -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn live_card() {
+    use std::time::{Duration, Instant};
+    use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{BitBlt, GdiFlush, GetDC, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC, SRCCOPY};
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    use windows::core::{PCWSTR, w};
+    let name = std::env::var("TASKBEAT_LIVE_NAME").unwrap_or_else(|_| "card".into());
+    unsafe {
+        // Jogo ou vídeo em tela cheia em primeiro plano: não abre o card.
+        let fg = GetForegroundWindow();
+        let mut fr = RECT::default();
+        let _ = GetWindowRect(fg, &mut fr);
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let _ = GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mut mi);
+        let m = mi.rcMonitor;
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(fg, &mut class);
+        let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
+        let shell = matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd");
+        let full = fr.left <= m.left && fr.top <= m.top && fr.right >= m.right && fr.bottom >= m.bottom;
+        assert!(!full || shell, "janela em tela cheia em primeiro plano ({class}): não abre o card");
+
+        let widget = FindWindowW(w!("TaskbeatWidget"), PCWSTR::null()).expect("o Taskbeat não está rodando");
+        let mut wr = RECT::default();
+        let _ = GetWindowRect(widget, &mut wr);
+        let sc = GetDpiForWindow(widget) as f32 / 96.0;
+        let bar_below = wr.top > (m.top + m.bottom) / 2;
+        // Área: o card inteiro (acima do widget, ou abaixo com a barra no topo) e a barra.
+        let k = |v: f32| (v * sc).round() as i32;
+        let mut x0 = wr.left - k(60.0);
+        let x1 = (x0 + k(500.0)).min(m.right);
+        x0 = x0.min(x1 - k(500.0)).max(m.left);
+        let (y0, y1) = if bar_below { ((wr.top - k(330.0)).max(m.top), (wr.bottom + k(4.0)).min(m.bottom)) } else { ((wr.top - k(4.0)).max(m.top), (wr.bottom + k(330.0)).min(m.bottom)) };
+        let (cw, ch) = (x1 - x0, y1 - y0);
+        println!("widget {:?} escala {sc} área {cw}x{ch} em ({x0}, {y0})", (wr.left, wr.top, wr.right, wr.bottom));
+
+        // Clique no meio da capa do widget (canto esquerdo), por mensagem.
+        let h = wr.bottom - wr.top;
+        let lp = LPARAM(((h / 2) << 16 | (h / 2)) as isize);
+        let click = || {
+            let _ = PostMessageW(Some(widget), WM_LBUTTONDOWN, WPARAM(1), lp);
+            let _ = PostMessageW(Some(widget), WM_LBUTTONUP, WPARAM(0), lp);
+        };
+        let surf = crate::overlay::Surface::new(cw, ch).unwrap();
+        let screen = GetDC(None);
+        let mut frames: Vec<(f32, Vec<u32>)> = Vec::new();
+        let t0 = Instant::now();
+        let (t_open, t_close, t_end) = (0.15, 1.3, 2.0);
+        let (mut opened, mut closed) = (false, false);
+        let mut next = 0.0f32;
+        while t0.elapsed().as_secs_f32() < t_end {
+            let t = t0.elapsed().as_secs_f32();
+            if !opened && t >= t_open {
+                click();
+                opened = true;
+            }
+            if !closed && t >= t_close {
+                click();
+                closed = true;
+            }
+            if t >= next {
+                let _ = BitBlt(surf.dc, 0, 0, cw, ch, Some(screen), x0, y0, SRCCOPY);
+                let _ = GdiFlush();
+                frames.push((t, surf.pixels().iter().map(|p| p | 0xFF00_0000).collect()));
+                next = t + 0.008;
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        ReleaseDC(None, screen);
+        println!("{} quadros gravados em {:.2} s", frames.len(), t0.elapsed().as_secs_f32());
+
+        // Quadros a cada 20 ms (o mais perto de cada instante).
+        let at = |t: f32| &frames.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).unwrap().1;
+        let picked: Vec<&Vec<u32>> = (0..(t_end / 0.02) as usize).map(|i| at(i as f32 * 0.02)).collect();
+        let dir = std::env::var_os("TASKBEAT_SHOTS_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("taskbeat-live"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let samples: Vec<&[u32]> = picked.iter().step_by(6).map(|v| v.as_slice()).collect();
+        for (suffix, delay) in [("", 2u16), ("-lento", 6)] {
+            let mut gif = crate::demo_gif::Gif::new(cw as usize, ch as usize, &samples);
+            for f in &picked {
+                gif.frame(f, delay);
+            }
+            let path = dir.join(format!("ao-vivo-{name}{suffix}.gif"));
+            std::fs::write(&path, gif.finish()).unwrap();
+            println!("{}", path.display());
+        }
+        for dt in [0.03f32, 0.08, 0.14, 0.22, 0.4] {
+            crate::png::save(&dir.join(format!("ao-vivo-{name}-abrindo-{:03}ms.png", (dt * 1000.0) as u32)), cw as usize, ch as usize, at(t_open + dt));
+        }
+        for dt in [0.03f32, 0.08, 0.14, 0.3] {
+            crate::png::save(&dir.join(format!("ao-vivo-{name}-fechando-{:03}ms.png", (dt * 1000.0) as u32)), cw as usize, ch as usize, at(t_close + dt));
+        }
+    }
+}
+
+/// Verificação ao vivo do bloco "Animação" nas configurações abertas: vai
+/// para a aba do card, rola até o fim, põe o mouse (por mensagem) sobre a
+/// miniatura e grava um GIF dela tocando. As contas de posição seguem o
+/// layout de `settings.rs` (linhas de 66 px no fim da página).
+#[test]
+#[ignore]
+fn live_settings() {
+    use std::time::{Duration, Instant};
+    use windows::Win32::Foundation::{LPARAM, POINT, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{BitBlt, ClientToScreen, GdiFlush, GetDC, ReleaseDC, SRCCOPY};
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    use windows::core::{PCWSTR, w};
+    unsafe {
+        let win = FindWindowW(w!("TaskbeatSettings"), PCWSTR::null()).expect("abra as configurações antes");
+        let s = GetDpiForWindow(win) as f32 / 96.0;
+        let mut cr = RECT::default();
+        let _ = GetClientRect(win, &mut cr);
+        let (w, h) = (cr.right as f32, cr.bottom as f32);
+        let lp = |x: f32, y: f32| LPARAM((((y as i32) << 16) | (x as i32 & 0xffff)) as isize);
+        // Aba "Card expandido" (segunda do menu lateral).
+        let nav = lp(100.0 * s, (92.0 + 42.0 + 19.0) * s);
+        let _ = PostMessageW(Some(win), WM_MOUSEMOVE, WPARAM(0), nav);
+        let _ = PostMessageW(Some(win), WM_LBUTTONDOWN, WPARAM(1), nav);
+        let _ = PostMessageW(Some(win), WM_LBUTTONUP, WPARAM(0), nav);
+        std::thread::sleep(Duration::from_millis(700));
+        // Rola até o fim (a roda chega em coordenadas de tela).
+        let mut c = POINT { x: (w * 0.6) as i32, y: (h * 0.7) as i32 };
+        let _ = ClientToScreen(win, &mut c);
+        for _ in 0..40 {
+            let _ = PostMessageW(Some(win), WM_MOUSEWHEEL, WPARAM(((-120i32 as u32 as usize) & 0xffff) << 16), LPARAM((((c.y) << 16) | (c.x & 0xffff)) as isize));
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        std::thread::sleep(Duration::from_millis(900));
+        // Miniatura: à esquerda da lista, na penúltima linha.
+        let tile = (w - 426.0 * s + 56.0 * s, h - 131.0 * s);
+        let _ = PostMessageW(Some(win), WM_MOUSEMOVE, WPARAM(0), lp(tile.0, tile.1));
+        // Grava a área das duas linhas do bloco.
+        let (x0, y0) = ((268.0 * s) as i32, (h - 215.0 * s) as i32);
+        let (cw, ch) = (w as i32 - x0, h as i32 - y0);
+        let mut o = POINT { x: x0, y: y0 };
+        let _ = ClientToScreen(win, &mut o);
+        let surf = crate::overlay::Surface::new(cw, ch).unwrap();
+        let screen = GetDC(None);
+        let t0 = Instant::now();
+        let mut frames = Vec::new();
+        while t0.elapsed().as_secs_f32() < 2.6 {
+            let _ = PostMessageW(Some(win), WM_MOUSEMOVE, WPARAM(0), lp(tile.0, tile.1));
+            let _ = BitBlt(surf.dc, 0, 0, cw, ch, Some(screen), o.x, o.y, SRCCOPY);
+            let _ = GdiFlush();
+            frames.push(surf.pixels().iter().map(|p| p | 0xFF00_0000).collect::<Vec<u32>>());
+            std::thread::sleep(Duration::from_millis(18));
+        }
+        ReleaseDC(None, screen);
+        let dir = std::env::var_os("TASKBEAT_SHOTS_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("taskbeat-live"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let samples: Vec<&[u32]> = frames.iter().step_by(8).map(|v| v.as_slice()).collect();
+        let mut gif = crate::demo_gif::Gif::new(cw as usize, ch as usize, &samples);
+        for f in &frames {
+            gif.frame(f, 2);
+        }
+        let path = dir.join("ao-vivo-configuracoes.gif");
+        std::fs::write(&path, gif.finish()).unwrap();
+        crate::png::save(&dir.join("ao-vivo-configuracoes.png"), cw as usize, ch as usize, &frames[frames.len() / 2]);
+        println!("{} ({} quadros)", path.display(), frames.len());
+    }
+}
