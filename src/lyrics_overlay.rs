@@ -377,6 +377,7 @@ fn hcode(h: Option<LHit>) -> u32 {
         Some(LHit::Lock) => 2,
         Some(LHit::Full) => 3,
         Some(LHit::Close) => 4,
+        Some(LHit::Compact) => 5,
         Some(LHit::Card(h)) => {
             10 + match h {
                 Hit::Shuffle => 1,
@@ -795,7 +796,9 @@ impl St {
 
     fn reload_media_force(&mut self) {
         self.media_version = self.shared.media_version.load(Ordering::Relaxed);
-        let new = self.shared.media.lock().unwrap().clone();
+        let mut new = self.shared.media.lock().unwrap().clone();
+        // Aleatório e repetir que só a extensão do navegador alcança (como no widget).
+        self.shared.web.lock().unwrap().merge_into(&mut new);
         let old = std::mem::replace(&mut self.media, new);
         let track = Track { artist: self.media.artist.clone(), title: self.media.title.clone(), album: self.media.album.clone(), dur: self.media.dur };
         let key = track.key();
@@ -1083,6 +1086,8 @@ impl St {
                     None => what.to_string(),
                 }
             }
+            LHit::Compact if lc.layout == Layout::Compact => tr("Expandir").to_string(),
+            LHit::Compact => tr("Compactar").to_string(),
             LHit::Full => tr("Tela cheia (Esc volta)").to_string(),
             LHit::Close => match working_hotkey(lc.hotkey) {
                 Some(k) => format!("{} · {}", tr("Esconder"), tr("{} mostra de novo").replace("{}", k)),
@@ -1450,13 +1455,13 @@ impl St {
                 if h != self.hover {
                     self.hover = h;
                     // Dica: só nos botões da barrinha, depois de um instante.
-                    self.tip = h.filter(|h| matches!(h, LHit::Lock | LHit::Full | LHit::Close)).map(|h| (h, Instant::now()));
+                    self.tip = h.filter(|h| matches!(h, LHit::Lock | LHit::Compact | LHit::Full | LHit::Close)).map(|h| (h, Instant::now()));
                     if self.tip.is_some() {
                         self.set_timer(T_TIP, (TIP_DELAY * 1000.0) as u32 + 10);
                     }
                 }
                 // Bordas (destravada): fora dos botões da barrinha e da alça dela.
-                self.edge_hover = if self.lc().locked || self.fullscreen || matches!(h, Some(LHit::Lock | LHit::Full | LHit::Close)) || (self.tools > 0.0 && self.geo.toolbar.contains(x, y)) {
+                self.edge_hover = if self.lc().locked || self.fullscreen || matches!(h, Some(LHit::Lock | LHit::Compact | LHit::Full | LHit::Close)) || (self.tools > 0.0 && self.geo.toolbar.contains(x, y)) {
                     0
                 } else {
                     view::resize_edge(&self.geo, self.lc(), x, y, self.scale)
@@ -1465,7 +1470,7 @@ impl St {
                     _ if self.edge_hover != 0 => edge_cursor(self.edge_hover),
                     Some(LHit::Body) if !self.lc().locked && !self.fullscreen => 1,
                     Some(LHit::Card(Hit::Seek)) if !self.media.can_seek => 0,
-                    Some(LHit::Card(_)) | Some(LHit::Lock) | Some(LHit::Full) | Some(LHit::Close) => 2,
+                    Some(LHit::Card(_)) | Some(LHit::Lock) | Some(LHit::Compact) | Some(LHit::Full) | Some(LHit::Close) => 2,
                     _ => 0,
                 };
                 CURSOR.with(|c| c.set(cursor));
@@ -1620,6 +1625,7 @@ impl St {
     fn click(&mut self, h: LHit) {
         match h {
             LHit::Lock => self.shared.update_config(|c| c.lyrics.locked = !c.lyrics.locked),
+            LHit::Compact => self.shared.update_config(|c| c.lyrics.toggle_compact()),
             LHit::Full => self.set_fullscreen(!self.fullscreen),
             LHit::Close => {
                 if self.fullscreen {

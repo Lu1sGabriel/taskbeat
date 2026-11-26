@@ -105,6 +105,8 @@ pub static T: &[[&str; 4]] = &[
     ["Destravar a posição", "Unlock position", "Desbloquear la posición", "Position entsperren"],
     ["Tela cheia (Esc volta)", "Full screen (Esc goes back)", "Pantalla completa (Esc vuelve)", "Vollbild (Esc kehrt zurück)"],
     ["Esconder", "Hide", "Ocultar", "Ausblenden"],
+    ["Compactar", "Compact", "Compactar", "Kompakt"],
+    ["Expandir", "Expand", "Expandir", "Erweitern"],
     ["{} mostra de novo", "{} shows it again", "{} la muestra de nuevo", "{} zeigt es wieder"],
     ["Tamanho {}%", "Size {}%", "Tamaño {}%", "Größe {}%"],
     // ---- card (botão da letra)

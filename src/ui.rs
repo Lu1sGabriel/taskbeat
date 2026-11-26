@@ -368,7 +368,16 @@ enum VIcon {
     Expand,
     Collapse,
     Close,
+    /// Compactar (duas setas que se encontram) e expandir (que se afastam).
+    Fold,
+    Unfold,
 }
+
+/// Glifos (só chaves: sempre em vetor) dos botões compactar e expandir da barrinha.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const G_FOLD: &str = "\u{E92C}";
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const G_UNFOLD: &str = "\u{E92D}";
 
 /// Glifos da barrinha da letra que têm desenho em vetor próprio (fora de
 /// `vicon_of`, para não mudar o cadeado do aviso de Caps Lock).
@@ -380,6 +389,8 @@ fn tool_vicon(g: &str) -> Option<VIcon> {
         "\u{E740}" => Some(VIcon::Expand),
         "\u{E73F}" => Some(VIcon::Collapse),
         "\u{E711}" => Some(VIcon::Close),
+        G_FOLD => Some(VIcon::Fold),
+        G_UNFOLD => Some(VIcon::Unfold),
         _ => vicon_of(g),
     }
 }
@@ -512,6 +523,14 @@ fn vicon_shape(v: VIcon) -> Shape2 {
         VIcon::Close => {
             parts.push(path(vec![(-0.30, -0.30), (0.30, 0.30)], 0.075));
             parts.push(path(vec![(-0.30, 0.30), (0.30, -0.30)], 0.075));
+        }
+        // Uma linha no meio; compactar: as setas apontam para ela; expandir: para fora.
+        VIcon::Fold | VIcon::Unfold => {
+            parts.push(path(vec![(-0.38, 0.0), (0.38, 0.0)], 0.07));
+            let (tip, base) = if v == VIcon::Fold { (0.18, 0.42) } else { (0.44, 0.20) };
+            for sy in [-1.0f32, 1.0] {
+                parts.push(path(vec![(-0.22, sy * base), (0.0, sy * tip), (0.22, sy * base)], 0.07));
+            }
         }
         VIcon::Play => parts.push(tri((-0.29, -0.38), (-0.29, 0.38), (0.39, 0.0), 0.07)),
         VIcon::Pause => {
@@ -1896,6 +1915,9 @@ pub struct CLayout {
     pub times: bool,
     /// Botão que mostra e esconde a letra na tela (ponta direita da linha do volume).
     pub lyrics: Option<RectF>,
+    /// Título e artista centralizados sobre os botões, em vez de encostados
+    /// à esquerda (o player da sobreposição da letra).
+    pub center_text: bool,
 }
 
 impl CLayout {
@@ -2357,11 +2379,27 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let album = (sub != m.artist && !m.artist.is_empty()).then(|| m.album.trim());
         let dy = if album.is_some() { -8.0 * s } else { 0.0 };
         let (t, a) = (title_w(l.title.offset(0.0, dy)), l.artist.offset(0.0, dy));
-        text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
-        draw_bars(cv, l.title.offset(0.0, dy));
-        artist_line(cv, tr, if m.artist.is_empty() { &sub } else { &m.artist }, source_name(cfg, m), Font::Subtitle, a, (th.fg, 0.72));
-        if let Some(album) = album {
-            text(cv, tr, album, Font::Small, a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s, th.fg, 0.52);
+        let artist = if m.artist.is_empty() { &sub } else { &m.artist };
+        let album_r = RectF::new(a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s);
+        if l.center_text {
+            // No meio da coluna, que é o meio do play (sem as mini barras nem o nome do app).
+            text_center(cv, tr, &title, Font::CardTitle, l.title.offset(0.0, dy), th.fg, 1.0);
+            let main = match source_name(cfg, m) {
+                Some(app) if artist.is_empty() => app.to_string(),
+                Some(app) => format!("{artist} · {app}"),
+                None => artist.to_string(),
+            };
+            text_center(cv, tr, &main, Font::Subtitle, a, th.fg, 0.72);
+            if let Some(album) = album {
+                text_center(cv, tr, album, Font::Small, album_r, th.fg, 0.52);
+            }
+        } else {
+            text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
+            draw_bars(cv, l.title.offset(0.0, dy));
+            artist_line(cv, tr, artist, source_name(cfg, m), Font::Subtitle, a, (th.fg, 0.72));
+            if let Some(album) = album {
+                text(cv, tr, album, Font::Small, album_r.x, album_r.y, album_r.w, album_r.h, th.fg, 0.52);
+            }
         }
     }
 

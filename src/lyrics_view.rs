@@ -23,6 +23,8 @@ pub enum LHit {
     /// Um botão do player (card, compacto ou tela cheia).
     Card(Hit),
     Lock,
+    /// Compactar / expandir (troca entre o compacto e o conteúdo de antes).
+    Compact,
     Full,
     Close,
     /// O resto: arrasta a janela (destravada).
@@ -137,6 +139,7 @@ pub struct Geo {
     /// Barrinha (destravada): alça, travar, tela cheia, esconder.
     pub toolbar: RectF,
     pub lock: RectF,
+    pub compact: RectF,
     pub full: RectF,
     pub close: RectF,
     /// Linha atual e as outras.
@@ -367,6 +370,7 @@ pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32
         Layout::Player | Layout::PlayerLyrics => {
             let mut l = CLayout::build(s, card_cfg, true);
             l.times = lc.show_time;
+            l.center_text = true;
             let mut l = l.with_mixer(mixer.map(|m| m.0), mixer.map(|m| m.1).unwrap_or(0.0), mixer.map(|m| m.2).unwrap_or(0.0), 5, s);
             if lc.layout == Layout::PlayerLyrics {
                 let extra = custom(lc.height, pick(lc.size, 150.0, 176.0, 212.0), lh, s);
@@ -389,13 +393,14 @@ pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32
 /// Barrinha centrada na borda de cima do painel (metade para fora, na margem da sombra).
 fn toolbar(g: &mut Geo, s: f32) {
     let (bw, h) = (32.0 * s, 32.0 * s);
-    let w = bw * 4.0 + 6.0 * s;
+    let w = bw * 5.0 + 6.0 * s;
     let y = if g.fullscreen { g.card.y + 20.0 * s } else { (g.card.y - h / 2.0).max(1.0) };
     g.toolbar = RectF::new((g.card.cx() - w / 2.0).round(), y.round(), w, h);
     let x0 = g.toolbar.x + 3.0 * s + bw;
     g.lock = RectF::new(x0, g.toolbar.y, bw, h);
-    g.full = RectF::new(x0 + bw, g.toolbar.y, bw, h);
-    g.close = RectF::new(x0 + 2.0 * bw, g.toolbar.y, bw, h);
+    g.compact = RectF::new(x0 + bw, g.toolbar.y, bw, h);
+    g.full = RectF::new(x0 + 2.0 * bw, g.toolbar.y, bw, h);
+    g.close = RectF::new(x0 + 3.0 * bw, g.toolbar.y, bw, h);
 }
 
 /// Geometria da tela cheia num monitor de `w`×`h` px.
@@ -443,7 +448,7 @@ pub fn hit(g: &Geo, lc: &LyricsConfig, x: f32, y: f32, tools_on: bool) -> Option
         return Some(LHit::Body);
     }
     if tools_on {
-        for (r, h) in [(g.lock, LHit::Lock), (g.full, LHit::Full), (g.close, LHit::Close)] {
+        for (r, h) in tool_buttons(g) {
             if r.contains(x, y) {
                 return Some(h);
             }
@@ -842,7 +847,12 @@ fn lyrics_area_inner(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, v: &View,
     }
 }
 
-/// Barrinha da janela destravada: alça, travar, tela cheia e esconder.
+/// Os botões da barrinha, na ordem: travar, compactar/expandir, tela cheia, esconder.
+fn tool_buttons(g: &Geo) -> [(RectF, LHit); 4] {
+    [(g.lock, LHit::Lock), (g.compact, LHit::Compact), (g.full, LHit::Full), (g.close, LHit::Close)]
+}
+
+/// Barrinha da janela destravada: alça, travar, compactar/expandir, tela cheia e esconder.
 fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
     let (s, a) = (v.s, v.tools);
     if a <= 0.0 {
@@ -873,7 +883,14 @@ fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
         }
     }
     let lock_glyph = if locked { "\u{E72E}" } else { "\u{E785}" };
-    for (r, glyph, h) in [(g.lock, lock_glyph, LHit::Lock), (g.full, "\u{E740}", LHit::Full), (g.close, "\u{E711}", LHit::Close)] {
+    let fold_glyph = if v.lc.layout == Layout::Compact { ui::G_UNFOLD } else { ui::G_FOLD };
+    for (r, h) in tool_buttons(g) {
+        let glyph = match h {
+            LHit::Lock => lock_glyph,
+            LHit::Compact => fold_glyph,
+            LHit::Full => "\u{E740}",
+            _ => "\u{E711}",
+        };
         let r = map(r);
         if v.hover == Some(h) {
             cv.fill_round(r.inset(2.5 * s * k), 11.0 * s * k, [0.27, 0.27, 0.29], 1.0);
@@ -882,7 +899,7 @@ fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
         ui::solid_glyph(cv, tr, r, glyph, Font::IconMd, [1.0; 3], 1.0, s * k);
     }
     // Dica do botão sob o mouse, logo abaixo da barrinha.
-    if let (Some((msg, ta)), Some(b)) = (v.tip, [(g.lock, LHit::Lock), (g.full, LHit::Full), (g.close, LHit::Close)].iter().find(|(_, h)| v.hover == Some(*h)).map(|(r, _)| *r)) {
+    if let (Some((msg, ta)), Some(b)) = (v.tip, tool_buttons(g).iter().find(|(_, h)| v.hover == Some(*h)).map(|(r, _)| *r)) {
         let ta = ta * a;
         let h = 26.0 * s;
         let cw = cv.w as f32;
@@ -1384,6 +1401,7 @@ mod tests {
             ("player", Layout::Player, Background::Artwork, 3.0, 0.0, false),
             ("player-lyrics", Layout::PlayerLyrics, Background::Artwork, 4.0, 0.0, false),
             ("compact", Layout::Compact, Background::Artwork, 3.0, 0.0, false),
+            ("compact-tools", Layout::Compact, Background::Artwork, 3.0, 1.0, false),
             ("compact-album", Layout::Compact, Background::AlbumColor, 0.0, 0.0, false),
             ("caption", Layout::Caption, Background::Dark, 3.0, 0.0, false),
             ("caption-anim", Layout::Caption, Background::Dark, 3.5, 0.0, false),

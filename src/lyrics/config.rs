@@ -133,6 +133,11 @@ pub struct LyricsConfig {
     pub hide_idle: bool,
     /// Botão no card aberto (Windows) que mostra e esconde a sobreposição.
     pub card_button: bool,
+    /// O outro lado do botão "Compactar / Expandir" da barrinha: o conteúdo
+    /// para onde ele volta e o tamanho que estava lá (`width` e `height`).
+    pub alt_layout: Layout,
+    pub alt_width: i32,
+    pub alt_height: i32,
 }
 
 /// Limites do tamanho da janela (%).
@@ -167,6 +172,9 @@ impl Default for LyricsConfig {
             hide_fullscreen: false,
             hide_idle: true,
             card_button: true,
+            alt_layout: Layout::PlayerLyrics,
+            alt_width: 0,
+            alt_height: 0,
         }
     }
 }
@@ -181,6 +189,23 @@ impl LyricsConfig {
         self.zoom = self.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
         self.width = self.width.clamp(0, 4000);
         self.height = self.height.clamp(0, 4000);
+        self.alt_width = self.alt_width.clamp(0, 4000);
+        self.alt_height = self.alt_height.clamp(0, 4000);
+    }
+
+    /// Botão "Compactar / Expandir" da barrinha: do compacto volta ao
+    /// conteúdo de antes (de começo, "Player e letra"); de qualquer outro vai
+    /// ao compacto. Cada lado guarda o tamanho que tinha (o arrastado nas bordas).
+    pub fn toggle_compact(&mut self) {
+        let target = match self.layout {
+            Layout::Compact if self.alt_layout == Layout::Compact => Layout::PlayerLyrics,
+            Layout::Compact => self.alt_layout,
+            _ => Layout::Compact,
+        };
+        let size = if self.alt_layout == target { (self.alt_width, self.alt_height) } else { (0, 0) };
+        (self.alt_layout, self.alt_width, self.alt_height) = (self.layout, self.width, self.height);
+        self.layout = target;
+        (self.width, self.height) = size;
     }
 
     /// Letra centralizada?
@@ -195,6 +220,33 @@ impl LyricsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compactar e expandir pela barrinha: volta ao conteúdo de antes, cada
+    /// um com o seu tamanho; sem conteúdo de antes, expande para "Player e letra".
+    #[test]
+    fn compactar_e_expandir() {
+        let mut l = LyricsConfig { layout: Layout::PlayerLyrics, height: 300, ..Default::default() };
+        l.toggle_compact();
+        assert_eq!((l.layout, l.width, l.height), (Layout::Compact, 0, 0));
+        (l.width, l.height) = (400, 260);
+        l.toggle_compact();
+        assert_eq!((l.layout, l.width, l.height), (Layout::PlayerLyrics, 0, 300));
+        l.toggle_compact();
+        assert_eq!((l.layout, l.width, l.height), (Layout::Compact, 400, 260));
+        // Só a letra -> compacto -> só a letra.
+        let mut l = LyricsConfig { layout: Layout::Lyrics, width: 500, ..Default::default() };
+        l.toggle_compact();
+        l.toggle_compact();
+        assert_eq!((l.layout, l.width), (Layout::Lyrics, 500));
+        // Começando no compacto (o padrão): expande para "Player e letra".
+        let mut l = LyricsConfig::default();
+        assert_eq!(l.layout, Layout::Compact);
+        l.toggle_compact();
+        assert_eq!(l.layout, Layout::PlayerLyrics);
+        // Config antiga sem os campos novos: os padrões.
+        let old: LyricsConfig = toml::from_str("layout = \"player\"").unwrap();
+        assert_eq!(old.alt_layout, Layout::PlayerLyrics);
+    }
 
     #[test]
     fn config_sem_lyrics_e_ida_e_volta() {
