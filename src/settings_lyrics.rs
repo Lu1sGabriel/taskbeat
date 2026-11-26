@@ -19,6 +19,7 @@ pub(super) enum LK {
     Place,
     Monitor,
     Zoom,
+    ResetSize,
     Locked,
     ClickThrough,
     Shortcut,
@@ -93,6 +94,7 @@ pub(super) const PAGE: Page = Page {
         Row { icon: "\u{E7C4}", title: "Onde fica", desc: "Também arrastando a janela: perto de um dos lugares prontos ela gruda nele", key: Key::Lyrics(Place), kind: Kind::Choice(POSITIONS) },
         Row { icon: "\u{E7F4}", title: "Monitor", desc: "Em qual monitor a janela fica (arrastá-la para outro também muda)", key: Key::Lyrics(Monitor), kind: Kind::Choice(MONITORS) },
         Row { icon: "\u{E740}", title: "Tamanho da janela", desc: "Também com Ctrl + roda do mouse em cima dela", key: Key::Lyrics(Zoom), kind: Kind::Slider { min: ZOOM_MIN, max: ZOOM_MAX, step: 10, unit: "%" } },
+        Row { icon: "\u{E744}", title: "Largura e altura", desc: "Destravada, arraste as bordas ou os cantos da janela; aqui volta ao tamanho do conteúdo", key: Key::Lyrics(ResetSize), kind: Kind::Button("Restaurar") },
         Row { icon: "\u{E72E}", title: "Travar a posição", desc: "Não arrasta mais; os botões continuam funcionando", key: Key::Lyrics(Locked), kind: Kind::Toggle },
         Row { icon: "\u{E7FC}", title: "Travada, o clique passa direto", desc: "Para jogos: a janela não pega o mouse e o clique vai para o que está atrás; destrave pelo atalho ou pelo menu da bandeja", key: Key::Lyrics(ClickThrough), kind: Kind::Toggle },
         Section("Aparência"),
@@ -101,7 +103,7 @@ pub(super) const PAGE: Page = Page {
         Row { icon: "\u{E8E9}", title: "Tamanho da letra", desc: "A linha atual e as outras", key: Key::Lyrics(TextSize), kind: Kind::Segmented(SIZES) },
         Row { icon: "\u{E8E4}", title: "Alinhamento", desc: "Automático: no meio só com a letra e na legenda; à esquerda com o player", key: Key::Lyrics(TextAlign), kind: Kind::Segmented(ALIGNS) },
         Row { icon: "\u{E916}", title: "Mostrar o tempo", desc: "Decorrido e restante embaixo da barra de progresso (a barra sempre dá para clicar e arrastar)", key: Key::Lyrics(ShowTime), kind: Kind::Toggle },
-        Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e mudo no player", key: Key::Lyrics(Volume), kind: Kind::Toggle },
+        Row { icon: "\u{E767}", title: "Volume", desc: "Slider de volume e mudo no compacto e no player; a roda do mouse em cima do player também muda o volume", key: Key::Lyrics(Volume), kind: Kind::Toggle },
         Row { icon: "\u{E9F5}", title: "Mixer de volume", desc: "Setinha embaixo do player que abre o volume de cada app", key: Key::Lyrics(Mixer), kind: Kind::Toggle },
         Row { icon: "\u{E9A9}", title: "Fundo animado na tela cheia", desc: "As cores da capa girando devagar enquanto a música toca; pausada, fica parado", key: Key::Lyrics(AnimatedBg), kind: Kind::Toggle },
         Section("Quando aparece"),
@@ -140,7 +142,7 @@ pub(super) fn get(c: &Config, k: LK) -> i32 {
         HideFullscreen => l.hide_fullscreen as i32,
         Online => l.online as i32,
         Offset => l.offset_ms,
-        Fullscreen | Folder | ClearCache | Privacy => 0,
+        Fullscreen | ResetSize | Folder | ClearCache | Privacy => 0,
     }
 }
 
@@ -152,7 +154,14 @@ pub(super) fn set(c: &mut Config, k: LK, v: i32) {
     match k {
         Show => l.show = v != 0,
         CardButton => l.card_button = v != 0,
-        Content => l.layout = pick(LAYOUT_V, v),
+        Content => {
+            // Outro conteúdo, outro tamanho: a largura e a altura escolhidas voltam ao automático.
+            let new = pick(LAYOUT_V, v);
+            if new != l.layout {
+                (l.width, l.height) = (0, 0);
+            }
+            l.layout = new;
+        }
         Place => l.position = pick(POSITION_V, v),
         Monitor => l.monitor = v.clamp(0, MONITORS.len() as i32 - 1),
         Zoom => l.zoom = v.clamp(ZOOM_MIN, ZOOM_MAX),
@@ -171,7 +180,7 @@ pub(super) fn set(c: &mut Config, k: LK, v: i32) {
         HideFullscreen => l.hide_fullscreen = v != 0,
         Online => l.online = v != 0,
         Offset => l.offset_ms = v.clamp(-5000, 5000),
-        Fullscreen | Folder | ClearCache | Privacy => {}
+        Fullscreen | ResetSize | Folder | ClearCache | Privacy => {}
     }
 }
 
@@ -182,7 +191,9 @@ pub(super) fn requirement(c: &Config, k: LK) -> Option<&'static str> {
     match k {
         ClickThrough if !l.locked => Some("Ligue \"Travar a posição\" para usar esta opção"),
         Opacity if l.background == Background::None => Some("Sem fundo não há o que deixar transparente"),
-        Volume | Mixer if !player => Some("Só nos conteúdos com o player (\"Player e letra\" ou \"Só o player\")"),
+        Volume if !player && l.layout != Layout::Compact => Some("Só no compacto e nos conteúdos com o player"),
+        Mixer if !player => Some("Só nos conteúdos com o player (\"Player e letra\" ou \"Só o player\")"),
+        ResetSize if l.width == 0 && l.height == 0 => Some("Já está no tamanho do conteúdo"),
         TextAlign if l.layout == Layout::Player => Some("\"Só o player\" não mostra a letra"),
         _ => None,
     }
@@ -197,6 +208,7 @@ pub(super) fn signed(k: LK) -> bool {
 pub(super) fn press(shared: &Arc<Shared>, k: LK) {
     match k {
         Fullscreen => crate::lyrics_overlay::open_fullscreen(),
+        ResetSize => shared.update_config(|c| (c.lyrics.width, c.lyrics.height) = (0, 0)),
         Folder => {
             if let Some(dir) = crate::lyrics::cache::user_dir() {
                 let _ = std::fs::create_dir_all(&dir);

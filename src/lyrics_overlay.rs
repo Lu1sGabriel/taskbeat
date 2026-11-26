@@ -257,6 +257,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let id = match CURSOR.with(|c| c.get()) {
                     1 => IDC_SIZEALL,
                     2 => IDC_HAND,
+                    3 => IDC_SIZEWE,
+                    4 => IDC_SIZENS,
+                    5 => IDC_SIZENWSE,
+                    6 => IDC_SIZENESW,
                     _ => IDC_ARROW,
                 };
                 if let Ok(c) = LoadCursorW(None, id) {
@@ -405,6 +409,29 @@ struct Drag {
     mon: usize,
 }
 
+/// Arrasto de uma borda (muda a largura e/ou a altura).
+#[derive(Clone, Copy, Debug)]
+struct Resize {
+    /// Bordas presas ao mouse (`view::EDGE_*`); as opostas ficam paradas.
+    edge: u8,
+    cursor0: POINT,
+    /// O painel na tela quando começou (px).
+    card0: RectF,
+    moved: bool,
+}
+
+/// Cursor de cada borda (códigos do `CURSOR`).
+fn edge_cursor(e: u8) -> u8 {
+    let (l, r, t, b) = (e & view::EDGE_L != 0, e & view::EDGE_R != 0, e & view::EDGE_T != 0, e & view::EDGE_B != 0);
+    match (l || r, t || b) {
+        (true, true) if (l && t) || (r && b) => 5,
+        (true, true) => 6,
+        (true, false) => 3,
+        (false, true) => 4,
+        _ => 0,
+    }
+}
+
 /// Guias do arrasto (os nove lugares tracejados no monitor).
 struct Guides {
     hwnd: HWND,
@@ -484,6 +511,9 @@ struct St {
     hover: Option<LHit>,
     pressed: Option<LHit>,
     drag: Option<Drag>,
+    /// Arrastando uma borda, e a borda sob o mouse agora (`view::EDGE_*`).
+    resize: Option<Resize>,
+    edge_hover: u8,
     seek: Option<f32>,
     seek_sent: Option<(f64, Instant)>,
     play_override: Option<(bool, Instant)>,
@@ -586,6 +616,8 @@ fn run(shared: Arc<Shared>) {
         hover: None,
         pressed: None,
         drag: None,
+        resize: None,
+        edge_hover: 0,
         seek: None,
         seek_sent: None,
         play_override: None,
@@ -635,6 +667,11 @@ fn finish() {
 impl St {
     fn lc(&self) -> &LyricsConfig {
         &self.cfg.lyrics
+    }
+
+    /// Volume na janela (compacto ou player, com a opção ligada).
+    fn has_volume(&self) -> bool {
+        !self.fullscreen && self.lc().volume && matches!(self.lc().layout, Layout::Compact | Layout::Player | Layout::PlayerLyrics)
     }
 
     fn has_player(&self) -> bool {
@@ -1362,7 +1399,7 @@ impl St {
     }
 
     fn vol_frac(&self, x: f32) -> Option<f32> {
-        let (x0, x1) = self.geo.cl.as_ref()?.vol_track(self.scale)?;
+        let (x0, x1) = view::vol_track(&self.geo, self.scale)?;
         Some(((x - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0))
     }
 
@@ -1377,6 +1414,10 @@ impl St {
         }
         match ev {
             Ev::Move(x, y) => {
+                if let Some(r) = self.resize {
+                    self.resize_to(r);
+                    return;
+                }
                 if let Some(d) = self.drag {
                     self.drag_to(d);
                     return;
@@ -1408,7 +1449,14 @@ impl St {
                         self.set_timer(T_TIP, (TIP_DELAY * 1000.0) as u32 + 10);
                     }
                 }
+                // Bordas (destravada): fora dos botões da barrinha e da alça dela.
+                self.edge_hover = if self.lc().locked || self.fullscreen || matches!(h, Some(LHit::Lock | LHit::Full | LHit::Close)) || (self.tools > 0.0 && self.geo.toolbar.contains(x, y)) {
+                    0
+                } else {
+                    view::resize_edge(&self.geo, self.lc(), x, y, self.scale)
+                };
                 let cursor = match h {
+                    _ if self.edge_hover != 0 => edge_cursor(self.edge_hover),
                     Some(LHit::Body) if !self.lc().locked && !self.fullscreen => 1,
                     Some(LHit::Card(Hit::Seek)) if !self.media.can_seek => 0,
                     Some(LHit::Card(_)) | Some(LHit::Lock) | Some(LHit::Full) | Some(LHit::Close) => 2,
@@ -1417,13 +1465,21 @@ impl St {
                 CURSOR.with(|c| c.set(cursor));
             }
             Ev::Leave => {
-                if self.drag.is_none() && self.seek.is_none() && !self.vol_drag && self.mix_drag.is_none() {
+                if self.drag.is_none() && self.resize.is_none() && self.seek.is_none() && !self.vol_drag && self.mix_drag.is_none() {
+                    self.edge_hover = 0;
                     self.hover = None;
                     self.pressed = None;
                     self.tip = None;
                 }
             }
             Ev::Down(x, y) => {
+                if self.edge_hover != 0 && !self.lc().locked && !self.fullscreen {
+                    let c = self.geo.card;
+                    let card0 = RectF::new(self.pos.0 as f32 + c.x, self.pos.1 as f32 + c.y, c.w, c.h);
+                    self.resize = Some(Resize { edge: self.edge_hover, cursor0: cursor_pos(), card0, moved: false });
+                    self.pressed = None;
+                    return;
+                }
                 let h = self.hit_at(x, y);
                 self.pressed = h;
                 match h {
@@ -1451,6 +1507,10 @@ impl St {
                 self.last_sig = None;
             }
             Ev::Up(x, y) => {
+                if self.resize.is_some() {
+                    self.finish_resize();
+                    return;
+                }
                 if let Some(d) = self.drag.take() {
                     self.hide_guides();
                     if d.moved {
@@ -1482,6 +1542,7 @@ impl St {
                 self.pressed = None;
             }
             Ev::CaptureLost => {
+                self.finish_resize();
                 if let Some(d) = self.drag.take() {
                     self.hide_guides();
                     if d.moved {
@@ -1534,6 +1595,13 @@ impl St {
                 }
                 return;
             }
+        }
+        // Compacto: a roda em cima do mini player (fora da letra) muda o volume.
+        if self.has_volume() && self.lc().layout == Layout::Compact && self.geo.card.contains(mouse.0, mouse.1) && !self.geo.lyr.contains(mouse.0, mouse.1) {
+            if let Some(v) = self.volume.as_mut() {
+                v.step(notches * 0.04);
+            }
+            return;
         }
         if let (Lyrics::Plain(lines), Some(tr)) = (&self.lyrics, self.tr.as_mut()) {
             let s = self.scale;
@@ -1598,6 +1666,72 @@ impl St {
             LHit::Card(Hit::MixDevice) => self.pick_output(),
             _ => {}
         }
+        self.last_sig = None;
+    }
+
+    // ------------------------------------------------------------ tamanho pelas bordas
+
+    /// Arrastando uma borda: o tamanho novo vale na hora (só aqui, sem gravar);
+    /// as bordas opostas ficam paradas na tela.
+    fn resize_to(&mut self, mut r: Resize) {
+        let c = cursor_pos();
+        let (dx, dy) = ((c.x - r.cursor0.x) as f32, (c.y - r.cursor0.y) as f32);
+        if !r.moved && dx.abs() < 2.0 && dy.abs() < 2.0 {
+            return;
+        }
+        r.moved = true;
+        let mut w = r.card0.w;
+        let mut h = r.card0.h;
+        if r.edge & view::EDGE_R != 0 {
+            w += dx;
+        }
+        if r.edge & view::EDGE_L != 0 {
+            w -= dx;
+        }
+        if r.edge & view::EDGE_B != 0 {
+            h += dy;
+        }
+        if r.edge & view::EDGE_T != 0 {
+            h -= dy;
+        }
+        // Nunca maior que a área de trabalho do monitor.
+        if let Some(m) = self.mon {
+            w = w.min((m.work.right - m.work.left) as f32);
+            h = h.min((m.work.bottom - m.work.top) as f32);
+        }
+        let (width, height) = view::size_for(&self.geo, &self.cfg.lyrics, w, h, self.scale);
+        self.cfg.lyrics.width = width;
+        self.cfg.lyrics.height = height;
+        self.resize = Some(r);
+        self.last_sig = None;
+    }
+
+    /// Soltou a borda: grava o tamanho. O lugar pronto continua se o painel
+    /// ainda está nele; senão a janela fica onde está ("Livre").
+    fn finish_resize(&mut self) {
+        let Some(r) = self.resize.take() else { return };
+        self.pressed = None;
+        if !r.moved {
+            return;
+        }
+        let (width, height) = (self.cfg.lyrics.width, self.cfg.lyrics.height);
+        let c = self.geo.card;
+        let card = RectF::new(self.pos.0 as f32 + c.x, self.pos.1 as f32 + c.y, c.w, c.h);
+        let (_, mon) = self.monitor();
+        let work = mon.work;
+        let (ww, wh) = ((work.right - work.left) as f32, (work.bottom - work.top) as f32);
+        let keep = self.grid_spot(&mon, self.lc().position, card.w, card.h).is_some_and(|(x, y)| (x - card.x).abs() < 3.0 && (y - card.y).abs() < 3.0);
+        let free = (!keep).then(|| (((card.cx() - work.left as f32) / ww).clamp(0.0, 1.0), ((card.cy() - work.top as f32) / wh).clamp(0.0, 1.0)));
+        log::info(&format!("letra: tamanho {width}x{height} (lugar {})", if keep { "pronto" } else { "livre" }));
+        self.shared.update_config(|c| {
+            c.lyrics.width = width;
+            c.lyrics.height = height;
+            if let Some((fx, fy)) = free {
+                c.lyrics.position = Position::Free;
+                c.lyrics.free_x = fx;
+                c.lyrics.free_y = fy;
+            }
+        });
         self.last_sig = None;
     }
 
@@ -1744,7 +1878,7 @@ impl St {
             self.change = None;
         }
         let lyr_alpha = self.lyr_at.map(|t| (t.elapsed().as_secs_f32() / LYRIC_FADE).min(1.0)).unwrap_or(1.0);
-        if self.has_player() && self.lc().volume {
+        if self.has_volume() {
             self.volume.get_or_insert_with(Volume::new).poll();
         }
         let pb = self.playback();
@@ -1814,7 +1948,16 @@ impl St {
             let caption = if self.cfg.lyrics.layout == Layout::Caption { view::caption_content(&mut tr, &frame, &self.cfg.lyrics, s) } else { (0.0, 0.0) };
             view::geometry(&self.cfg.lyrics, &self.card_cfg, s, caption, mix_geo)
         };
-        let pos = if self.drag.is_some_and(|d| d.moved) { self.pos } else { self.place(&geo, &mon) };
+        let pos = if self.drag.is_some_and(|d| d.moved) {
+            self.pos
+        } else if let Some(r) = self.resize.filter(|r| r.moved) {
+            // As bordas que não estão sendo arrastadas ficam onde estavam.
+            let x = if r.edge & view::EDGE_L != 0 { r.card0.right() - geo.card.w } else { r.card0.x };
+            let y = if r.edge & view::EDGE_T != 0 { r.card0.bottom() - geo.card.h } else { r.card0.y };
+            ((x - geo.card.x).round() as i32, (y - geo.card.y).round() as i32)
+        } else {
+            self.place(&geo, &mon)
+        };
         let (w, h) = (geo.w as i32, geo.h as i32);
         let tip_text = self.tip.map(|(h, _)| self.tip_text(h)).filter(|_| tip_a > 0.0);
         let toast_text = self.toast.as_ref().map(|(m, _)| m.clone());
@@ -1867,7 +2010,7 @@ impl St {
             view::draw(&mut cv, &mut tr, &geo, &v);
         }
         surface.present_at(self.hwnd, pos.0, pos.1 as f32, 1.0);
-        if pos != self.pos || self.geo.w != geo.w || self.geo.h != geo.h {
+        if self.resize.is_none() && (pos != self.pos || self.geo.w != geo.w || self.geo.h != geo.h) {
             log::info(&format!("letra: janela em {pos:?}, {w}x{h}, escala {s}"));
         }
         self.tr = Some(tr);

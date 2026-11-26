@@ -131,6 +131,9 @@ pub struct Geo {
     pub next: RectF,
     pub repeat: RectF,
     pub bar: RectF,
+    /// Compacto com o volume ligado: botão de mudo e slider (vazios sem ele).
+    pub vol_btn: RectF,
+    pub vol: RectF,
     /// Barrinha (destravada): alça, travar, tela cheia, esconder.
     pub toolbar: RectF,
     pub lock: RectF,
@@ -218,6 +221,96 @@ fn caption_texts<'a>(f: &'a LyricFrame, i: usize) -> (String, &'a str) {
     (cur, next)
 }
 
+// ---------------------------------------------------------------- tamanho livre
+
+/// Bordas do painel que dá para arrastar (bits).
+pub const EDGE_L: u8 = 1;
+pub const EDGE_R: u8 = 2;
+pub const EDGE_T: u8 = 4;
+pub const EDGE_B: u8 = 8;
+
+/// Linha do volume do compacto (px lógicos).
+const COMPACT_VOL: f32 = 24.0;
+
+/// Que medidas o layout deixa mudar arrastando: (largura, altura). O player
+/// tem o tamanho do card e a legenda acompanha o texto.
+pub fn resizable(layout: Layout) -> (bool, bool) {
+    match layout {
+        Layout::Compact | Layout::Lyrics => (true, true),
+        Layout::PlayerLyrics => (false, true),
+        Layout::Player | Layout::Caption => (false, false),
+    }
+}
+
+/// Limites (px lógicos) de `width` e `height` no layout.
+fn size_limits(lc: &LyricsConfig) -> ((f32, f32), (f32, f32)) {
+    match lc.layout {
+        Layout::Lyrics => ((220.0, 1600.0), (80.0, 1200.0)),
+        Layout::Compact => {
+            // Cabeçalho, progresso, tempo e volume, e um pouco de letra.
+            let min_h = 74.0 + if lc.show_time { 14.0 } else { 0.0 } + if lc.volume { COMPACT_VOL } else { 0.0 } + 40.0;
+            ((280.0, 1600.0), (min_h, 1200.0))
+        }
+        Layout::PlayerLyrics => ((0.0, 0.0), (60.0, 1000.0)),
+        _ => ((0.0, 0.0), (0.0, 0.0)),
+    }
+}
+
+/// Medida escolhida (`v` px lógicos, 0 = automática `auto`) já nos limites, em px.
+fn custom(v: i32, auto: f32, (lo, hi): (f32, f32), s: f32) -> f32 {
+    if v > 0 { (v as f32).clamp(lo, hi) * s } else { auto * s }
+}
+
+/// Borda (bits `EDGE_*`) sob (x, y): uma faixa fina por dentro e por fora da
+/// borda do painel, nas medidas que o layout deixa mudar.
+pub fn resize_edge(g: &Geo, lc: &LyricsConfig, x: f32, y: f32, s: f32) -> u8 {
+    let (rw, rh) = resizable(lc.layout);
+    if g.fullscreen || !(rw || rh) {
+        return 0;
+    }
+    let (inside, outside) = (6.0 * s, 4.0 * s);
+    let c = g.card;
+    if x < c.x - outside || x > c.right() + outside || y < c.y - outside || y > c.bottom() + outside {
+        return 0;
+    }
+    // Perto da borda `edge`: até `inside` para dentro (`inward` diz que lado é dentro) e `outside` para fora.
+    let near = |p: f32, edge: f32, inward: f32| (p - edge) * inward <= inside && (edge - p) * inward <= outside;
+    let mut e = 0;
+    if rw {
+        if near(x, c.x, 1.0) {
+            e |= EDGE_L;
+        } else if near(x, c.right(), -1.0) {
+            e |= EDGE_R;
+        }
+    }
+    if rh {
+        if near(y, c.y, 1.0) {
+            e |= EDGE_T;
+        } else if near(y, c.bottom(), -1.0) {
+            e |= EDGE_B;
+        }
+    }
+    e
+}
+
+/// `width` e `height` (px lógicos) para o painel ficar com `w`×`h` px,
+/// já nos limites do layout (`g`: a geometria de agora).
+pub fn size_for(g: &Geo, lc: &LyricsConfig, w: f32, h: f32, s: f32) -> (i32, i32) {
+    let ((w0, w1), (h0, h1)) = size_limits(lc);
+    let (rw, rh) = resizable(lc.layout);
+    let width = if rw { (w / s).clamp(w0, w1).round() as i32 } else { lc.width };
+    let height = match lc.layout {
+        // A altura é a da área da letra: o resto do card fica igual.
+        Layout::PlayerLyrics => {
+            let extra_now = g.lyr.h + 14.0 * s;
+            ((h - (g.card.h - extra_now)) / s).clamp(h0, h1).round() as i32
+        }
+        _ if rh => (h / s).clamp(h0, h1).round() as i32,
+        _ => lc.height,
+    };
+    (width, height)
+}
+
 /// Mixer aberto na geometria: (apps, quanto abriu 0..1, rolagem px lógicos).
 pub type MixerGeo = Option<(usize, f32, f32)>;
 
@@ -228,9 +321,10 @@ pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32
     let radius = card_cfg.corners.radius() * s;
     let (big, dim) = fonts(lc.layout, lc.size);
     let mut g = Geo { radius, big, dim, ..Default::default() };
+    let (lw, lh) = size_limits(lc);
     match lc.layout {
         Layout::Lyrics => {
-            let (w, h) = (pick(lc.size, 380.0, 440.0, 540.0) * s, pick(lc.size, 164.0, 196.0, 240.0) * s);
+            let (w, h) = (custom(lc.width, pick(lc.size, 380.0, 440.0, 540.0), lw, s), custom(lc.height, pick(lc.size, 164.0, 196.0, 240.0), lh, s));
             g.card = RectF::new(m, m, w, h);
             g.lyr = g.card.inset(16.0 * s);
         }
@@ -242,9 +336,10 @@ pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32
             g.lyr = RectF::new(g.card.x + 24.0 * s, g.card.y + 13.0 * s, w - 48.0 * s, h - 26.0 * s);
         }
         Layout::Compact => {
-            let w = pick(lc.size, 320.0, 360.0, 420.0) * s;
             let time = if lc.show_time { 14.0 * s } else { 0.0 };
-            let h = pick(lc.size, 180.0, 200.0, 236.0) * s + time;
+            let vol = if lc.volume { COMPACT_VOL * s } else { 0.0 };
+            let w = custom(lc.width, pick(lc.size, 320.0, 360.0, 420.0), lw, s);
+            let h = custom(lc.height, pick(lc.size, 180.0, 200.0, 236.0) + (time + vol) / s, lh, s);
             g.card = RectF::new(m, m, w, h);
             let pad = 12.0 * s;
             g.art = RectF::new(g.card.x + pad, g.card.y + pad, 44.0 * s, 44.0 * s);
@@ -258,7 +353,15 @@ pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32
             g.title = RectF::new(tx, g.art.y + 3.0 * s, (bx - 6.0 * s - tx).max(0.0), 20.0 * s);
             g.artist = RectF::new(tx, g.art.y + 22.0 * s, g.title.w, 18.0 * s);
             g.bar = RectF::new(g.card.x + pad, g.art.bottom() + 9.0 * s, w - 2.0 * pad, 3.0 * s);
-            let top = g.bar.bottom() + 6.0 * s + time;
+            let mut top = g.bar.bottom() + 6.0 * s + time;
+            // Volume: mudo à esquerda (alinhado à capa) e o slider até a borda do progresso.
+            if lc.volume {
+                let vy = top - 2.0 * s;
+                g.vol_btn = RectF::new(g.card.x + pad - 6.0 * s, vy, 26.0 * s, vol);
+                let vx = g.card.x + pad + 24.0 * s;
+                g.vol = RectF::new(vx, vy, g.card.right() - pad - vx, vol);
+                top = vy + vol + 2.0 * s;
+            }
             g.lyr = RectF::new(g.card.x + pad + 2.0 * s, top, w - 2.0 * pad - 4.0 * s, g.card.bottom() - top - 8.0 * s);
         }
         Layout::Player | Layout::PlayerLyrics => {
@@ -266,7 +369,7 @@ pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32
             l.times = lc.show_time;
             let mut l = l.with_mixer(mixer.map(|m| m.0), mixer.map(|m| m.1).unwrap_or(0.0), mixer.map(|m| m.2).unwrap_or(0.0), 5, s);
             if lc.layout == Layout::PlayerLyrics {
-                let extra = pick(lc.size, 150.0, 176.0, 212.0) * s;
+                let extra = custom(lc.height, pick(lc.size, 150.0, 176.0, 212.0), lh, s);
                 let top = l.card.bottom() - 4.0 * s;
                 l.card.h += extra;
                 l.h += extra;
@@ -360,7 +463,7 @@ pub fn hit(g: &Geo, lc: &LyricsConfig, x: f32, y: f32, tools_on: bool) -> Option
         };
     }
     if lc.layout == Layout::Compact {
-        for (r, h) in [(g.prev, Hit::Prev), (g.play, Hit::Play), (g.next, Hit::Next)] {
+        for (r, h) in [(g.prev, Hit::Prev), (g.play, Hit::Play), (g.next, Hit::Next), (g.vol_btn, Hit::VolBtn), (g.vol, Hit::Vol)] {
             if r.contains(x, y) {
                 return Some(LHit::Card(h));
             }
@@ -374,7 +477,14 @@ pub fn hit(g: &Geo, lc: &LyricsConfig, x: f32, y: f32, tools_on: bool) -> Option
     g.card.contains(x, y).then_some(LHit::Body)
 }
 
-/// Faixa do progresso clicável da tela cheia (x0, x1).
+/// Trilho do volume (x0, x1): o do card ou o do compacto.
+pub fn vol_track(g: &Geo, s: f32) -> Option<(f32, f32)> {
+    match &g.cl {
+        Some(l) if !g.fullscreen => l.vol_track(s),
+        _ => (g.vol.w > 0.0).then_some((g.vol.x + 4.0 * s, g.vol.right() - 1.0 * s)),
+    }
+}
+
 /// Trilho do progresso (x0, x1) onde clicar/arrastar muda o tempo.
 pub fn seek_track(g: &Geo, s: f32) -> Option<(f32, f32)> {
     match &g.cl {
@@ -739,6 +849,12 @@ fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
     let t = RectF::new(t0.cx() - t0.w * k / 2.0, t0.cy() - t0.h * k / 2.0, t0.w * k, t0.h * k);
     let rad = t.h / 2.0;
     let locked = v.lc.locked;
+    // Borda na cor de destaque: destravada, a janela pode ser arrastada. Antes
+    // da barrinha, para não passar por cima dela.
+    if !g.fullscreen && !locked {
+        let th = theme(v.card_cfg, v.lc, v.colors, v.media);
+        cv.stroke_round(g.card.inset(-s), g.radius + s, 1.5 * s, th.accent, 0.85 * a);
+    }
     cv.drop_shadow(t, rad, 10.0 * s, 2.0 * s, 0.45);
     cv.fill_round(t, rad, [0.125, 0.125, 0.135], 1.0);
     cv.stroke_round(t, rad, s, [0.27, 0.27, 0.29], 1.0);
@@ -757,12 +873,8 @@ fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
         if v.hover == Some(h) {
             cv.fill_round(r.inset(2.5 * s * k), 11.0 * s * k, [0.27, 0.27, 0.29], 1.0);
         }
-        ui::glyph(cv, tr, r, glyph, Font::IconMd, [1.0; 3], 1.0);
-    }
-    // Borda na cor de destaque: destravada, a janela pode ser arrastada.
-    if !g.fullscreen && !locked {
-        let th = theme(v.card_cfg, v.lc, v.colors, v.media);
-        cv.stroke_round(g.card.inset(-s), g.radius + s, 1.5 * s, th.accent, 0.85 * a);
+        // Ícones cheios, de traço grosso e opacos (os glifos de contorno ficavam ralos).
+        ui::solid_glyph(cv, tr, r, glyph, Font::IconMd, [1.0; 3], 1.0, s * k);
     }
     // Dica do botão sob o mouse, logo abaixo da barrinha.
     if let (Some((msg, ta)), Some(b)) = (v.tip, [(g.lock, LHit::Lock), (g.full, LHit::Full), (g.close, LHit::Close)].iter().find(|(_, h)| v.hover == Some(*h)).map(|(r, _)| *r)) {
@@ -859,6 +971,29 @@ fn compact_header(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View, th:
         let pos = t as f64 * m.dur;
         ui::text(cv, tr, &ui::fmt_time(pos), Font::Small, b.x, b.bottom() + 3.0 * s, 60.0 * s, 14.0 * s, th.fg, 0.6);
         ui::text_right(cv, tr, &format!("-{}", ui::fmt_time((m.dur - pos).max(0.0))), Font::Small, b.right(), b.bottom() + 3.0 * s, 14.0 * s, th.fg, 0.6, s);
+    }
+    // Volume: o mudo e o slider, fino como o progresso (a bolinha com o mouse em cima).
+    if g.vol.w > 0.0 {
+        let lv = v.pb.volume;
+        let gl = if v.pb.muted || lv <= 0.0 {
+            G_MUTE
+        } else if lv < 0.34 {
+            G_VOL1
+        } else if lv < 0.67 {
+            G_VOL2
+        } else {
+            G_VOL3
+        };
+        if v.it.hover == Some(Hit::VolBtn) {
+            let k = g.vol_btn.h - 2.0 * s;
+            ui::hover_bg(cv, RectF::new(g.vol_btn.cx() - k / 2.0, g.vol_btn.cy() - k / 2.0, k, k), k / 2.0, th, v.it.pressed == Some(Hit::VolBtn));
+        }
+        ui::ctrl_glyph(cv, tr, g.vol_btn, gl, Font::IconSmall, th.fg, 0.9, &it, Hit::VolBtn, s);
+        if let Some((x0, x1)) = vol_track(g, s) {
+            let hot = v.it.hover == Some(Hit::Vol) || v.it.drag == Some(Hit::Vol);
+            let fill = if v.pb.muted { 0.0 } else { lv };
+            ui::slider(cv, x0, x1, g.vol.cy(), fill, th, hot, hot, s * 0.8);
+        }
     }
 }
 
@@ -964,7 +1099,7 @@ fn fullscreen(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View, th: &Th
     // Sair da tela cheia.
     let hot = v.hover == Some(LHit::Full);
     cv.fill_round(g.full, g.full.h / 2.0, [1.0; 3], if hot { 0.20 } else { 0.10 });
-    ui::glyph(cv, tr, g.full, "\u{E73F}", Font::IconSmall, fg, 0.9);
+    ui::solid_glyph(cv, tr, g.full, "\u{E73F}", Font::IconSmall, fg, 1.0, s);
 }
 
 /// Borda tracejada de um retângulo arredondado (os cantos inteiros, as
