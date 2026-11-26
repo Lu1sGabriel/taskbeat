@@ -31,7 +31,7 @@ use crate::ui::{self, Hit, Interact, Playback};
 use crate::volume::Volume;
 use crate::vsync::{Pacer, Target};
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
@@ -98,8 +98,9 @@ static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// A thread está viva (mexido só com o lock: ninguém sobe duas).
 static RUNNING: Mutex<bool> = Mutex::new(false);
-/// O atalho escolhido já é usado por outro programa.
-pub static HOTKEY_FAILED: AtomicBool = AtomicBool::new(false);
+/// Atalho que o Windows recusou (já é de outro programa): 0 = nenhum, senão
+/// `hotkey_code` dele. Guarda qual foi para não valer para o escolhido depois.
+static HOTKEY_REFUSED: AtomicU8 = AtomicU8::new(0);
 /// Letra que a busca entregou: (chave da música, letra).
 static FETCHED: Mutex<Option<(String, Lyrics)>> = Mutex::new(None);
 /// Capa em alta resolução que chegou: (título, imagem).
@@ -125,6 +126,7 @@ pub fn config_changed(lc: &LyricsConfig) {
         post(WM_APP_CONFIG);
     } else if wanted(lc) {
         let shared = shared.clone();
+        log::info(&format!("letra: subindo a thread (na tela: {}, atalho: {:?})", lc.show, lc.hotkey));
         match std::thread::Builder::new().name("lyrics".into()).spawn(move || run(shared)) {
             Ok(_) => *running = true,
             Err(e) => log::warn(&format!("letra: não deu para subir a thread: {e}")),
@@ -176,6 +178,25 @@ pub fn hotkey_label(hk: Hotkey, lock: bool) -> Option<&'static str> {
         (Hotkey::CtrlShiftL, true) => "Ctrl+Shift+Alt+L",
         (Hotkey::Off, _) => return None,
     })
+}
+
+fn hotkey_code(hk: Hotkey) -> u8 {
+    match hk {
+        Hotkey::Off => 0,
+        Hotkey::WinAltL => 1,
+        Hotkey::CtrlAltL => 2,
+        Hotkey::CtrlShiftL => 3,
+    }
+}
+
+/// O Windows recusou o atalho `hk` (outro programa já usa a combinação)?
+pub fn hotkey_refused(hk: Hotkey) -> bool {
+    hk != Hotkey::Off && HOTKEY_REFUSED.load(Ordering::Relaxed) == hotkey_code(hk)
+}
+
+/// O atalho de mostrar/esconder que funciona agora (`None`: desligado ou recusado).
+pub fn working_hotkey(hk: Hotkey) -> Option<&'static str> {
+    hotkey_label(hk, false).filter(|_| !hotkey_refused(hk))
 }
 
 /// Nome de cada lugar pronto (guias do arrasto, configurações).
@@ -946,21 +967,35 @@ impl St {
             Hotkey::CtrlAltL => MOD_CONTROL | MOD_ALT,
             Hotkey::CtrlShiftL => MOD_CONTROL | MOD_SHIFT,
             Hotkey::Off => {
-                HOTKEY_FAILED.store(false, Ordering::Relaxed);
+                HOTKEY_REFUSED.store(0, Ordering::Relaxed);
+                log::info("letra: atalho desligado");
                 return;
             }
         };
         let lock = if mods.0 & MOD_SHIFT.0 != 0 { mods | MOD_ALT } else { mods | MOD_SHIFT };
         let key = 'L' as u32;
-        let ok = unsafe { RegisterHotKey(Some(self.hwnd), HK_SHOW, mods | MOD_NOREPEAT, key).is_ok() };
-        let ok2 = unsafe { RegisterHotKey(Some(self.hwnd), HK_LOCK, lock | MOD_NOREPEAT, key).is_ok() };
-        if !ok || !ok2 {
-            log::warn("letra: o atalho já é usado por outro programa");
-        }
-        HOTKEY_FAILED.store(!ok, Ordering::Relaxed);
+        // Resultado no log (com `TASKBEAT_LOG`): "registrado" ou o erro do Windows
+        // (1409 = a combinação já é de outro programa).
+        let reg = |id: i32, m: HOT_KEY_MODIFIERS, lock: bool| {
+            let name = hotkey_label(hk, lock).unwrap_or("?");
+            match unsafe { RegisterHotKey(Some(self.hwnd), id, m | MOD_NOREPEAT, key) } {
+                Ok(()) => {
+                    log::info(&format!("letra: atalho {name} registrado"));
+                    true
+                }
+                Err(e) => {
+                    log::warn(&format!("letra: atalho {name} recusado pelo Windows (erro {}: {})", e.code().0 & 0xffff, e.message()));
+                    false
+                }
+            }
+        };
+        let ok = reg(HK_SHOW, mods, false);
+        reg(HK_LOCK, lock, true);
+        HOTKEY_REFUSED.store(if ok { 0 } else { hotkey_code(hk) }, Ordering::Relaxed);
     }
 
     fn hotkey(&mut self, id: i32) {
+        log::info(&format!("letra: atalho apertado ({})", if id == HK_SHOW { "mostrar/esconder" } else { "travar/destravar" }));
         match id {
             HK_SHOW => {
                 if self.fullscreen {
@@ -983,7 +1018,7 @@ impl St {
     fn lock_toast(&self) -> String {
         use crate::i18n::tr;
         let lc = self.lc();
-        let key = hotkey_label(lc.hotkey, true).filter(|_| !HOTKEY_FAILED.load(Ordering::Relaxed));
+        let key = hotkey_label(lc.hotkey, true).filter(|_| !hotkey_refused(lc.hotkey));
         match (lc.locked, lc.click_through, key) {
             (true, true, Some(k)) => tr("Travada · o clique passa direto · {} destrava").replace("{}", k),
             (true, true, None) => tr("Travada · o clique passa direto · destrave pelo menu da bandeja").to_string(),
@@ -1006,13 +1041,13 @@ impl St {
         match h {
             LHit::Lock => {
                 let what = if lc.locked { tr("Destravar a posição") } else { tr("Travar a posição") };
-                match hotkey_label(lc.hotkey, true) {
+                match hotkey_label(lc.hotkey, true).filter(|_| !hotkey_refused(lc.hotkey)) {
                     Some(k) => format!("{what} ({k})"),
                     None => what.to_string(),
                 }
             }
             LHit::Full => tr("Tela cheia (Esc volta)").to_string(),
-            LHit::Close => match hotkey_label(lc.hotkey, false) {
+            LHit::Close => match working_hotkey(lc.hotkey) {
                 Some(k) => format!("{} · {}", tr("Esconder"), tr("{} mostra de novo").replace("{}", k)),
                 None => tr("Esconder").to_string(),
             },
@@ -1861,7 +1896,7 @@ impl St {
         self.guides.surface = None;
         self.fetcher = None;
         self.pacer = None;
-        HOTKEY_FAILED.store(false, Ordering::Relaxed);
+        HOTKEY_REFUSED.store(0, Ordering::Relaxed);
         // `reload_config` já marcou a saída (com o lock); se foi outro motivo (WM_QUIT), marca aqui.
         if WINDOW.load(Ordering::Relaxed) == self.hwnd.0 as isize {
             finish();

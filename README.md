@@ -42,7 +42,9 @@ parado, praticamente não gasta CPU.
 - **Letra na tela** (Windows): a letra sincronizada e o player numa janela sempre
   por cima, como as sobreposições do Discord e da Steam. Arraste para um canto (ela
   gruda nos lugares prontos), trave, mude o tamanho com Ctrl+roda, abra em tela
-  cheia com o fundo da capa em movimento. Win+Alt+L mostra e esconde.
+  cheia com o fundo da capa em movimento. Liga e desliga pelo botão de legenda no
+  card, pelo menu da bandeja, no topo da página Letras das configurações ou com
+  Win+Alt+L.
 - **"A seguir"**: um cartão com a próxima música quando o player troca sozinho.
 - **Aviso de Caps Lock e Num Lock** bonito, no lugar do nada.
 - **YouTube Music no navegador**: aleatório e repetir funcionam, mesmo o

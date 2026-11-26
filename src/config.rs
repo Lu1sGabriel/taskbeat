@@ -484,8 +484,11 @@ pub struct Config {
     pub card_sides: SideColor,
     pub card_sides_alpha: i32,
     pub card_seek: bool,
-    /// Mostra de qual app vem a música (nome no card, ícone sobre a capa).
+    /// Mostra de qual app vem a música: selo com o ícone dele no canto da capa
+    /// (barra, card e "A seguir").
     pub show_source: bool,
+    /// Com o selo, o nome do app também no fim da linha do artista (card e "A seguir").
+    pub source_name: bool,
     /// Volume no card expandido (slider + mudo).
     pub show_volume: bool,
     /// Setinha embaixo do card que abre o mixer de volume (volume de cada
@@ -633,6 +636,7 @@ impl Config {
             show_visualizer: true,
             style: Style::Bars,
             bars: 6,
+            show_source: false,
             ..self
         }
     }
@@ -683,7 +687,8 @@ impl Config {
             card_sides: SideColor::SameAsMiddle,
             card_sides_alpha: 100,
             card_seek: true,
-            show_source: false,
+            show_source: true,
+            source_name: false,
             show_volume: true,
             card_mixer: true,
             card_shuffle_repeat: ShuffleRepeat::Always,
@@ -1017,7 +1022,8 @@ version = 5
 "#;
 
     /// No Mac os padrões são os de f0746a0 em todo campo que já existia; no
-    /// Windows só mudam os oito que vieram da config do usuário.
+    /// Windows só mudam os oito que vieram da config do usuário e o selo do
+    /// app na capa (ligado desde 2026-11-26, a pedido dele).
     #[test]
     fn padroes_do_mac_sao_os_de_antes() {
         let old: toml::Table = toml::from_str(DEFAULTS_F0746A0).unwrap();
@@ -1029,7 +1035,7 @@ version = 5
         let win = table(&Config::windows_defaults());
         let mut changed: Vec<&str> = old.iter().filter(|(k, v)| win.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect();
         changed.sort();
-        assert_eq!(changed, ["accent_source", "bars", "playing_indicator", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
+        assert_eq!(changed, ["accent_source", "bars", "playing_indicator", "show_source", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
         let here = if cfg!(any(target_os = "macos", target_os = "linux")) { mac } else { win };
         assert_eq!(table(&Config::default()), here);
     }

@@ -1914,6 +1914,17 @@ impl Overlay {
                 }
             }
             Hit::VolBtn => self.volume.toggle_mute(),
+            // Selo do app: traz o player para a frente (a dica diz qual é).
+            Hit::Source => {
+                if crate::launchers::focus_player(&m.aumid, &m.title) {
+                    self.flyout_open = false;
+                }
+            }
+            // Mostra ou esconde a letra na tela; o card continua aberto.
+            Hit::Lyrics => {
+                self.shared.update_config(|c| c.lyrics.show = !c.lyrics.show);
+                self.flyout_last_hover = now;
+            }
             Hit::MixToggle => {
                 let open = !self.mixer_open;
                 self.set_mixer(open);
@@ -2094,8 +2105,8 @@ impl Overlay {
             self.out_failed_seen = failed;
             self.hint = Some((now, tr("Não deu para trocar a saída de áudio")));
         }
-        // Dica da setinha do mixer: quase na hora (um quarto de segundo em cima).
-        let tip_hit = self.hover_f.filter(|h| *h == Hit::MixToggle && self.drag.is_none());
+        // Dica da setinha do mixer e do botão da letra: quase na hora (um quarto de segundo em cima).
+        let tip_hit = self.hover_f.filter(|h| matches!(h, Hit::MixToggle | Hit::Lyrics | Hit::Source) && self.drag.is_none());
         match (tip_hit, self.tip) {
             (Some(h), Some((t, _, _))) if t == h => {}
             (Some(h), _) => self.tip = Some((h, now, false)),
