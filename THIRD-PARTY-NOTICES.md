@@ -15,9 +15,9 @@ Arquivo gerado por `python tools/third_party_notices.py`.
 | equivalent | 1.0.3 | Apache-2.0 OR MIT | app | Windows e Mac | https://github.com/indexmap-rs/equivalent |
 | hashbrown | 0.17.2 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/rust-lang/hashbrown |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT | app | Windows e Mac | https://github.com/indexmap-rs/indexmap |
-| itoa | 1.0.19 | MIT OR Apache-2.0 | app | Mac | https://github.com/dtolnay/itoa |
+| itoa | 1.0.19 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/dtolnay/itoa |
 | libc | 0.2.191 | MIT OR Apache-2.0 | app | Mac | https://github.com/rust-lang/libc |
-| memchr | 2.8.3 | Unlicense OR MIT | app | Mac | https://github.com/BurntSushi/memchr |
+| memchr | 2.8.3 | Unlicense OR MIT | app | Windows e Mac | https://github.com/BurntSushi/memchr |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/rust-num/num-complex |
 | num-integer | 0.1.47 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/rust-num/num-integer |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/rust-num/num-traits |
@@ -45,11 +45,11 @@ Arquivo gerado por `python tools/third_party_notices.py`.
 | serde | 1.0.229 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/serde-rs/serde |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/serde-rs/serde |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 | build | Windows e Mac | https://github.com/serde-rs/serde |
-| serde_json | 1.0.154 | MIT OR Apache-2.0 | app | Mac | https://github.com/serde-rs/json |
+| serde_json | 1.0.154 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/serde-rs/json |
 | serde_spanned | 1.1.3 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/toml-rs/toml |
 | strength_reduce | 0.2.4 | MIT OR Apache-2.0 | app | Windows e Mac | http://github.com/ejmahler/strength_reduce |
-| syn | 3.0.10 | MIT OR Apache-2.0 | build | Windows e Mac | https://github.com/dtolnay/syn |
 | syn | 2.0.119 | MIT OR Apache-2.0 | build | Windows | https://github.com/dtolnay/syn |
+| syn | 3.0.10 | MIT OR Apache-2.0 | build | Windows e Mac | https://github.com/dtolnay/syn |
 | toml | 1.2.2+spec-1.1.0 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/toml-rs/toml |
 | toml_datetime | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/toml-rs/toml |
 | toml_parser | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | app | Windows e Mac | https://github.com/toml-rs/toml |
@@ -68,7 +68,7 @@ Arquivo gerado por `python tools/third_party_notices.py`.
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 | app | Windows | https://github.com/microsoft/windows-rs |
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 | app | Windows | https://github.com/microsoft/windows-rs |
 | winnow | 1.0.5 | MIT | app | Windows e Mac | https://github.com/winnow-rs/winnow |
-| zmij | 1.0.23 | MIT | app | Mac | https://github.com/dtolnay/zmij |
+| zmij | 1.0.23 | MIT | app | Windows e Mac | https://github.com/dtolnay/zmij |
 | mediaremote-adapter | 2ef957c | BSD-3-Clause | app (dentro do Taskbeat.app) | Mac | https://github.com/ungive/mediaremote-adapter |
 
 ## Avisos de copyright
@@ -262,6 +262,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Apache-2.0 e Unicode-3.0
 
-As bibliotecas com licença dupla ou tripla ("MIT OR Apache-2.0", "Zlib OR Apache-2.0 OR MIT") são usadas aqui sob a MIT.
+As bibliotecas com licença dupla ou tripla ("MIT OR Apache-2.0", "Zlib OR Apache-2.0 OR MIT", "Unlicense OR MIT") são usadas aqui sob a MIT.
 Textos completos: [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) e
 [Unicode-3.0](https://www.unicode.org/license.txt) (usada só por `unicode-ident`, na compilação).

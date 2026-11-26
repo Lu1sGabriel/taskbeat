@@ -16,6 +16,7 @@
 // Comuns aos dois sistemas: configurações, análise do áudio, traduções e desenho.
 mod config;
 mod dsp;
+mod http;
 mod i18n;
 mod licenses;
 mod notch;
