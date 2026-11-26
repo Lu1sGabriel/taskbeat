@@ -55,6 +55,10 @@ const SLOW_TIMER: usize = 1;
 const WARM_TIMER: usize = 2;
 /// Espera antes de mostrar a dica de uma opção desativada.
 const TIP_DELAY: f32 = 0.45;
+/// Quanto tempo a prévia anima sozinha depois de uma mudança (as animações
+/// em laço, como o "A seguir" e o aviso de teclas, param depois disso:
+/// janela parada = 0% de CPU).
+const PREVIEW_AWAKE: std::time::Duration = std::time::Duration::from_secs(8);
 /// Miniatura da animação de abrir e fechar do card (px lógicos).
 const ANIM_TILE: (f32, f32) = (112.0, 50.0);
 /// Uma volta da miniatura: fechado, abre, fica aberto, fecha, fechado (s).
@@ -998,6 +1002,9 @@ struct Ui {
     text: TextRenderer,
     /// Texto da prévia (pode ter escala menor que a da janela).
     preview_text: TextRenderer,
+    /// Texto da prévia da letra (escala da prévia × tamanho da janela da letra):
+    /// à parte, para a troca de escala não apagar o cache a cada quadro.
+    lyrics_text: TextRenderer,
     t0: Instant,
     colors: Option<(Palette, Colors)>,
     layout: Option<(LayoutKey, Rc<Layout>)>,
@@ -1023,6 +1030,8 @@ struct Ui {
     pacer: Option<Pacer>,
     slow_timer: bool,
     last_tick: Instant,
+    /// Tempo desde o quadro anterior (s).
+    dt: f32,
     /// Páginas já pré-carregadas (bit por página) e onde o pré-carregamento parou.
     warmed: u32,
     warm_pos: Option<(usize, usize)>,
@@ -1036,6 +1045,14 @@ struct Ui {
     pv_light: Option<bool>,
     /// Ícones animados da prévia (demonstração de "Animar ícones").
     icons: ui::IconAnims,
+    /// Prévia parada neste instante (as animações em laço param depois de
+    /// `PREVIEW_AWAKE` sem mudança; os testes também fixam o tempo aqui).
+    frozen_t: Option<f32>,
+    /// Até quando a prévia anima sozinha (acorda com mudanças, troca de
+    /// página e o mouse em cima dela).
+    awake_until: Instant,
+    /// Última versão da configuração vista (mudou: a prévia acorda).
+    seen_cfg: u64,
 }
 
 thread_local! {
@@ -1068,11 +1085,60 @@ pub fn refresh() {
 /// a tela parada (sem timer rodando), e o ritmo dela é recalculado.
 pub fn media_changed() {
     if let Some(h) = ui_hwnd() {
-        with_ui(|u| u.tick());
-        unsafe {
-            let _ = UpdateWindow(h);
-        }
+        with_ui(|u| u.wake_preview());
+        frame(h);
     }
+}
+
+/// Um quadro: pinta o que estava pendente (os pixels na tela ficam iguais ao
+/// estado atual), desloca a lista com a rolagem (o Windows move os pixels;
+/// só a faixa nova é pintada), avança o resto e pinta.
+fn frame(hwnd: HWND) {
+    unsafe {
+        let _ = UpdateWindow(hwnd);
+        if let Some((rc, dy)) = with_ui(|u| {
+            u.begin_frame();
+            u.step_scroll()
+        })
+        .flatten()
+        {
+            let _ = ScrollWindowEx(hwnd, 0, dy, Some(&rc), Some(&rc), None, None, SW_INVALIDATE);
+        }
+        with_ui(|u| u.tick());
+        let _ = UpdateWindow(hwnd);
+    }
+}
+
+/// Retângulos da área a pintar. Rolando, ficam duas partes finas (a faixa
+/// nova e a barra de rolagem): o retângulo que junta as duas cobriria a lista
+/// inteira. Vazio: use o `rcPaint`.
+fn update_rects(hwnd: HWND) -> Vec<RECT> {
+    let mut out = Vec::new();
+    unsafe {
+        let rgn = CreateRectRgn(0, 0, 0, 0);
+        if rgn.is_invalid() {
+            return out;
+        }
+        if GetUpdateRgn(hwnd, rgn, false) == COMPLEXREGION {
+            let n = GetRegionData(rgn, 0, None) as usize;
+            let head = std::mem::size_of::<RGNDATAHEADER>();
+            if n > head {
+                // u64: alinhamento suficiente para o cabeçalho e os RECTs.
+                let mut buf = vec![0u64; n.div_ceil(8)];
+                if GetRegionData(rgn, n as u32, Some(buf.as_mut_ptr() as *mut RGNDATA)) as usize == n {
+                    let hdr = &*(buf.as_ptr() as *const RGNDATAHEADER);
+                    let count = (hdr.nCount as usize).min((n - head) / std::mem::size_of::<RECT>());
+                    // Muitos pedaços: um retângulo só sai mais barato.
+                    if count <= 8 {
+                        let rects = std::slice::from_raw_parts((buf.as_ptr() as *const u8).add(head) as *const RECT, count);
+                        out.extend_from_slice(rects);
+                    }
+                }
+            }
+        }
+        let _ = DeleteObject(rgn.into());
+    }
+    out
 }
 
 pub fn close() {
@@ -1161,55 +1227,8 @@ pub fn open(shared: Arc<Shared>, icon: HICON) {
         // Mac) e com o "Avançado" aberto (`TV_DEMO_SETTINGS_ADV`).
         let page = std::env::var("TV_DEMO_SETTINGS_PAGE").ok().and_then(|v| v.parse::<usize>().ok()).filter(|p| *p < PAGES.len()).unwrap_or(0);
         let adv_open = if std::env::var_os("TV_DEMO_SETTINGS_ADV").is_some() { u32::MAX } else { 0 };
-        UI.with(|u| {
-            *u.borrow_mut() = Some(Ui {
-                shared,
-                hwnd,
-                scale,
-                dark,
-                mica,
-                accent: system::app_accent(dark),
-                page,
-                scroll: 0.0,
-                scroll_target: 0.0,
-                hover: None,
-                pressed: None,
-                drag: None,
-                app_drag: None,
-                color_drag: None,
-                hex_edit: None,
-                tracking: false,
-                surface: None,
-                text,
-                preview_text: TextRenderer::new(),
-                t0: Instant::now(),
-                colors: None,
-                layout: None,
-                content: None,
-                rows_drawn: Vec::new(),
-                anims: Vec::new(),
-                hero_bg: None,
-                hero_frame: None,
-                hero_comp: None,
-                anim_demo: None,
-                anim_seen: None,
-                backdrop: None,
-                nav_pos: page as f32,
-                page_anim: None,
-                page_anim_pending: false,
-                tip: None,
-                pacer,
-                slow_timer: false,
-                last_tick: Instant::now(),
-                warmed: 1,
-                warm_pos: None,
-                adv_open,
-                demo: None,
-                pv_play: None,
-                pv_light: None,
-                icons: ui::IconAnims::default(),
-            });
-        });
+        let ui = Ui::new(shared, hwnd, scale, dark, mica, page, adv_open, text, pacer);
+        UI.with(|u| *u.borrow_mut() = Some(ui));
         // Abre maximizada (ao restaurar, volta ao tamanho padrão, centralizada).
         // A 1ª chamada de ShowWindow do processo pode herdar o modo de exibição do
         // atalho/linha de comando (ex.: oculto); a 2ª garante que a janela apareça.
@@ -1247,6 +1266,64 @@ fn window_size(dpi: u32, w: f32, h: f32) -> (i32, i32) {
         let _ = AdjustWindowRectExForDpi(&mut rc, STYLE, false, WINDOW_EX_STYLE(0), dpi);
     }
     (rc.right - rc.left, rc.bottom - rc.top)
+}
+
+impl Ui {
+    #[allow(clippy::too_many_arguments)]
+    fn new(shared: Arc<Shared>, hwnd: HWND, scale: f32, dark: bool, mica: bool, page: usize, adv_open: u32, text: TextRenderer, pacer: Option<Pacer>) -> Ui {
+        Ui {
+            shared,
+            hwnd,
+            scale,
+            dark,
+            mica,
+            accent: system::app_accent(dark),
+            page,
+            scroll: 0.0,
+            scroll_target: 0.0,
+            hover: None,
+            pressed: None,
+            drag: None,
+            app_drag: None,
+            color_drag: None,
+            hex_edit: None,
+            tracking: false,
+            surface: None,
+            text,
+            preview_text: TextRenderer::new(),
+            lyrics_text: TextRenderer::new(),
+            t0: Instant::now(),
+            colors: None,
+            layout: None,
+            content: None,
+            rows_drawn: Vec::new(),
+            anims: Vec::new(),
+            hero_bg: None,
+            hero_frame: None,
+            hero_comp: None,
+            anim_demo: None,
+            anim_seen: None,
+            backdrop: None,
+            nav_pos: page as f32,
+            page_anim: None,
+            page_anim_pending: false,
+            tip: None,
+            pacer,
+            slow_timer: false,
+            last_tick: Instant::now(),
+            dt: 0.0,
+            warmed: 1,
+            warm_pos: None,
+            adv_open,
+            demo: None,
+            pv_play: None,
+            pv_light: None,
+            icons: ui::IconAnims::default(),
+            frozen_t: None,
+            awake_until: Instant::now() + PREVIEW_AWAKE,
+            seen_cfg: 0,
+        }
+    }
 }
 
 // ---------------------------------------------------------------- layout
@@ -1730,6 +1807,44 @@ impl Ui {
         m.present() && m.pos_at.is_some() && !m.playing
     }
 
+    /// A prévia volta a animar (do ponto em que parou) por mais `PREVIEW_AWAKE`.
+    fn wake_preview(&mut self) {
+        self.awake_until = Instant::now() + PREVIEW_AWAKE;
+        if let Some(t) = self.frozen_t.take() {
+            self.t0 = Instant::now() - std::time::Duration::from_secs_f32(t.max(0.0));
+        }
+    }
+
+    /// A prévia está num quadro bom para ficar parada (o componente inteiro à
+    /// vista, sem estar entrando, saindo ou trocando de linha)?
+    fn preview_at_rest(&self, preview: Preview, cfg: &Config, t: f32) -> bool {
+        match preview {
+            Preview::UpNext => {
+                let total = cfg.popup_secs as f32 + 0.5;
+                let tt = t % (total + 1.2);
+                tt > 0.9 && tt < total - 1.0
+            }
+            Preview::LockKeys => {
+                let n = cfg.caps_lock_osd as usize + cfg.num_lock_osd as usize;
+                osd_phase(cfg, t, n).is_none_or(|(_, _, _, e)| e >= 1.0)
+            }
+            Preview::Lyrics => t % 2.4 > 0.4,
+            _ => true,
+        }
+    }
+
+    /// Passado o tempo acordada, a prévia para no próximo quadro de repouso.
+    fn settle_preview(&mut self) {
+        if self.frozen_t.is_some() || Instant::now() < self.awake_until || self.demo_key().is_some() || self.icons.running() {
+            return;
+        }
+        let cfg = self.cfg();
+        let t = self.t0.elapsed().as_secs_f32();
+        if self.preview_at_rest(PAGES[self.page].preview, &cfg, t) {
+            self.frozen_t = Some(t);
+        }
+    }
+
     /// Demonstração em andamento na prévia (a opção que acabou de mudar).
     fn demo_key(&self) -> Option<Key> {
         self.demo.filter(|(k, t)| t.elapsed().as_secs_f32() < demo_secs(*k)).map(|(k, _)| k)
@@ -1791,6 +1906,9 @@ impl Ui {
         if self.demo_key().is_some() || self.icons.running() {
             return 30.0;
         }
+        if self.frozen_t.is_some() {
+            return 0.0;
+        }
         let st = self.play_state_for(preview);
         let widget = if st != 0 {
             0.0
@@ -1816,14 +1934,20 @@ impl Ui {
     /// Liga o ritmo do monitor só quando algo anima; prévias lentas usam um
     /// timer de 250 ms; parado, nada roda (janela parada = 0% de CPU).
     fn schedule(&mut self) {
+        // Configuração nova: a prévia volta a animar um pouco (mostra a mudança).
+        let ver = self.cfg_version();
+        if ver != self.seen_cfg {
+            self.seen_cfg = ver;
+            self.wake_preview();
+        }
         let minimized = unsafe { IsIconic(self.hwnd).as_bool() };
         let cfg = self.cfg();
         let fps = if minimized { 0.0 } else { self.hero_fps(&cfg) };
         let tip_pending = self.tip.is_some() && self.tip_alpha() < 1.0;
         let anim_tile = self.anim_demo.is_some() || self.anim_hovered() || self.anim_seen.is_some_and(|v| v != (cfg.card_anim, cfg.anim_speed));
         let busy = !minimized
-                || anim_tile
-            && ((self.scroll_target - self.scroll).abs() > 0.5
+            && (anim_tile
+                || (self.scroll_target - self.scroll).abs() > 0.5
                 || self.anims_moving()
                 || self.nav_moving()
                 || self.page_anim.is_some()
@@ -2574,7 +2698,7 @@ impl Ui {
     /// Música, reprodução e cores que a prévia mostra (com os botões dela e a
     /// demonstração em andamento).
     fn scene(&mut self, cfg: &Config, preview: Preview) -> Scene {
-        let t = self.t0.elapsed().as_secs_f32();
+        let t = self.frozen_t.unwrap_or_else(|| self.t0.elapsed().as_secs_f32());
         let mut colors = self.colors(cfg.palette);
         colors.light_taskbar = self.preview_light(cfg);
         let state = self.play_state_for(preview);
@@ -2788,7 +2912,7 @@ impl Ui {
                 }
             }
             Preview::LockKeys => self.draw_osd_preview(cv, r, cfg, &sc, s),
-            Preview::Lyrics => lyrics_page::draw_preview(cv, &mut self.preview_text, r, cfg, &sc.colors, &sc.media, sc.pb, s, sc.t),
+            Preview::Lyrics => lyrics_page::draw_preview(cv, &mut self.lyrics_text, r, cfg, &sc.colors, &sc.media, sc.pb, s, sc.t),
             Preview::None => {}
         }
     }
@@ -3295,6 +3419,7 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 u.anims.clear();
                 u.page_anim = None;
                 u.page_anim_pending = true;
+                u.wake_preview();
             }
             u.hover = None;
             u.schedule();
@@ -3318,6 +3443,7 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 Some(Chip::Light(v)) => u.pv_light = Some(v),
                 None => {}
             }
+            u.wake_preview();
             u.schedule();
             Action::Redraw
         }
@@ -3492,29 +3618,58 @@ impl Ui {
         RectF::new(ox, lt - 1.0 * s, w - ox, h - lt + 1.0 * s)
     }
 
-    /// Um quadro de animação: rolagem, linhas, menu lateral, troca de página,
-    /// prévia e dica. Invalida só o que mudou (quem chama pinta na hora, com
-    /// `UpdateWindow`, fora do `borrow` do estado).
-    fn tick(&mut self) {
+    /// Começo de um quadro: o tempo desde o anterior (as animações não
+    /// dependem da taxa de quadros).
+    fn begin_frame(&mut self) {
         let now = Instant::now();
-        let dt = (now - self.last_tick).as_secs_f32().clamp(0.0, 0.05);
+        self.dt = (now - self.last_tick).as_secs_f32().clamp(0.0, 0.05);
         self.last_tick = now;
+    }
+
+    /// Avança a rolagem suave. A lista que já está na tela é deslocada pelo
+    /// próprio Windows (`ScrollWindowEx`, chamado por `frame` fora do
+    /// `borrow`): só a faixa que aparece é desenhada e copiada, em vez da
+    /// coluna inteira a cada quadro. Devolve a área a deslocar e quantos px.
+    fn step_scroll(&mut self) -> Option<(RECT, i32)> {
+        let d = self.scroll_target - self.scroll;
+        if d == 0.0 {
+            return None;
+        }
+        let old = self.scroll_px();
+        self.scroll = if d.abs() < 0.5 { self.scroll_target } else { self.scroll + d * (1.0 - (-self.dt * 14.0).exp()) };
+        let new = self.scroll_px();
+        if new == old {
+            return None;
+        }
+        let (w, h) = self.client();
+        let s = self.scale;
+        let list = self.list_rect();
+        let lt = self.layout().list_top;
+        // A barra de rolagem e a linha sob a prévia ficam paradas: são refeitas.
+        let bar_x = (w - 20.0 * s).round();
+        invalidate_rect(self.hwnd, RectF::new(bar_x, lt, w - bar_x, h - lt));
+        invalidate_rect(self.hwnd, RectF::new(list.x, list.y, list.w, 2.0 * s));
+        let area = RectF::new(list.x, lt, bar_x - list.x, h - lt);
+        let dy = (old - new) as i32;
+        // Entrando na página (a lista esmaece) ou num salto maior que a tela: tudo de novo.
+        if self.page_anim.is_some() || self.page_anim_pending || dy.unsigned_abs() as f32 >= area.h * 0.8 || area.w < 1.0 || area.h < 1.0 {
+            invalidate_rect(self.hwnd, list);
+            return None;
+        }
+        let rc = RECT { left: area.x as i32, top: area.y as i32, right: area.right() as i32, bottom: area.bottom() as i32 };
+        Some((rc, dy))
+    }
+
+    /// Um quadro de animação: linhas, menu lateral, troca de página, prévia e
+    /// dica (a rolagem é `step_scroll`). Invalida só o que mudou (quem chama
+    /// pinta na hora, com `UpdateWindow`, fora do `borrow` do estado).
+    fn tick(&mut self) {
+        let dt = self.dt;
         let (w, h) = self.client();
         let s = self.scale;
         let ox = (NAV_W * s).round();
         let l = self.layout();
         let hwnd = self.hwnd;
-
-        // Rolagem suave independente da taxa de quadros.
-        let d = self.scroll_target - self.scroll;
-        if d != 0.0 {
-            let old = self.scroll_px();
-            self.scroll = if d.abs() < 0.5 { self.scroll_target } else { self.scroll + d * (1.0 - (-dt * 14.0).exp()) };
-            if self.scroll_px() != old {
-                let r = self.list_rect();
-                invalidate_rect(hwnd, r);
-            }
-        }
 
         // Linhas: só as que mudaram de estado visível.
         let cfg = self.cfg();
@@ -3546,6 +3701,13 @@ impl Ui {
             }
         }
 
+        // Prévia: acorda quando a configuração muda; parada há um tempo, para.
+        let ver = self.cfg_version();
+        if ver != self.seen_cfg {
+            self.seen_cfg = ver;
+            self.wake_preview();
+        }
+        self.settle_preview();
         // Prévia: só quando o quadro dela muda.
         if let Some(hero) = l.hero {
             let hr = RectF::new(hero.x.round(), hero.y.round(), hero.w.round(), hero.h.round());
@@ -3696,6 +3858,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     unsafe {
         match msg {
             WM_PAINT => {
+                let parts = update_rects(hwnd);
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);
                 with_ui(|u| {
@@ -3704,19 +3867,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let (w, h) = (rc.right.max(1), rc.bottom.max(1));
                     Surface::ensure(&mut u.surface, w, h);
                     if let Some(mut surf) = u.surface.take() {
-                        let d = ps.rcPaint;
-                        let (dx, dy) = (d.left.clamp(0, w), d.top.clamp(0, h));
-                        let (dw, dh) = (d.right.clamp(0, w) - dx, d.bottom.clamp(0, h) - dy);
-                        let t0 = Instant::now();
-                        {
-                            let mut cv = surf.canvas();
-                            cv.set_clip(RectF::new(dx as f32, dy as f32, dw as f32, dh as f32));
-                            u.paint(&mut cv, w as f32, h as f32);
-                        }
-                        let t1 = Instant::now();
-                        let _ = BitBlt(hdc, dx, dy, dw, dh, Some(surf.dc), dx, dy, SRCCOPY);
-                        if perf_log() {
-                            crate::audio::log::info(&format!("PERF paint {dw}x{dh} page={} scroll={:.0} paint={:.2}ms blit={:.2}ms", u.page, u.scroll, (t1 - t0).as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3));
+                        let parts = if parts.is_empty() { vec![ps.rcPaint] } else { parts };
+                        for d in parts {
+                            let (dx, dy) = (d.left.clamp(0, w), d.top.clamp(0, h));
+                            let (dw, dh) = (d.right.clamp(0, w) - dx, d.bottom.clamp(0, h) - dy);
+                            if dw <= 0 || dh <= 0 {
+                                continue;
+                            }
+                            let t0 = Instant::now();
+                            {
+                                let mut cv = surf.canvas();
+                                cv.set_clip(RectF::new(dx as f32, dy as f32, dw as f32, dh as f32));
+                                u.paint(&mut cv, w as f32, h as f32);
+                            }
+                            let t1 = Instant::now();
+                            let _ = BitBlt(hdc, dx, dy, dw, dh, Some(surf.dc), dx, dy, SRCCOPY);
+                            if perf_log() {
+                                crate::audio::log::info(&format!("PERF paint {dw}x{dh} page={} scroll={:.0} paint={:.2}ms blit={:.2}ms", u.page, u.scroll, (t1 - t0).as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3));
+                            }
                         }
                         u.surface = Some(surf);
                     }
@@ -3726,13 +3894,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             WM_ERASEBKGND => LRESULT(1),
             WM_APP_FRAME => {
-                with_ui(|u| {
+                let t0 = Instant::now();
+                let since = with_ui(|u| {
                     if let Some(p) = &u.pacer {
                         p.ack();
                     }
-                    u.tick();
+                    u.last_tick.elapsed()
                 });
-                let _ = UpdateWindow(hwnd);
+                frame(hwnd);
+                if perf_log() {
+                    let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+                    crate::audio::log::info(&format!("PERF frame dt={:.2}ms tick=0.00ms paint={:.2}ms", since.map_or(0.0, ms), ms(t0.elapsed())));
+                }
                 LRESULT(0)
             }
             WM_TIMER if wp.0 == WARM_TIMER => {
@@ -3764,12 +3937,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             WM_TIMER if wp.0 == SLOW_TIMER => {
                 // Prévias lentas e reserva: com o vblank mandando quadros, não faz nada a mais.
-                with_ui(|u| {
-                    if u.last_tick.elapsed().as_millis() > 60 {
-                        u.tick();
-                    }
-                });
-                let _ = UpdateWindow(hwnd);
+                if with_ui(|u| u.last_tick.elapsed().as_millis() > 60).unwrap_or(false) {
+                    frame(hwnd);
+                }
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
@@ -3826,6 +3996,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                             }
                         }
                         return;
+                    }
+                    // Mouse em cima da prévia: ela volta a animar.
+                    if u.layout().hero.is_some_and(|r| r.contains(x, y)) && (u.frozen_t.is_some() || u.awake_until < Instant::now() + PREVIEW_AWAKE / 2) {
+                        u.wake_preview();
+                        u.schedule();
                     }
                     let h = u.hit(x, y);
                     u.set_hover(h, x, y);

@@ -261,6 +261,7 @@ pub(super) fn preview_rect(r: RectF, cfg: &Config, s: f32) -> RectF {
 }
 
 /// A sobreposição na prévia, com a música de agora (ou a de exemplo) e a letra de exemplo.
+/// `tr` é só da prévia da letra: fica na escala dela (trocar a escala apaga o cache).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg: &Config, colors: &Colors, media: &MediaInfo, pb: Playback, s: f32, t: f32) {
     SAMPLE.with(|(l, lines)| {
@@ -297,6 +298,5 @@ pub(super) fn draw_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg
         let mut sub = SubCanvas::new(r.cx() - g.w / 2.0, r.y + 4.0 * s, g.w, g.h);
         view::draw(&mut sub.canvas(), tr, &g, &v);
         sub.commit(cv);
-        tr.set_scale(s);
     });
 }
