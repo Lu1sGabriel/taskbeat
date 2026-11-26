@@ -19,7 +19,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::*;
 use windows::core::{HSTRING, w};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Font {
     Title,
     Subtitle,
@@ -31,6 +31,7 @@ pub enum Font {
     Big,
     /// Tela de configurações (tipografia Fluent / Segoe UI Variable).
     Heading,
+    #[default]
     Body,
     BodyStrong,
     Caption,
@@ -55,6 +56,19 @@ pub enum Font {
     SubtitleLg,
     /// Legenda em semibold (selos, cabeçalho do menu).
     CaptionStrong,
+    /// Sobreposição de letra: linha atual (`Lyric*`) e as outras (`LyricDim*`)
+    /// nos tamanhos pequeno, normal, grande e tela cheia; título e artista da
+    /// tela cheia.
+    LyricSm,
+    LyricMd,
+    LyricLg,
+    LyricXl,
+    LyricDimSm,
+    LyricDimMd,
+    LyricDimLg,
+    LyricDimXl,
+    TitleXl,
+    SubtitleXl,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -114,10 +128,20 @@ fn spec(f: Font) -> (f32, i32, Face) {
         Font::SubtitleSm => (10.5, 400, Face::Text),
         Font::SubtitleLg => (12.5, 400, Face::Text),
         Font::CaptionStrong => (12.0, 600, Face::Text),
+        Font::LyricSm => (19.0, 600, Face::Display),
+        Font::LyricMd => (23.0, 600, Face::Display),
+        Font::LyricLg => (29.0, 600, Face::Display),
+        Font::LyricXl => (44.0, 700, Face::Display),
+        Font::LyricDimSm => (14.5, 600, Face::Display),
+        Font::LyricDimMd => (17.0, 600, Face::Display),
+        Font::LyricDimLg => (21.0, 600, Face::Display),
+        Font::LyricDimXl => (32.0, 600, Face::Display),
+        Font::TitleXl => (34.0, 600, Face::Display),
+        Font::SubtitleXl => (19.0, 400, Face::Text),
     }
 }
 
-const ALL_FONTS: [Font; 23] = [
+const ALL_FONTS: [Font; 33] = [
     Font::Title,
     Font::Subtitle,
     Font::Icon,
@@ -141,6 +165,16 @@ const ALL_FONTS: [Font; 23] = [
     Font::SubtitleSm,
     Font::SubtitleLg,
     Font::CaptionStrong,
+    Font::LyricSm,
+    Font::LyricMd,
+    Font::LyricLg,
+    Font::LyricXl,
+    Font::LyricDimSm,
+    Font::LyricDimMd,
+    Font::LyricDimLg,
+    Font::LyricDimXl,
+    Font::TitleXl,
+    Font::SubtitleXl,
 ];
 
 type Key = (String, Font, i32, i32, Align);
@@ -347,6 +381,105 @@ impl TextRenderer {
         let m = Rc::new(m);
         self.cache.insert(key, (m.clone(), self.tick));
         m
+    }
+
+    /// Máscara do texto quebrado em até `max_lines` linhas na largura `w`
+    /// (a última com "…" se não couber). A altura é a das linhas usadas.
+    pub fn mask_wrapped(&mut self, text: &str, font: Font, w: i32, max_lines: i32, align: Align) -> Rc<Mask> {
+        self.tick += 1;
+        // Altura negativa na chave: "quebrado em N linhas".
+        let key: Key = (text.to_string(), font, w, -max_lines.max(1), align);
+        if let Some((m, used)) = self.cache.get_mut(&key) {
+            *used = self.tick;
+            return m.clone();
+        }
+        if self.cache.len() >= self.capacity {
+            let mut ticks: Vec<u64> = self.cache.values().map(|(_, t)| *t).collect();
+            ticks.sort_unstable();
+            let cut = ticks[ticks.len() / 2];
+            self.cache.retain(|_, (_, t)| *t > cut);
+        }
+        let w = w.max(1);
+        let m = self
+            .dw
+            .as_ref()
+            .and_then(|dw| self.rasterize_dw_wrapped(dw, text, font, w, max_lines.max(1), align))
+            .unwrap_or_else(|| self.rasterize_gdi_wrapped(text, font, w, max_lines.max(1), align));
+        let mut m = m;
+        m.crop_right();
+        let m = Rc::new(m);
+        self.cache.insert(key, (m.clone(), self.tick));
+        m
+    }
+
+    fn rasterize_dw_wrapped(&self, dw: &Dw, text: &str, font: Font, w: i32, max_lines: i32, align: Align) -> Option<Mask> {
+        let fmt = dw.formats.get(&font)?;
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        unsafe {
+            let layout = dw.factory.CreateTextLayout(&wide, fmt, w as f32, 1.0e6).ok()?;
+            let _ = layout.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            let _ = layout.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            let _ = layout.SetTextAlignment(if align == Align::Center { DWRITE_TEXT_ALIGNMENT_CENTER } else { DWRITE_TEXT_ALIGNMENT_LEADING });
+            let mut n = 0u32;
+            let _ = layout.GetLineMetrics(None, &mut n);
+            let mut lines = vec![DWRITE_LINE_METRICS::default(); n.max(1) as usize];
+            layout.GetLineMetrics(Some(&mut lines), &mut n).ok()?;
+            let used = (n as usize).min(max_lines as usize).max(1);
+            let height: f32 = lines.iter().take(used).map(|l| l.height).sum();
+            if n as usize > used {
+                // Corta na última linha que cabe, com "…" (o formato já traz o sinal).
+                let _ = layout.SetMaxHeight(height + 0.5);
+            }
+            let h = height.ceil().max(1.0) as i32;
+            let mut ok = false;
+            let mask = self.with_dib(
+                w,
+                h,
+                || {
+                    let rc = RECT { left: 0, top: 0, right: w, bottom: h };
+                    if dw.rt.BindDC(self.dc, &rc).is_err() {
+                        return;
+                    }
+                    dw.rt.BeginDraw();
+                    dw.rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
+                    dw.rt.DrawTextLayout(windows_numerics::Vector2 { X: 0.0, Y: 0.0 }, &layout, &dw.brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                    ok = dw.rt.EndDraw(None, None).is_ok();
+                },
+                |p| (p >> 24) as u8,
+            )?;
+            ok.then_some(mask)
+        }
+    }
+
+    /// Reserva sem DirectWrite: o GDI quebra as palavras; até `max_lines` linhas.
+    fn rasterize_gdi_wrapped(&self, text: &str, font: Font, w: i32, max_lines: i32, align: Align) -> Mask {
+        let Some(&hfont) = self.fonts.get(&font) else { return Mask { w: w as usize, h: 1, cov: vec![0; w as usize] } };
+        let mut wide: Vec<u16> = text.encode_utf16().collect();
+        let mut fmt = DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_END_ELLIPSIS;
+        fmt |= if align == Align::Center { DT_CENTER } else { DT_LEFT };
+        let h = unsafe {
+            let old = SelectObject(self.dc, hfont.into());
+            let mut tm = TEXTMETRICW::default();
+            let _ = GetTextMetricsW(self.dc, &mut tm);
+            let mut rc = RECT { left: 0, top: 0, right: w, bottom: 0 };
+            DrawTextW(self.dc, &mut wide, &mut rc, fmt | DT_CALCRECT);
+            SelectObject(self.dc, old);
+            (rc.bottom - rc.top).clamp(1, tm.tmHeight.max(1) * max_lines)
+        };
+        let m = self.with_dib(
+            w,
+            h,
+            || unsafe {
+                let old = SelectObject(self.dc, hfont.into());
+                SetTextColor(self.dc, COLORREF(0x00FF_FFFF));
+                SetBkMode(self.dc, TRANSPARENT);
+                let mut rc = RECT { left: 0, top: 0, right: w, bottom: h };
+                DrawTextW(self.dc, &mut wide, &mut rc, fmt);
+                SelectObject(self.dc, old);
+            },
+            |p| (((p >> 16) & 0xff).max((p >> 8) & 0xff).max(p & 0xff)) as u8,
+        );
+        m.unwrap_or(Mask { w: w as usize, h: h as usize, cov: vec![0; (w * h) as usize] })
     }
 
     fn rasterize(&self, text: &str, font: Font, w: i32, h: i32, align: Align) -> Mask {

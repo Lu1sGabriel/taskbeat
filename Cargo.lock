@@ -457,6 +457,7 @@ dependencies = [
  "toml",
  "windows",
  "windows-core",
+ "windows-numerics",
 ]
 
 [[package]]
