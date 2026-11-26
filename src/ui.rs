@@ -664,7 +664,11 @@ impl Sides {
     fn toggle(&self, cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, h: Hit) {
         self.draw(cv, tr, r, g, Font::IconSmall, h);
         if on {
-            cv.fill_circle(r.cx(), r.bottom() - 5.0 * self.s, 1.7 * self.s, self.c, self.a);
+            // Numa barra fina o botão é baixo: o pontinho desce até sair de
+            // baixo do ícone (sem passar da borda do fundo).
+            let s = self.s;
+            let y = (r.bottom() - 5.0 * s).max(r.cy() + 8.0 * s).min(r.bottom() - 2.0 * s);
+            cv.fill_circle(r.cx(), y, 1.7 * s, self.c, self.a);
         }
     }
 }
@@ -1164,6 +1168,18 @@ fn pill_lead(bh: f32, art: f32, rc: f32, s: f32) -> f32 {
     (r - rc - (room * room - dy * dy).sqrt()).max(centered)
 }
 
+/// Aleatório e repetir na barra: com a opção ligada, cada um aparece sempre ou
+/// só quando o player deixa mudar, conforme a mesma escolha do card ("Sempre" /
+/// "Quando o player permite"). Antes a barra mostrava os dois sempre, até
+/// num vídeo do YouTube, que não tem nenhum dos dois.
+pub fn bar_toggles(cfg: &Config, m: &MediaInfo) -> (bool, bool) {
+    if !cfg.taskbar_shuffle_repeat {
+        return (false, false);
+    }
+    let always = cfg.card_shuffle_repeat == ShuffleRepeat::Always;
+    (always || m.can_shuffle, always || m.can_repeat)
+}
+
 impl WLayout {
     /// Sem atalhos dentro do widget (capturas e testes).
     #[cfg(test)]
@@ -1171,8 +1187,17 @@ impl WLayout {
         Self::build_with(s, h, cfg, panel, viz, 0)
     }
 
-    /// Como `build`, com `launchers` atalhos de apps de música dentro do widget.
+    /// Como `build`, com `launchers` atalhos de apps de música dentro do widget
+    /// (aleatório e repetir conforme a opção, sem olhar o player: capturas).
+    #[cfg(test)]
     pub fn build_with(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool, launchers: usize) -> Self {
+        let sr = cfg.taskbar_shuffle_repeat;
+        Self::build_for(s, h, cfg, panel, viz, launchers, (sr, sr))
+    }
+
+    /// Como `build_with`, com o aleatório e o repetir à vista ou não
+    /// (`toggles`, ver `bar_toggles`).
+    pub fn build_for(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool, launchers: usize, toggles: (bool, bool)) -> Self {
         let mut l = WLayout::default();
         let (top, bh) = (3.0 * s, h - 6.0 * s);
         l.radius = match cfg.widget_shape {
@@ -1219,13 +1244,13 @@ impl WLayout {
                     x += w;
                     Some(r)
                 };
-                if cfg.taskbar_shuffle_repeat {
+                if toggles.0 {
                     l.shuffle = slot(btn);
                 }
                 l.prev = slot(btn);
                 l.play = slot(32.0 * s);
                 l.next = slot(btn);
-                if cfg.taskbar_shuffle_repeat {
+                if toggles.1 {
                     l.repeat = slot(btn);
                 }
                 x += 2.0 * s;
@@ -1307,12 +1332,40 @@ pub struct WidgetFrame<'a> {
 }
 
 /// Fontes do título e da segunda linha do widget, e a altura de cada linha.
-fn widget_fonts(cfg: &Config, s: f32) -> (Font, Font, f32) {
-    match cfg.text_size {
+fn fonts_of(size: Size3, s: f32) -> (Font, Font, f32) {
+    match size {
         Size3::Small => (Font::TitleSm, Font::SubtitleSm, (15.5 * s).round()),
         Size3::Normal => (Font::Title, Font::Subtitle, (17.0 * s).round()),
         Size3::Large => (Font::TitleLg, Font::SubtitleLg, (19.0 * s).round()),
     }
+}
+
+/// Letras do widget numa área de texto de altura `h`, e se cabem duas linhas.
+/// Primeiro o tamanho escolhido; se as duas linhas não couberem (barra fina,
+/// como a do Windows 10), um tamanho menor; se nem assim, só o título numa
+/// linha. As linhas têm folga própria: duas cabem até 2 px além da área.
+fn widget_fit(cfg: &Config, h: f32, s: f32) -> (Font, Font, f32, bool) {
+    let sizes: &[Size3] = match cfg.text_size {
+        Size3::Large => &[Size3::Large, Size3::Normal, Size3::Small],
+        Size3::Normal => &[Size3::Normal, Size3::Small],
+        Size3::Small => &[Size3::Small],
+    };
+    for &z in sizes {
+        let (ft, fs, line) = fonts_of(z, s);
+        if 2.0 * line <= h + 2.0 * s {
+            return (ft, fs, line, true);
+        }
+    }
+    let (ft, fs, line) = sizes.iter().map(|&z| fonts_of(z, s)).find(|f| f.2 <= h).unwrap_or(fonts_of(Size3::Small, s));
+    (ft, fs, line, false)
+}
+
+/// Lado do círculo do play na barra, se ele cabe: numa barra fina o círculo
+/// ficava menor que o próprio ícone (só se via o ícone escuro, que é feito
+/// para ficar sobre a cor do círculo); aí o play vira só o ícone.
+fn filled_play(cfg: &Config, r: RectF, s: f32) -> Option<f32> {
+    let size = (24.0 * s).min(r.h - 6.0 * s);
+    (cfg.taskbar_play == TaskbarPlay::Filled && size >= 18.0 * s).then_some(size)
 }
 
 /// Texto da segunda linha do widget, conforme a opção.
@@ -1350,8 +1403,8 @@ fn widget_text(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, m: &MediaInfo, 
     } else {
         m.title.clone()
     };
-    let sub = widget_second_line(m, cfg, f.pb.pos);
-    let (ft, fs, line) = widget_fonts(cfg, s);
+    let (ft, fs, line, two) = widget_fit(cfg, r.h, s);
+    let sub = if two { widget_second_line(m, cfg, f.pb.pos) } else { String::new() };
     let scroll = cfg.marquee && f.pb.playing;
     if sub.is_empty() {
         let rr = RectF::new(r.x, (r.y + (r.h - line) / 2.0).round(), r.w, line);
@@ -1483,7 +1536,7 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         }
     }
     for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::Play] {
-        if h == Hit::Play && cfg.taskbar_play == TaskbarPlay::Filled {
+        if h == Hit::Play && l.play.is_some_and(|r| filled_play(cfg, r, s).is_some()) {
             continue;
         }
         if f.it.hover == Some(h) {
@@ -1561,9 +1614,12 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         side.draw(cv, tr, r, G_PREV, Font::IconSmall, Hit::Prev);
     }
     if let Some(r) = l.play {
-        match cfg.taskbar_play {
-            TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, &ct, &it, f.pb.playing, m.can_toggle, s),
-            TaskbarPlay::Icon => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, ct.fg, dim(m.can_toggle), &it, s),
+        match filled_play(cfg, r, s) {
+            Some(size) => play_button(cv, tr, r, size, f.cfg.play_shape, &ct, &it, f.pb.playing, m.can_toggle, s),
+            // Só o ícone (opção, ou barra fina sem lugar para o círculo): na
+            // barra fina, na cor dos botões do lado, do tamanho deles.
+            None if cfg.taskbar_play == TaskbarPlay::Filled => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, side.c, dim(m.can_toggle), &it, s),
+            None => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, ct.fg, dim(m.can_toggle), &it, s),
         }
     }
     if let Some(r) = l.next {
@@ -2742,6 +2798,25 @@ fn sample_art() -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Na barra, "Quando o player permite" esconde o aleatório e o repetir de
+    /// um player que não deixa mudá-los (um vídeo do YouTube no navegador);
+    /// "Sempre" os mantém; com a opção da barra desligada, nunca aparecem.
+    #[test]
+    fn aleatorio_e_repetir_na_barra_seguem_o_player() {
+        let mut m = sample_media();
+        (m.can_shuffle, m.can_repeat) = (false, false);
+        let mut cfg = Config { taskbar_shuffle_repeat: true, card_shuffle_repeat: ShuffleRepeat::WhenSupported, ..Config::default() };
+        assert_eq!(bar_toggles(&cfg, &m), (false, false));
+        let l = WLayout::build_for(1.0, 40.0, &cfg, true, false, 0, bar_toggles(&cfg, &m));
+        assert!(l.shuffle.is_none() && l.repeat.is_none() && l.prev.is_some());
+        m.can_repeat = true;
+        assert_eq!(bar_toggles(&cfg, &m), (false, true));
+        cfg.card_shuffle_repeat = ShuffleRepeat::Always;
+        assert_eq!(bar_toggles(&cfg, &m), (true, true));
+        cfg.taskbar_shuffle_repeat = false;
+        assert_eq!(bar_toggles(&cfg, &m), (false, false));
+    }
 
     /// Capa nova no mesmo endereço de uma já liberada não herda o desfoque
     /// dela (o cache era pelo endereço).

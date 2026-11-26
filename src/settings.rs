@@ -268,7 +268,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E8C9}", title: "Rolar títulos longos", desc: "Letreiro suave quando o nome não cabe", key: Key::Marquee, kind: Kind::Toggle },
             Section("Botões"),
             Row { icon: "\u{E768}", title: "Botões de controle na barra", desc: "Anterior, play e próximo dentro do widget; desligados, ficam só no card", key: Key::TaskbarControls, kind: Kind::Toggle },
-            Row { icon: "\u{E8B1}", title: "Aleatório e repetir na barra", desc: "Junto dos botões; no YouTube Music do navegador eles apertam os botões da própria página", key: Key::TaskbarShuffle, kind: Kind::Toggle },
+            Row { icon: "\u{E8B1}", title: "Aleatório e repetir na barra", desc: "Junto dos botões; somem quando o player não deixa mudar, se \"Aleatório e repetir\" (em Apps de música) estiver em \"Quando o player permite\". No YouTube Music do navegador eles apertam os botões da própria página", key: Key::TaskbarShuffle, kind: Kind::Toggle },
             Row { icon: "\u{E768}", title: "Botão play", desc: "Preenchido, na cor dos controles, ou só o ícone, como os outros", key: Key::TaskbarPlay, kind: Kind::Segmented(TASKBAR_PLAYS) },
             Row { icon: "\u{E790}", title: "Cor dos controles", desc: "Aleatório, anterior, play, próximo e repetir; o branco fica escuro sobre fundos claros", key: Key::WidgetControls, kind: Kind::Choice(CONTROL_COLORS) },
             Row { icon: "\u{E2B1}", title: "Cor personalizada", desc: "Qualquer cor: amostras, matiz e saturação, brilho ou o código hex", key: Key::WidgetControlsRgb, kind: Kind::Color },
@@ -2488,7 +2488,7 @@ impl Ui {
         let bar = RectF::new(r.x, r.bottom() - 48.0 * s, r.w, 48.0 * s);
         let wh = 40.0 * s;
         let panel = cfg.show_media && (media.present() || cfg.always_show_widget);
-        let l = ui::WLayout::build_with(s, wh, cfg, panel, cfg.show_visualizer, self.bar_launchers(cfg));
+        let l = ui::WLayout::build_for(s, wh, cfg, panel, cfg.show_visualizer, self.bar_launchers(cfg), ui::bar_toggles(cfg, media));
         let lo = bar.x + 8.0 * s;
         let hi = (bar.right() - 76.0 * s - l.width).max(lo);
         let base = match cfg.anchor {

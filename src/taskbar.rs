@@ -85,6 +85,19 @@ fn intersect(a: &RECT, b: &RECT) -> RECT {
 }
 
 /// `length` = largura desejada em pixels lógicos (96 DPI).
+/// Folga entre a barra e o widget, em cima e embaixo. Numa barra fina (Windows
+/// 10 com botões pequenos: 30 px) a folga cai pela metade, para o widget
+/// aproveitar a altura que tem.
+fn bar_pad(thickness: i32, scale: f32) -> i32 {
+    let k = if (thickness as f32) < 36.0 * scale { 2.0 } else { 4.0 };
+    (k * scale).round() as i32
+}
+
+/// Altura do widget numa barra horizontal de `thickness` px (a mesma conta de `compute`).
+pub fn widget_height(thickness: i32, scale: f32) -> i32 {
+    (thickness - 2 * bar_pad(thickness, scale)).max(8)
+}
+
 pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
     let tray = taskbar_hwnd()?;
     let tb = rect_of(tray)?;
@@ -108,7 +121,7 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
         .and_then(rect_of)
         .filter(|r| r.right > r.left && r.bottom > r.top);
 
-    let pad = (4.0 * scale).round() as i32;
+    let pad = bar_pad(on_thickness, scale);
     let margin = (8.0 * scale).round() as i32;
     let length = (length as f32 * scale).round() as i32;
     let offset = (cfg.offset as f32 * scale).round() as i32;
@@ -116,7 +129,7 @@ pub fn compute(cfg: &Config, length: i32) -> Option<Placement> {
     let (x, y, w, h);
     let (mut base_x, mut min_x, mut max_x) = (0, 0, 0);
     if horizontal {
-        h = (on.bottom - on.top - 2 * pad).max(8);
+        h = widget_height(on.bottom - on.top, scale);
         y = on.top + pad;
         w = length;
         let tray_left = notify.map(|n| n.left).unwrap_or(tb.right - (400.0 * scale) as i32);

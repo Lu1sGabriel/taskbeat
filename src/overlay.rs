@@ -1014,6 +1014,11 @@ impl Overlay {
         if self.cfg.card_launchers && self.cfg.launcher_place.card() { self.apps.len() } else { 0 }
     }
 
+    /// Aleatório e repetir à vista na barra, com o player de agora.
+    fn bar_toggles(&self) -> (bool, bool) {
+        ui::bar_toggles(&self.cfg, &self.media)
+    }
+
     fn bar_launchers(&self) -> usize {
         if self.cfg.card_launchers && self.cfg.launcher_place.taskbar() { self.apps.len() } else { 0 }
     }
@@ -1159,7 +1164,7 @@ impl Overlay {
 
     fn widget_layout(&self) -> Option<WLayout> {
         let p = self.placement?;
-        Some(WLayout::build_with(p.scale, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers()))
+        Some(WLayout::build_for(p.scale, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers(), self.bar_toggles()))
     }
 
     fn frame(&mut self) {
@@ -1272,7 +1277,7 @@ impl Overlay {
             self.panel = panel;
             self.viz = viz;
             self.last_layout = now;
-            let logical = WLayout::build_with(1.0, 40.0, &self.cfg, panel, viz, self.bar_launchers()).width.ceil() as i32;
+            let logical = WLayout::build_for(1.0, 40.0, &self.cfg, panel, viz, self.bar_launchers(), self.bar_toggles()).width.ceil() as i32;
             self.placement = taskbar::compute(&self.cfg, logical.max(1));
             self.attach_to_taskbar();
             let mon = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTOPRIMARY) };
@@ -1422,7 +1427,7 @@ impl Overlay {
         self.text.set_scale(p.scale);
         Surface::ensure(&mut self.surface, p.w, p.h);
         let Some(mut surface) = self.surface.take() else { return };
-        let layout = WLayout::build_with(p.scale, p.h as f32, &self.cfg, panel, viz, self.bar_launchers());
+        let layout = WLayout::build_for(p.scale, p.h as f32, &self.cfg, panel, viz, self.bar_launchers(), self.bar_toggles());
         {
             let mut cv = surface.canvas();
             cv.fill_raw(0x0100_0000); // alfa 1/255: invisível, mas recebe cliques
@@ -2049,7 +2054,7 @@ impl Overlay {
         let m = ui::SHADOW_MARGIN * s;
         // Abre com "decelerate" (Fluent) e fecha com "accelerate".
         let e = if opening { ui::ease_enter(self.flyout_anim) } else { 1.0 - ui::ease_exit(1.0 - self.flyout_anim) };
-        let wl = WLayout::build_with(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers());
+        let wl = WLayout::build_for(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers(), self.bar_toggles());
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - l.w as i32 + m as i32 - (8.0 * s) as i32);
         let slide = (1.0 - e) * if opening { 24.0 } else { 12.0 } * s;
@@ -2155,7 +2160,7 @@ impl Overlay {
         let s = p.scale;
         let m = ui::SHADOW_MARGIN * s;
         let gap = 10.0 * s;
-        let wl = WLayout::build_with(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers());
+        let wl = WLayout::build_for(s, p.h as f32, &self.cfg, self.panel, self.viz, self.bar_launchers(), self.bar_toggles());
         let anchor = p.x + wl.art.map(|a| a.x as i32).unwrap_or(0) - m as i32 - (6.0 * s) as i32;
         let x = anchor.clamp(p.mon_left - m as i32 + (8.0 * s) as i32, p.mon_right - w as i32 + m as i32 - (8.0 * s) as i32);
         let (y, dir) = match (self.flyout_box, p.taskbar_bottom_edge) {

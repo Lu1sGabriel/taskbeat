@@ -742,3 +742,47 @@ fn card_launchers() {
     });
     save_png("widget-launchers.png", img.0, img.1, &img.2);
 }
+
+/// O widget em barras finas (Windows 10 com botões pequenos: 30 px; padrão do
+/// Windows 10: 40 px; Windows 11: 48 px), com título longo, aleatório e
+/// repetir, para conferir que tudo cabe na pílula. Grava `widget-thin-bars.png`.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test thin_bars -- --ignored`
+#[test]
+#[ignore]
+fn thin_bars() {
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let mut media = ui::sample_media();
+    media.title = "JOTAPE responde ORIGINAL — ao vivo no estúdio".into();
+    media.artist = "Charles Santos".into();
+    let pb = playback(&media);
+    let cfgs = [
+        Config { taskbar_shuffle_repeat: true, ..Config::default() },
+        Config { taskbar_shuffle_repeat: true, widget_shape: WidgetShape::Pill, widget_tint: WidgetTint::Gradient, ..Config::default() },
+    ];
+    let mut rows = Vec::new();
+    for bar in [30, 40, 48] {
+        let wh = crate::taskbar::widget_height(bar, 1.0) as f32 * S;
+        for cfg in &cfgs {
+            let c = colors(cfg, &media);
+            let l = WLayout::build(S, wh, cfg, true, false);
+            let layer = render(l.width, wh, |cv| {
+                let f = WidgetFrame { cfg, media: &media, theme: ui::widget_theme(cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
+                ui::draw_widget(cv, &mut tr, &l, &f);
+            });
+            rows.push((bar as f32 * S, layer));
+        }
+    }
+    let iw = rows.iter().map(|r| r.1.0).max().unwrap() as f32 + 24.0 * S;
+    let ih: f32 = rows.iter().map(|r| r.0 + 8.0 * S).sum::<f32>() + 8.0 * S;
+    let img = render(iw, ih, |cv| {
+        let mut y = 8.0 * S;
+        for (bh, layer) in rows {
+            cv.fill_rrect(0.0, y, iw, y + bh, 0.0, 1.0, [0.13, 0.13, 0.14]);
+            let lh = layer.1 as f32;
+            blit(cv, 12.0 * S, y + ((bh - lh) / 2.0).round(), layer);
+            y += bh + 8.0 * S;
+        }
+    });
+    save_png("widget-thin-bars.png", img.0, img.1, &img.2);
+}
