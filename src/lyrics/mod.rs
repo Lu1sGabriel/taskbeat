@@ -165,8 +165,13 @@ pub fn parse_plain(text: &str) -> Vec<String> {
 
 // ---------------------------------------------------------------- sincronia
 
-/// Pausa sem letra a partir de quanto tempo vira "• • •".
-pub const GAP_MIN: f64 = 6.0;
+/// Introdução a partir de quanto tempo vira "• • •" (mais curta, a primeira
+/// linha já aparece como a próxima).
+pub const INTRO_MIN: f64 = 4.0;
+/// Uma linha comum vale por até tanto; se a próxima demora mais que
+/// `LONG_GAP`, o resto é um trecho instrumental sem marca ("• • •").
+pub const LINE_HOLD: f64 = 8.0;
+pub const LONG_GAP: f64 = 14.0;
 
 /// Linha que está tocando em `t` segundos: a última que já começou.
 /// `None` antes da primeira linha.
@@ -181,37 +186,27 @@ pub fn next_change(lines: &[Line], t: f64) -> Option<f64> {
     lines.get(n).map(|l| l.t)
 }
 
-/// Em `t` não há o que cantar: antes da primeira linha (com uma introdução
-/// longa), numa linha vazia ou numa linha que já acabou há muito (a próxima
-/// demora). Mostra "• • •" no lugar da linha atual.
-pub fn in_gap(lines: &[Line], t: f64) -> bool {
-    match line_at(lines, t) {
-        None => lines.first().is_some_and(|f| f.t >= GAP_MIN),
-        Some(i) => {
-            if lines[i].text.is_empty() {
-                return true;
+/// As linhas como aparecem: com uma linha vazia ("• • •") na introdução
+/// longa e no meio de trechos instrumentais sem marca, e sem vazias seguidas.
+/// Com isso, a linha atual vazia é uma pausa e cada troca é uma linha.
+pub fn with_gaps(lines: &[Line]) -> Vec<Line> {
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len() + 4);
+    let gap = |t: f64| Line { t, text: String::new() };
+    if lines.first().is_some_and(|f| f.t >= INTRO_MIN) {
+        out.push(gap(0.0));
+    }
+    for (i, l) in lines.iter().enumerate() {
+        if l.text.is_empty() && out.last().is_some_and(|p| p.text.is_empty()) {
+            continue;
+        }
+        out.push(l.clone());
+        if let Some(n) = lines.get(i + 1) {
+            if !l.text.is_empty() && n.t - l.t > LONG_GAP {
+                out.push(gap(l.t + LINE_HOLD));
             }
-            // Linha comum: vale por até ~8 s; depois disso, se a próxima ainda
-            // está longe, é um trecho instrumental sem marca.
-            lines.get(i + 1).is_some_and(|n| n.t - lines[i].t > 14.0 && t - lines[i].t > 8.0)
         }
     }
-}
-
-/// Próximo instante (depois de `t`) em que o que aparece muda: começo de uma
-/// linha ou entrada numa pausa. É quando a janela precisa acordar.
-pub fn next_event(lines: &[Line], t: f64) -> Option<f64> {
-    let change = next_change(lines, t);
-    // Linha comum longa: vira pausa 8 s depois de começar.
-    let gap = line_at(lines, t).and_then(|i| {
-        let start = lines[i].t;
-        let n = lines.get(i + 1)?.t;
-        (n - start > 14.0 && !lines[i].text.is_empty() && start + 8.0 > t).then_some(start + 8.0)
-    });
-    match (change, gap) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
+    out
 }
 
 #[cfg(test)]
@@ -278,30 +273,26 @@ mod tests {
     }
 
     #[test]
-    fn pausas() {
-        let l = sample();
-        // Introdução de 8 s: pausa.
-        assert!(in_gap(&l, 2.0));
-        // Linha vazia de 10 s: pausa.
-        assert!(in_gap(&l, 16.0));
-        assert!(!in_gap(&l, 13.0));
-        // "Quatro" (28 s) até "Cinco" (60 s): depois de 8 s vira pausa até a próxima.
-        assert!(!in_gap(&l, 30.0));
-        assert!(in_gap(&l, 40.0));
-        assert!(in_gap(&l, 59.9));
-        assert!(!in_gap(&l, 60.0));
-        // Introdução curta não é pausa.
-        let short = parse_lrc("[00:02.00]Já");
-        assert!(!in_gap(&short, 1.0));
-    }
-
-    #[test]
-    fn proximo_evento() {
-        let l = sample();
-        assert_eq!(next_event(&l, 0.0), Some(8.0));
-        assert_eq!(next_event(&l, 29.0), Some(36.0));
-        assert_eq!(next_event(&l, 36.5), Some(60.0));
-        assert_eq!(next_event(&l, 61.0), None);
+    fn pausas_viram_linhas_vazias() {
+        let g = with_gaps(&sample());
+        let got: Vec<(f64, &str)> = g.iter().map(|x| (x.t, x.text.as_str())).collect();
+        // Introdução de 8 s; "Quatro" (28 s) até "Cinco" (60 s) vira pausa aos 36 s.
+        assert_eq!(got, vec![(0.0, ""), (8.0, "Um"), (12.0, "Dois"), (15.0, ""), (25.0, "Três"), (28.0, "Quatro"), (36.0, ""), (60.0, "Cinco")]);
+        let at = |t: f64| line_at(&g, t).map(|i| g[i].text.as_str());
+        assert_eq!(at(2.0), Some(""));
+        assert_eq!(at(13.0), Some("Dois"));
+        assert_eq!(at(16.0), Some(""));
+        assert_eq!(at(30.0), Some("Quatro"));
+        assert_eq!(at(40.0), Some(""));
+        assert_eq!(at(60.0), Some("Cinco"));
+        assert_eq!(next_change(&g, 29.0), Some(36.0));
+        // Introdução curta: sem pausa; vazias seguidas viram uma só.
+        let short = with_gaps(&parse_lrc("[00:02.00]Já
+[00:03.00]
+[00:04.00]
+[00:05.00]Fim"));
+        assert_eq!(short.iter().map(|x| x.text.as_str()).collect::<Vec<_>>(), vec!["Já", "", "Fim"]);
+        assert!(with_gaps(&[]).is_empty());
     }
 
     #[test]

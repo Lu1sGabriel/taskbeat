@@ -98,8 +98,19 @@ pub struct LyricsConfig {
     pub free_y: f32,
     /// Monitor: 0 = o principal; 1, 2… = os outros, da esquerda para a direita.
     pub monitor: i32,
-    /// Travada: o clique atravessa (vai para o que está atrás) e não arrasta.
+    /// Travada: a posição fica presa (não arrasta); os botões continuam valendo.
     pub locked: bool,
+    /// Travada, o clique atravessa a janela e vai para o que está atrás (jogos).
+    pub click_through: bool,
+    /// Tamanho da janela (%), além da escala do monitor.
+    pub zoom: i32,
+    /// Volume e mixer de volume nos layouts com player (como no card).
+    pub volume: bool,
+    pub mixer: bool,
+    /// Fundo animado na tela cheia (a capa desfocada girando devagar).
+    pub animated_bg: bool,
+    /// Tempo decorrido e restante embaixo do progresso (a barra sempre aparece).
+    pub show_time: bool,
     /// Procurar a letra no LRCLIB (manda título, artista, álbum e duração).
     pub online: bool,
     /// Ajuste de tempo (ms): positivo adianta a letra.
@@ -116,6 +127,10 @@ pub struct LyricsConfig {
     pub hide_idle: bool,
 }
 
+/// Limites do tamanho da janela (%).
+pub const ZOOM_MIN: i32 = 60;
+pub const ZOOM_MAX: i32 = 200;
+
 impl Default for LyricsConfig {
     fn default() -> Self {
         Self {
@@ -126,6 +141,12 @@ impl Default for LyricsConfig {
             free_y: 0.5,
             monitor: 0,
             locked: false,
+            click_through: false,
+            zoom: 100,
+            volume: true,
+            mixer: true,
+            animated_bg: true,
+            show_time: false,
             online: true,
             offset_ms: 0,
             size: Size3::Normal,
@@ -146,6 +167,7 @@ impl LyricsConfig {
         self.monitor = self.monitor.clamp(0, 8);
         self.offset_ms = self.offset_ms.clamp(-5000, 5000);
         self.opacity = self.opacity.clamp(10, 100);
+        self.zoom = self.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
     }
 
     /// Letra centralizada?

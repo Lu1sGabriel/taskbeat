@@ -125,10 +125,6 @@ impl Cache {
         Self { dir }
     }
 
-    pub fn dir(&self) -> &Path {
-        &self.dir
-    }
-
     fn file(&self, key: &str) -> PathBuf {
         self.dir.join(format!("{:016x}.lrc", fnv(key)))
     }
@@ -163,12 +159,6 @@ impl Cache {
         for (_, p) in files.into_iter().take(extra) {
             let _ = std::fs::remove_file(p);
         }
-    }
-
-    /// Tamanho do cache em bytes e número de letras.
-    pub fn usage(&self) -> (u64, usize) {
-        let Ok(rd) = std::fs::read_dir(&self.dir) else { return (0, 0) };
-        rd.flatten().filter_map(|e| e.metadata().ok()).fold((0, 0), |(b, n), m| (b + m.len(), n + 1))
     }
 }
 
@@ -245,7 +235,6 @@ mod tests {
         assert_eq!(c.get(&key), None);
         c.put(&key, &Lyrics::Plain(vec!["x".into()]));
         assert_eq!(c.get(&key), Some(Lyrics::Plain(vec!["x".into()])));
-        assert_eq!(c.usage().1, 1);
         assert_eq!(c.clear(), 1);
         assert_eq!(c.get(&key), None);
         let _ = std::fs::remove_dir_all(dir);
