@@ -4133,7 +4133,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     Action::Menu { ri, names, current, at } => {
                         let (dark, accent) = with_ui(|u| (u.dark, u.accent)).unwrap_or((true, [0.6, 0.8, 1.0]));
                         let entries: Vec<menu::Entry> = names.iter().enumerate().map(|(k, n)| menu::Entry::radio(k as u32 + 1, tr(n), k as i32 == current)).collect();
-                        let opts = menu::Options { dark, accent, min_width: 0.0 };
+                        let opts = menu::Options { dark, accent, min_width: 0.0, style: with_ui(|u| crate::look::Style::of(&u.cfg())).unwrap_or_default() };
                         let pick = menu::popup(hwnd, entries, menu::Anchor::Below(at), opts, &mut |_| None);
                         if let Some(id) = pick {
                             with_ui(|u| {

@@ -1296,7 +1296,7 @@ impl St {
         let at = RECT { left: self.pos.0 + d.x as i32, top: self.pos.1 + d.y as i32, right: self.pos.0 + d.right() as i32, bottom: self.pos.1 + d.bottom() as i32 };
         let th = view::theme(&self.card_cfg, self.lc(), &self.colors, &self.media);
         let entries: Vec<crate::menu::Entry> = mv.devices.iter().enumerate().map(|(k, o)| crate::menu::Entry::radio(k as u32 + 1, &o.name, o.id == mv.device_id)).collect();
-        let opts = crate::menu::Options { dark: th.dark, accent: th.accent, min_width: 380.0 };
+        let opts = crate::menu::Options { dark: th.dark, accent: th.accent, min_width: 380.0, style: th.style };
         let pick = crate::menu::popup(self.hwnd, entries, crate::menu::Anchor::Below(at), opts, &mut |_| None);
         self.pressed = None;
         if let Some(o) = pick.and_then(|k| mv.devices.get(k as usize - 1)).filter(|o| o.id != mv.device_id) {

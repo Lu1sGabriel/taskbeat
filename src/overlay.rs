@@ -1166,7 +1166,7 @@ impl Overlay {
         let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
         let entries: Vec<crate::menu::Entry> = devices.iter().enumerate().map(|(k, o)| crate::menu::Entry::radio(k as u32 + 1, &o.name, o.id == current)).collect();
         // Largo o bastante para os nomes inteiros ("Speakers (Logitech G635/G633s Gaming Headset)").
-        let opts = crate::menu::Options { dark: th.dark, accent: th.accent, min_width: 380.0 };
+        let opts = crate::menu::Options { dark: th.dark, accent: th.accent, min_width: 380.0, style: th.style };
         let pick = crate::menu::popup(self.flyout.hwnd, entries, crate::menu::Anchor::Below(at), opts, &mut |_| None);
         // O menu é modal e toma o foco: o "card perdeu o foco" que isso gerou
         // não pode fechar o card; o foco volta para ele.

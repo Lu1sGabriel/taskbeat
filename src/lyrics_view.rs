@@ -224,7 +224,7 @@ pub type MixerGeo = Option<(usize, f32, f32)>;
 /// `caption_content`); `mixer`: o mixer dos layouts com player.
 pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32), mixer: MixerGeo) -> Geo {
     let m = ui::SHADOW_MARGIN * s;
-    let radius = card_cfg.corners.radius() * s;
+    let radius = crate::look::Style::of(card_cfg).card_radius() * s;
     let (big, dim) = fonts(lc.layout, lc.size);
     let mut g = Geo { radius, big, dim, ..Default::default() };
     match lc.layout {
@@ -421,6 +421,8 @@ fn panel(cv: &mut Canvas, g: &Geo, v: &View, th: &Theme) {
         v.media.art.as_ref().map(|a| a.id),
         (th.dark, th.accent.map(f32::to_bits), v.colors.accent.map(f32::to_bits)),
         v.card_cfg.theme as u8,
+        // Visual, cantos e o resto do desenho do card (sombra, granulado, película).
+        (th.style, v.card_cfg.card_shadow as u8, v.card_cfg.card_grain, v.card_cfg.artwork_dim, v.card_cfg.glass_tint),
     ));
     let px = BG.with(|b| b.borrow().as_ref().filter(|c| c.0 == key && c.1 == w && c.2 == h).map(|c| c.3.clone()));
     let px = px.unwrap_or_else(|| {
@@ -443,7 +445,10 @@ fn draw_panel(cv: &mut Canvas, g: &Geo, v: &View, th: &Theme) {
         Background::Dark => {
             cv.drop_shadow(g.card, g.radius, 18.0 * s, 4.0 * s, 0.35);
             cv.fill_round(g.card, g.radius, [0.04, 0.04, 0.05], 0.66);
-            cv.stroke_round(g.card, g.radius, s, [1.0; 3], 0.10);
+            match th.style.look {
+                crate::config::Look::Palco => cv.stroke_round(g.card, g.radius, s, [1.0; 3], 0.10),
+                _ => crate::look::finish(cv, g.card, g.radius, th.style, true, 0.0, s),
+            }
         }
         Background::None => {}
     }
@@ -736,7 +741,7 @@ fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
     let k = 0.86 + 0.14 * a;
     let t0 = g.toolbar;
     let t = RectF::new(t0.cx() - t0.w * k / 2.0, t0.cy() - t0.h * k / 2.0, t0.w * k, t0.h * k);
-    let rad = t.h / 2.0;
+    let rad = crate::look::Style::of(v.card_cfg).pill(t.h);
     let locked = v.lc.locked;
     cv.drop_shadow(t, rad, 10.0 * s, 2.0 * s, 0.45);
     cv.fill_round(t, rad, [0.125, 0.125, 0.135], 1.0);
@@ -773,15 +778,16 @@ fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
         let x = (b.cx() - w / 2.0).clamp(4.0 * s, cw - 4.0 * s - w);
         let y = t.bottom() + 6.0 * s - (1.0 - ui::ease_enter(ta)) * 3.0 * s;
         let r = RectF::new(x.round(), y.round(), w, h);
-        cv.drop_shadow(r, 6.0 * s, 12.0 * s, 3.0 * s, 0.45 * ta);
-        cv.fill_round(r, 6.0 * s, [0.12, 0.12, 0.13], 0.97 * ta);
-        cv.stroke_round(r, 6.0 * s, s, [1.0; 3], 0.12 * ta);
+        let rr = crate::look::Style::of(v.card_cfg).scale(6.0 * s);
+        cv.drop_shadow(r, rr, 12.0 * s, 3.0 * s, 0.45 * ta);
+        cv.fill_round(r, rr, [0.12, 0.12, 0.13], 0.97 * ta);
+        cv.stroke_round(r, rr, s, [1.0; 3], 0.12 * ta);
         ui::text_center(cv, tr, msg, Font::Caption, r, [1.0; 3], 0.94 * ta);
     }
 }
 
 /// Aviso rápido no meio do painel (ex.: acabou de travar: como destravar).
-fn draw_toast(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, msg: &str, a: f32, s: f32) {
+fn draw_toast(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, msg: &str, a: f32, s: f32, st: crate::look::Style) {
     if a <= 0.0 {
         return;
     }
@@ -792,9 +798,10 @@ fn draw_toast(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, msg: &str, a: f32
     let r = RectF::new((g.card.cx() - w / 2.0).round(), (g.card.cy() - h / 2.0).round(), w, h);
     let k = 0.96 + 0.04 * ui::ease_enter(a);
     let r = RectF::new(r.cx() - r.w * k / 2.0, r.cy() - r.h * k / 2.0, r.w * k, r.h * k);
-    cv.drop_shadow(r, h / 2.0, 16.0 * s, 4.0 * s, 0.5 * a);
-    cv.fill_round(r, h / 2.0, [0.08, 0.08, 0.09], 0.94 * a);
-    cv.stroke_round(r, h / 2.0, s, [1.0; 3], 0.14 * a);
+    let rad = st.pill(r.h);
+    cv.drop_shadow(r, rad, 16.0 * s, 4.0 * s, 0.5 * a);
+    cv.fill_round(r, rad, [0.08, 0.08, 0.09], 0.94 * a);
+    cv.stroke_round(r, rad, s, [1.0; 3], 0.14 * a);
     ui::glyph(cv, tr, RectF::new(r.x + 12.0 * s, r.y, 20.0 * s, r.h), "\u{E72E}", Font::IconSmall, [1.0; 3], 0.9 * a);
     ui::text(cv, tr, msg, Font::BodyStrong, r.x + 36.0 * s, r.y, r.w - 46.0 * s, r.h, [1.0; 3], 0.95 * a);
 }
@@ -1061,7 +1068,7 @@ pub fn draw(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
     }
     draw_toolbar(cv, tr, g, v);
     if let Some((msg, a)) = v.toast {
-        draw_toast(cv, tr, g, msg, a, v.s);
+        draw_toast(cv, tr, g, msg, a, v.s, crate::look::Style::of(v.card_cfg));
     }
 }
 

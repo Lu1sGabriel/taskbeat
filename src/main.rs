@@ -21,6 +21,7 @@ mod dsp;
 mod http;
 mod i18n;
 mod licenses;
+mod look;
 mod lyrics;
 mod notch;
 #[cfg(test)]

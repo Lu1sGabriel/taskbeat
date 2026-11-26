@@ -96,12 +96,29 @@ pub enum BarShape {
     Square,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Nível de cantos arredondados de tudo (opção "Cantos": Menos, Normal, Mais).
+/// "Normal" é o desenho de antes da opção.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Corners {
     Small,
+    #[default]
     Medium,
     Large,
+}
+
+/// Identidade visual do app inteiro (configurações, widget, card, "A seguir",
+/// aviso de teclas e letra): ver `look.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Look {
+    /// Escuro com a cor da música, seleção branca como o play do card (o visual de antes).
+    #[default]
+    Palco,
+    /// Grafite liso, linhas finas, destaque em degradê, controles de mesa de som.
+    Estudio,
+    /// Vidro fosco sobre a capa desfocada, ícones coloridos.
+    Ilha,
 }
 
 /// Onde o aviso de Caps/Num Lock aparece.
@@ -475,6 +492,8 @@ pub struct Config {
     pub theme: ThemeMode,
     pub accent_source: AccentSource,
     pub corners: Corners,
+    /// Identidade visual (Palco, Estúdio ou Ilha).
+    pub look: Look,
     pub play_shape: Shape,
     /// Cor dos controles do card (padrão: branco, como no widget).
     pub card_controls: ControlColor,
@@ -633,6 +652,9 @@ impl Config {
             show_visualizer: true,
             style: Style::Bars,
             bars: 6,
+            // O Mac e o Linux ficam com o desenho de antes das opções de visual.
+            corners: Corners::Medium,
+            look: Look::Palco,
             ..self
         }
     }
@@ -676,7 +698,9 @@ impl Config {
             card_layout: CardLayout::Horizontal,
             theme: ThemeMode::Dark,
             accent_source: AccentSource::Album,
-            corners: Corners::Medium,
+            // 2026-11-26: cantos "Menos" e a identidade "Ilha" no Windows.
+            corners: Corners::Small,
+            look: Look::Ilha,
             play_shape: Shape::Rounded,
             card_controls: ControlColor::White,
             card_controls_rgb: "#5EB1FF".into(),
@@ -1029,7 +1053,7 @@ version = 5
         let win = table(&Config::windows_defaults());
         let mut changed: Vec<&str> = old.iter().filter(|(k, v)| win.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect();
         changed.sort();
-        assert_eq!(changed, ["accent_source", "bars", "playing_indicator", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
+        assert_eq!(changed, ["accent_source", "bars", "corners", "playing_indicator", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
         let here = if cfg!(any(target_os = "macos", target_os = "linux")) { mac } else { win };
         assert_eq!(table(&Config::default()), here);
     }

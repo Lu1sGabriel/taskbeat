@@ -209,7 +209,7 @@ pub fn theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
         (AccentSource::Album, Some(a)) => readable(a.vibrant, true),
         _ => colors.accent_light,
     };
-    Theme { fg: [1.0; 3], accent, on_accent: on_color(accent), dark: true }
+    Theme { fg: [1.0; 3], accent, on_accent: on_color(accent), dark: true, style: crate::look::Style::of(cfg) }
 }
 
 pub struct NotchFrame<'a> {
