@@ -42,7 +42,8 @@ parado, praticamente não gasta CPU.
 - **"A seguir"**: um cartão com a próxima música quando o player troca sozinho.
 - **Aviso de Caps Lock e Num Lock** bonito, no lugar do nada.
 - **YouTube Music no navegador**: aleatório e repetir funcionam, mesmo o
-  navegador não contando isso ao Windows.
+  navegador não contando isso ao Windows (com a [extensão](extension/README.md)
+  opcional, lidos da própria página).
 - **Atalhos** para abrir seus apps de música.
 - **Do seu jeito**: cores, formatos, tamanhos e posição, com prévia ao vivo.
 - **Em português, inglês, espanhol e alemão.**
@@ -103,6 +104,11 @@ card. Sem notch, fica no meio da barra de menus.
    **Executar assim mesmo**.
 3. Clique em **Instalar** (ou **Atualizar**, se já tiver uma versão). Não precisa
    de administrador.
+
+**Opcional, YouTube Music no navegador:** a [extensão do Taskbeat](extension/README.md)
+(Chrome, Brave, Edge) lê o aleatório e o repetir da própria página do YouTube Music.
+Por enquanto ela não está na loja: carregue a pasta `extension` em
+`brave://extensions` → **Modo do desenvolvedor** → **Carregar sem compactação**.
 
 ### macOS 12 ou mais novo
 

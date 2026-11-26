@@ -131,6 +131,15 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 """)
+out.append("## Extensão do navegador (pasta `extension/`)\n")
+out.append("O jeito de ler e comandar o YouTube Music pela página foi adaptado destes projetos, ambos sob a")
+out.append("licença MIT (texto abaixo). Nenhum arquivo deles foi copiado; o código da extensão é do Taskbeat.\n")
+out.append("- **WebNowPlaying Redux** (https://github.com/keifufu/WebNowPlaying-Redux): o atributo `repeat-mode`")
+out.append("  da barra do player (`ytmusic-player-bar`) e os cliques nos botões `.repeat`/`.shuffle`.")
+out.append("  Copyright 2024 keifufu.")
+out.append("- **YouTube Music Desktop App, de th-ch** (https://github.com/th-ch/youtube-music): o atributo")
+out.append("  `shuffle-on` da barra do player como o estado do aleatório.")
+out.append("  Copyright (c) th-ch <th-ch@users.noreply.github.com>.\n")
 out.append("## Texto da licença MIT\n")
 out.append("""```
 Permission is hereby granted, free of charge, to any person obtaining a copy of

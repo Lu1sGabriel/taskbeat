@@ -227,6 +227,11 @@ static T: &[[&str; 4]] = &[
     ["Fechar sozinho após", "Close automatically after", "Cerrar automáticamente tras", "Automatisch schließen nach"],
     ["Tempo sem o mouse em cima do card", "Time without the mouse over the card", "Tiempo sin el ratón sobre la tarjeta", "Zeit ohne Maus über der Karte"],
     ["Aleatório e repetir", "Shuffle and repeat", "Aleatorio y repetir", "Zufall und Wiederholen"],
+    ["Extensão do navegador", "Browser extension", "Extensión del navegador", "Browser-Erweiterung"],
+    ["Conectada", "Connected", "Conectada", "Verbunden"],
+    ["o aleatório e o repetir do YouTube Music vêm da própria página", "YouTube Music shuffle and repeat come straight from the page", "el aleatorio y la repetición de YouTube Music vienen de la propia página", "Zufall und Wiederholen von YouTube Music kommen direkt von der Seite"],
+    ["Não conectada. Opcional: com a extensão do Taskbeat no Chrome, Brave ou Edge, o aleatório e o repetir do YouTube Music vêm da própria página", "Not connected. Optional: with the Taskbeat extension in Chrome, Brave or Edge, YouTube Music shuffle and repeat come straight from the page", "No conectada. Opcional: con la extensión de Taskbeat en Chrome, Brave o Edge, el aleatorio y la repetición de YouTube Music vienen de la propia página", "Nicht verbunden. Optional: Mit der Taskbeat-Erweiterung in Chrome, Brave oder Edge kommen Zufall und Wiederholen von YouTube Music direkt von der Seite"],
+    ["Instalar extensão", "Install extension", "Instalar extensión", "Erweiterung installieren"],
     ["Aparecem quando o player permite (Spotify, Media Player). Navegadores como Brave e Chrome não permitem", "Shown when the player allows it (Spotify, Media Player). Browsers like Brave and Chrome don't", "Aparecen cuando el reproductor lo permite (Spotify, Media Player). Navegadores como Brave y Chrome no lo permiten", "Erscheinen, wenn der Player es erlaubt (Spotify, Media Player). Browser wie Brave und Chrome erlauben es nicht"],
     // ---- a seguir
     ["Mostrar \"A seguir\"", "Show \"Up next\"", "Mostrar \"A continuación\"", "„Als Nächstes“ anzeigen"],

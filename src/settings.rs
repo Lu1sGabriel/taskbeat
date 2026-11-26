@@ -155,6 +155,8 @@ enum Key {
     GlassTint,
     ArtworkDim,
     BarShape,
+    /// Situação da extensão do navegador (só texto, muda com a conexão).
+    BrowserExt,
 }
 
 #[derive(Clone, Copy)]
@@ -420,6 +422,7 @@ const PAGES: &[Page] = &[
             Section("Players"),
             Row { icon: "\u{E7F4}", title: "Mostrar app de origem", desc: "Selo com o app (Spotify, Brave…) no card, no \"A seguir\" e sobre a capa na barra", key: Key::ShowSource, kind: Kind::Toggle },
             Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "No card e na barra: sempre (apagados quando o player não deixa mudar) ou só quando o player permite. No YouTube Music do navegador valem os botões da própria página", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
+            Row { icon: "\u{E774}", title: "Extensão do navegador", desc: "", key: Key::BrowserExt, kind: Kind::Button("Instalar extensão") },
         ],
     },
     Page {
@@ -440,6 +443,21 @@ const PAGES: &[Page] = &[
         ],
     },
 ];
+
+/// A extensão do navegador está conectada agora?
+fn ext_connected() -> bool {
+    !crate::webext::connected().is_empty()
+}
+
+/// Texto da linha "Extensão do navegador": conectada (e em quais) ou não.
+fn browser_ext_status() -> String {
+    let on = crate::webext::connected();
+    if on.is_empty() {
+        tr("Não conectada. Opcional: com a extensão do Taskbeat no Chrome, Brave ou Edge, o aleatório e o repetir do YouTube Music vêm da própria página").to_string()
+    } else {
+        format!("{} ({}): {}", tr("Conectada"), on.join(", "), tr("o aleatório e o repetir do YouTube Music vêm da própria página"))
+    }
+}
 
 fn idx<T: PartialEq>(list: &[T], v: T) -> i32 {
     list.iter().position(|x| *x == v).unwrap_or(0) as i32
@@ -564,7 +582,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::GlassTint => c.glass_tint,
         Key::ArtworkDim => c.artwork_dim,
         Key::BarShape => idx(BAR_SHAPE_V, c.bar_shape),
-        Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::Advanced => 0,
+        Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::Advanced | Key::BrowserExt => 0,
     }
 }
 
@@ -664,7 +682,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::GlassTint => c.glass_tint = v,
         Key::ArtworkDim => c.artwork_dim = v,
         Key::BarShape => c.bar_shape = pick(BAR_SHAPE_V, i),
-        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::Advanced => {}
+        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::Advanced | Key::BrowserExt => {}
     }
 }
 
@@ -1477,7 +1495,7 @@ impl Ui {
                     }
                 }
                 Kind::Choice(_) | Kind::Slider { .. } | Kind::Button(_) => {
-                    if r.ctl.contains(x, y) {
+                    if r.ctl.contains(x, y) && !(*key == Key::BrowserExt && ext_connected()) {
                         return Some(Hit::Row(ri));
                     }
                 }
@@ -1594,6 +1612,8 @@ impl Ui {
             extra: match kind {
                 Kind::AppList => self.app_list_sig(ri, cfg),
                 Kind::Color => self.picker_sig(ri, cfg, key),
+                // Redesenha quando a extensão conecta ou desconecta.
+                Kind::Button(_) if key == Key::BrowserExt => crate::webext::connected().join(",").bytes().fold(1u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)),
                 _ => 0,
             },
         }
@@ -2077,6 +2097,9 @@ impl Ui {
         let desc = if matches!(kind, Kind::Expander) {
             summary = adv_summary(self.page, r.item);
             summary.as_str()
+        } else if *key == Key::BrowserExt {
+            summary = browser_ext_status();
+            summary.as_str()
         } else {
             tr(desc)
         };
@@ -2096,6 +2119,8 @@ impl Ui {
                 self.draw_slider(cv, r.ctl, (v - min) as f32 / (max - min) as f32, a.hover, en);
                 self.label_right(cv, &value_label(*kind, *key, v), Font::Caption, r.ctl.x - 12.0 * s, r.ctl.cy(), 20.0 * s, fg, 0.75 * en);
             }
+            // Com a extensão conectada, não há o que instalar: só o texto.
+            Kind::Button(_) if *key == Key::BrowserExt && ext_connected() => {}
             Kind::Button(t) => {
                 self.draw_box(cv, r.ctl, a.hover, en);
                 ui::text_center(cv, &mut self.text, tr(t), Font::Body, r.ctl, fg, en);
@@ -3175,6 +3200,12 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 }
                 Kind::Button(_) if key == Key::Licenses => {
                     crate::licenses::open();
+                    Action::Redraw
+                }
+                Kind::Button(_) if key == Key::BrowserExt => {
+                    if !ext_connected() {
+                        crate::webext::open_install_page();
+                    }
                     Action::Redraw
                 }
                 Kind::Button(_) if key == Key::OsdTest => {
