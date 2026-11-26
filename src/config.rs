@@ -536,7 +536,8 @@ const CONFIG_VERSION: u32 = 5;
 impl Default for Config {
     fn default() -> Self {
         let c = Self::windows_defaults();
-        if cfg!(target_os = "macos") { c.with_mac_defaults() } else { c }
+        // No Linux o widget é a mesma ilha do Mac: os padrões dela.
+        if cfg!(any(target_os = "macos", target_os = "linux")) { c.with_mac_defaults() } else { c }
     }
 }
 
@@ -663,10 +664,20 @@ impl Config {
         Some(PathBuf::from(base).join("Taskbeat").join("config.toml"))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     pub fn path() -> Option<PathBuf> {
         let home = std::env::var_os("HOME")?;
         Some(PathBuf::from(home).join("Library").join("Application Support").join("Taskbeat").join("config.toml"))
+    }
+
+    /// Linux: `$XDG_CONFIG_HOME/taskbeat/config.toml` (normalmente `~/.config`).
+    #[cfg(target_os = "linux")]
+    pub fn path() -> Option<PathBuf> {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+        Some(base.join("taskbeat").join("config.toml"))
     }
 
     /// Pasta do nome antigo do app (lida uma vez para migrar as preferências).
@@ -907,7 +918,7 @@ version = 5
         let mut changed: Vec<&str> = old.iter().filter(|(k, v)| win.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect();
         changed.sort();
         assert_eq!(changed, ["accent_source", "bars", "playing_indicator", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
-        let here = if cfg!(target_os = "macos") { mac } else { win };
+        let here = if cfg!(any(target_os = "macos", target_os = "linux")) { mac } else { win };
         assert_eq!(table(&Config::default()), here);
     }
 

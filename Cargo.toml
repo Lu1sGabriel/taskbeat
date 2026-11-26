@@ -42,6 +42,24 @@ objc2-core-video = "0.3.2"
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
 
+# Linux: janela por Wayland (layer-shell) ou X11, os dois em Rust puro; D-Bus
+# (MPRIS e bandeja) e PulseAudio/PipeWire pelas bibliotecas do sistema;
+# decodificadores de imagem em Rust. Texto: fontconfig, FreeType e HarfBuzz
+# do sistema (`src/linux/ft.rs`).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+x11rb = { version = "0.13", features = ["shape", "randr"] }
+dbus = "0.9"
+dbus-crossroads = "0.5"
+libpulse-sys = "1.21"
+zune-jpeg = "0.4"
+zune-png = "0.4"
+zune-core = "0.4"
+image-webp = "0.2"
+
 [profile.release]
 opt-level = 3
 lto = true

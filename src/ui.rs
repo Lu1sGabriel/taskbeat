@@ -502,6 +502,13 @@ thread_local! {
     static VMASKS: RefCell<VMaskCache> = RefCell::new(std::collections::HashMap::new());
 }
 
+/// Máscara do ícone em vetor do glifo `g` (`G_*`), se houver desenho para ele.
+/// No Linux não há fonte de ícones no sistema: o `TextRenderer` desenha assim.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn vector_icon(g: &str, em: f32, w: i32, h: i32) -> Option<std::rc::Rc<Mask>> {
+    vicon_of(g).map(|v| vector_mask(v, em, w, h))
+}
+
 /// Máscara do ícone `v` com `em` px, centrado numa caixa `w`×`h` (guardada).
 fn vector_mask(v: VIcon, em: f32, w: i32, h: i32) -> std::rc::Rc<Mask> {
     let key = (v, em.to_bits(), w, h);

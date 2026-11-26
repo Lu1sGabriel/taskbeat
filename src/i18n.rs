@@ -81,6 +81,23 @@ fn system_lang() -> Lang {
     }
 }
 
+/// Idioma da sessão (variáveis de localidade, na ordem que o gettext usa).
+#[cfg(target_os = "linux")]
+fn system_lang() -> Lang {
+    let first = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .flat_map(|v| v.split(':').map(str::to_string).collect::<Vec<_>>())
+        .find(|v| !v.is_empty() && v != "C" && v != "POSIX" && !v.starts_with("C."))
+        .unwrap_or_default();
+    match first.to_ascii_lowercase().get(..2) {
+        Some("pt") => Lang::Pt,
+        Some("es") => Lang::Es,
+        Some("de") => Lang::De,
+        _ => Lang::En,
+    }
+}
+
 /// Texto no idioma atual (a chave é o texto em português).
 pub fn tr(pt: &'static str) -> &'static str {
     static MAP: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
@@ -505,4 +522,8 @@ static T: &[[&str; 4]] = &[
     ["Segue o macOS ou fixa claro/escuro", "Follows macOS or stays light/dark", "Sigue a macOS o fija claro/oscuro", "Folgt macOS oder bleibt hell/dunkel"],
     ["Só o estado do Caps Lock é observado; nada do que você digita é lido ou guardado", "Only the Caps Lock state is watched; nothing you type is read or stored", "Solo se observa el estado de Bloq Mayús; nada de lo que escribes se lee ni se guarda", "Nur der Status der Feststelltaste wird beobachtet; nichts, was du tippst, wird gelesen oder gespeichert"],
     ["Ligue o aviso de Caps Lock para usar esta opção", "Turn on the Caps Lock alert to use this option", "Activa el aviso de Bloq Mayús para usar esta opción", "Aktiviere den Feststelltasten-Hinweis, um diese Option zu nutzen"],
+    // ---- Linux
+    ["Este player não deixa mudar isso", "This player doesn't allow changing this", "Este reproductor no permite cambiar esto", "Dieser Player lässt das nicht ändern"],
+    ["Widget de música", "Music widget", "Widget de música", "Musik-Widget"],
+    ["Mostrar/esconder o card", "Show/hide the card", "Mostrar/ocultar la tarjeta", "Karte ein-/ausblenden"],
 ];
