@@ -37,6 +37,18 @@ run legacy-open TV_DEMO_MEDIA=1 TASKBEAT_FAKE_NOTCH=196x32 TV_DEMO_FLYOUT=1 TASK
 run legacy-caps TV_DEMO_MEDIA=1 TV_DEMO_CAPS=1 TASKBEAT_FORCE_LEGACY=1
 run legacy-settings TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1 TASKBEAT_FORCE_LEGACY=1
 
+# ---- 1b. Tela em 2x (HiDPI), se o monitor virtual tiver o modo: os mesmos
+# prints como num Mac com tela Retina. Daqui em diante tudo roda nesse modo.
+swift macos/ci-hidpi.swift >"$OUT/hidpi.txt" 2>&1 || echo "hidpi falhou: $?" >>"$OUT/hidpi.txt"
+grep -v '^modo:' "$OUT/hidpi.txt"
+if grep -q '^HiDPI:' "$OUT/hidpi.txt"; then
+    run retina-closed-notch TV_DEMO_MEDIA=1 TASKBEAT_FAKE_NOTCH=196x32
+    run retina-open TV_DEMO_MEDIA=1 TASKBEAT_FAKE_NOTCH=196x32 TV_DEMO_FLYOUT=1
+    run retina-peek TV_DEMO_MEDIA=1 TASKBEAT_FAKE_NOTCH=196x32 TV_DEMO_POPUP=1
+    run retina-settings TV_DEMO_MEDIA=1 TV_DEMO_SETTINGS=1
+    run retina-caps TV_DEMO_MEDIA=1 TV_DEMO_CAPS=1
+fi
+
 # ---- 2. Player de teste no Tocando Agora
 say -o /tmp/taskbeat-ci.aiff "Taskbeat. Testing the now playing island on the notch of the MacBook." || true
 swift macos/ci-nowplaying.swift /tmp/taskbeat-ci.aiff 240 >"$OUT/player.out" 2>&1 &
