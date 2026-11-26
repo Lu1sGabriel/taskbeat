@@ -59,6 +59,8 @@ mod mixer;
 mod overlay;
 #[cfg(windows)]
 mod settings;
+#[cfg(all(windows, test))]
+mod settings_mock;
 #[cfg(windows)]
 mod setup;
 #[cfg(all(windows, test))]

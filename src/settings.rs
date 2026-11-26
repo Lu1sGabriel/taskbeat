@@ -4310,6 +4310,155 @@ mod tests {
         assert!(missing.is_empty(), "sem tradução: {missing:#?}");
     }
 
+    /// Deixa a opção valendo (liga o que ela exige), para a prévia poder mostrá-la.
+    fn satisfy(c: &mut Config, key: Key) {
+        use crate::lyrics::config::{Background as LBg, Layout as LLayout};
+        use lyrics_page::LK;
+        c.show_media = true;
+        c.taskbar_controls = true;
+        c.widget_pill = true;
+        c.show_artist = true;
+        c.next_track_popup = true;
+        c.caps_lock_osd = true;
+        c.num_lock_osd = true;
+        c.show_visualizer = true;
+        c.card_launchers = true;
+        match key {
+            Key::WidgetControlsRgb => c.widget_controls = ControlColor::Custom,
+            Key::CardControlsRgb => c.card_controls = ControlColor::Custom,
+            Key::WidgetIntensity | Key::WidgetGlow => c.widget_tint = WidgetTint::Gradient,
+            Key::WidgetOpacity => c.widget_tint = WidgetTint::Neutral,
+            Key::OsdBlur => c.osd_material = OsdMaterial::Acrylic,
+            Key::BarShape => c.style = Style::Bars,
+            Key::AccentRgb => c.accent_source = AccentSource::Custom,
+            Key::GlassBlur | Key::GlassTint => c.card_style = CardStyle::Glass,
+            Key::ArtworkDim => c.card_style = CardStyle::Artwork,
+            Key::AnimSpeed => c.card_anim = CardAnim::Smooth,
+            Key::Indicator => c.show_visualizer = false,
+            Key::Theme => c.card_style = CardStyle::AlbumColor,
+            Key::Peaks => c.style = Style::Bars,
+            Key::Lyrics(LK::ClickThrough) => c.lyrics.locked = true,
+            Key::Lyrics(LK::Opacity) => c.lyrics.background = LBg::Artwork,
+            Key::Lyrics(LK::Volume | LK::Mixer) => c.lyrics.layout = LLayout::PlayerLyrics,
+            Key::Lyrics(LK::TextAlign) => c.lyrics.layout = LLayout::Lyrics,
+            _ => {}
+        }
+    }
+
+    impl Ui {
+        /// Prévia da página atual inteira (fundo + componente) no tempo `t`, sem janela.
+        fn preview_pixels(&mut self, t: f32) -> (usize, usize, Vec<u32>) {
+            let cfg = self.cfg();
+            let p = &PAGES[self.page];
+            let s = self.scale;
+            let (w, h) = (900.0f32, self.hero_height_at(p, &cfg, s).ceil().max(1.0));
+            let (hw, hh) = (w as usize, h as usize);
+            let local = RectF::new(0.0, 0.0, w, h);
+            let light_tb = self.preview_light(&cfg);
+            let wall_dark = self.wall_dark();
+            let mut bg = vec![0u32; hw * hh];
+            self.hero_static(&mut Canvas::new(hw, hh, &mut bg), local, p.preview, light_tb, wall_dark, s);
+            let key = HeroKey { preview: p.preview, w: hw as i32, h: hh as i32, scale: s.to_bits(), dark: self.dark, mica: self.mica, light_tb, wall_dark };
+            self.hero_bg = Some(Cached { key, w: hw, h: hh, px: bg.clone() });
+            self.backdrop = None;
+            self.frozen_t = Some(t);
+            let mut px = bg;
+            self.draw_preview(&mut Canvas::new(hw, hh, &mut px), local, p.preview, &cfg, s);
+            (hw, hh, px)
+        }
+    }
+
+    /// Toda opção que muda o desenho muda a prévia da página dela. Para cada
+    /// linha, desenha a prévia com o valor de agora e com os outros (em alguns
+    /// instantes, para as prévias animadas) e confere se algum pixel mudou.
+    /// Demora (desenha centenas de prévias): `cargo test --release preview_follows
+    /// -- --ignored --nocapture` lista cada opção e o que não muda.
+    #[test]
+    #[ignore]
+    fn preview_follows_every_visual_option() {
+        use lyrics_page::LK;
+        // Comportamento, botões e textos: não têm o que mostrar na prévia.
+        let not_visual = [
+            Key::WidgetDrag,
+            Key::Autoclose,
+            Key::OnlyMedia,
+            Key::PlayerOnly,
+            Key::Lyrics(LK::Shortcut),
+            Key::Lyrics(LK::HideIdle),
+            Key::Lyrics(LK::HideFullscreen),
+            Key::Lyrics(LK::Online),
+            Key::Lyrics(LK::Offset),
+            Key::Lyrics(LK::ClickThrough),
+        ];
+        // Mostradas por uma demonstração ao mudar (ver `start_demo`).
+        let demo = [Key::AlwaysShow, Key::TrackAnim, Key::IconAnim, Key::CardShuffle];
+        let times = [0.4f32, 1.0, 1.9, 2.6, 3.4, 5.2, 6.2];
+        let shared = Arc::new(Shared::new(Config::default()));
+        // Dois atalhos de mentira (a lista de verdade vem do Windows).
+        *shared.launchers.lock().unwrap() = Arc::new(vec![
+            crate::shared::Launcher { name: "Spotify".into(), id: "Spotify.exe".into(), icon: None },
+            crate::shared::Launcher { name: "VLC".into(), id: "vlc.exe".into(), icon: None },
+        ]);
+        let mut u = Ui::new(shared.clone(), HWND::default(), 1.0, true, false, 0, 0, TextRenderer::new(), None);
+        u.text.set_scale(1.0);
+        let mut report = Vec::new();
+        let mut missing = Vec::new();
+        for (pi, page) in PAGES.iter().enumerate() {
+            if page.preview == Preview::None {
+                continue;
+            }
+            u.page = pi;
+            for item in page.items {
+                let Row { key, kind, title, .. } = item else { continue };
+                let key = *key;
+                if matches!(kind, Kind::Info | Kind::Button(_) | Kind::Expander) || not_visual.contains(&key) {
+                    continue;
+                }
+                if demo.contains(&key) {
+                    report.push(format!("demo  {} › {}", page.name, title));
+                    continue;
+                }
+                let mut base = Config::default();
+                satisfy(&mut base, key);
+                let v0 = get(&base, key);
+                let alts: Vec<i32> = match kind {
+                    Kind::Toggle => vec![1 - v0.clamp(0, 1)],
+                    Kind::Segmented(o) | Kind::Choice(o) | Kind::Anim(o) => (0..o.len() as i32).filter(|v| *v != v0).collect(),
+                    Kind::Slider { min, max, .. } => [*min, *max, (min + max) / 2].into_iter().filter(|v| *v != v0).collect(),
+                    Kind::Color => vec![0xFF2020, 0x20FF40],
+                    Kind::AppList => vec![-1],
+                    _ => vec![],
+                };
+                let shots = |u: &mut Ui, c: &Config| {
+                    // Direto na memória: nada é gravado no disco nem avisado a outras janelas.
+                    *u.shared.config.lock().unwrap() = c.clone();
+                    u.shared.config_version.fetch_add(1, Ordering::Relaxed);
+                    times.iter().map(|t| u.preview_pixels(*t)).collect::<Vec<_>>()
+                };
+                let a = shots(&mut u, &base);
+                let mut changed = false;
+                for v in alts {
+                    let mut c1 = base.clone();
+                    if matches!(kind, Kind::AppList) {
+                        c1.launcher_hidden = vec!["Spotify.exe".into()];
+                    } else {
+                        set(&mut c1, key, v);
+                    }
+                    if shots(&mut u, &c1) != a {
+                        changed = true;
+                        break;
+                    }
+                }
+                report.push(format!("{}  {} › {}", if changed { "ok   " } else { "NÃO " }, page.name, title));
+                if !changed {
+                    missing.push(format!("{} › {}", page.name, title));
+                }
+            }
+        }
+        println!("{}", report.join("\n"));
+        assert!(missing.is_empty(), "a prévia não acompanha: {missing:#?}");
+    }
+
     #[test]
     fn requirements_follow_parents() {
         let c = Config { taskbar_controls: false, ..Config::default() };
