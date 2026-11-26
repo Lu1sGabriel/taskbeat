@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, Interface, PCWSTR, w};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Taskbeat";
+pub(crate) const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Taskbeat";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const ID_EXIT: usize = 199;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -196,16 +196,16 @@ fn config_dir() -> Option<PathBuf> {
 
 // ---------------------------------------------------------------- registro
 
-fn reg_set_sz(key: &str, name: &str, value: &str) -> windows::core::Result<()> {
+pub(crate) fn reg_set_sz(key: &str, name: &str, value: &str) -> windows::core::Result<()> {
     let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(key), &HSTRING::from(name), REG_SZ.0, Some(wide.as_ptr() as _), (wide.len() * 2) as u32).ok() }
 }
 
-fn reg_set_dword(key: &str, name: &str, value: u32) -> windows::core::Result<()> {
+pub(crate) fn reg_set_dword(key: &str, name: &str, value: u32) -> windows::core::Result<()> {
     unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(key), &HSTRING::from(name), REG_DWORD.0, Some(&value as *const u32 as _), 4).ok() }
 }
 
-fn reg_get_sz(key: &str, name: &str) -> Option<String> {
+pub(crate) fn reg_get_sz(key: &str, name: &str) -> Option<String> {
     unsafe {
         let mut buf = vec![0u16; 1024];
         let mut size = (buf.len() * 2) as u32;

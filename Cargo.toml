@@ -28,7 +28,8 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"
     "Win32_Storage_Packaging_Appx",
     "Win32_Storage_FileSystem",
     "Win32_Storage_Xps",
-    "Win32_Networking_WinHttp"] }
+    "Win32_Networking_WinHttp",
+    "Win32_Security_Cryptography"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
@@ -43,6 +44,11 @@ objc2-core-audio-types = "0.3.2"
 objc2-core-video = "0.3.2"
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
+
+[features]
+# Teste de ponta a ponta do atualizador: aceita um servidor local e uma chave
+# de teste (variáveis TASKBEAT_UPDATE_*). Nunca usar nas releases.
+e2e = []
 
 [profile.release]
 opt-level = 3
