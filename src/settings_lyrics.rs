@@ -13,6 +13,7 @@ use crate::lyrics::config::{Align as LAlign, Background, Hotkey, Layout, Positio
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum LK {
     Show,
+    CardButton,
     Content,
     Fullscreen,
     Place,
@@ -81,11 +82,13 @@ pub(super) const PAGE: Page = Page {
     preview: Preview::Lyrics,
     header: None,
     items: &[
+        // Primeira linha da página, num grupo só dela: o liga/desliga.
+        Row { icon: "\u{E7F0}", title: "Letra na tela", desc: "Liga e desliga a janela da letra; também pelo botão no card, pelo menu da bandeja e pelo atalho", key: Key::Lyrics(Show), kind: Kind::Toggle },
         Section("Sobreposição"),
-        Row { icon: "\u{E7F0}", title: "Mostrar a letra na tela", desc: "Janela fixa, sempre por cima, que dá para arrastar; o atalho mostra e esconde", key: Key::Lyrics(Show), kind: Kind::Toggle },
         Row { icon: "\u{E8A9}", title: "Conteúdo", desc: "Compacto (mini player e letra), só a letra, player e letra, só o player ou legenda", key: Key::Lyrics(Content), kind: Kind::Choice(LAYOUTS) },
         Row { icon: "\u{E740}", title: "Tela cheia", desc: "A letra grande no monitor da janela, com o fundo da capa em movimento; Esc volta", key: Key::Lyrics(Fullscreen), kind: Kind::Button("Abrir") },
         Row { icon: "\u{E765}", title: "Atalho", desc: "Mostra e esconde; com Shift, trava e destrava a posição", key: Key::Lyrics(Shortcut), kind: Kind::Choice(HOTKEYS) },
+        Row { icon: "\u{E7F0}", title: "Botão no card", desc: "Ícone na linha do volume do card aberto que mostra e esconde a letra", key: Key::Lyrics(CardButton), kind: Kind::Toggle },
         Section("Posição"),
         Row { icon: "\u{E7C4}", title: "Onde fica", desc: "Também arrastando a janela: perto de um dos lugares prontos ela gruda nele", key: Key::Lyrics(Place), kind: Kind::Choice(POSITIONS) },
         Row { icon: "\u{E7F4}", title: "Monitor", desc: "Em qual monitor a janela fica (arrastá-la para outro também muda)", key: Key::Lyrics(Monitor), kind: Kind::Choice(MONITORS) },
@@ -117,6 +120,7 @@ pub(super) fn get(c: &Config, k: LK) -> i32 {
     let l = &c.lyrics;
     match k {
         Show => l.show as i32,
+        CardButton => l.card_button as i32,
         Content => idx(LAYOUT_V, l.layout),
         Place => idx(POSITION_V, l.position),
         Monitor => l.monitor.clamp(0, MONITORS.len() as i32 - 1),
@@ -147,6 +151,7 @@ pub(super) fn set(c: &mut Config, k: LK, v: i32) {
     let l = &mut c.lyrics;
     match k {
         Show => l.show = v != 0,
+        CardButton => l.card_button = v != 0,
         Content => l.layout = pick(LAYOUT_V, v),
         Place => l.position = pick(POSITION_V, v),
         Monitor => l.monitor = v.clamp(0, MONITORS.len() as i32 - 1),
@@ -243,21 +248,74 @@ fn preview_geometry(tr: Option<&mut TextRenderer>, cfg: &Config, s: f32, frame: 
     view::geometry(lc, &cc, s, caption, None)
 }
 
+/// Faixa embaixo da janela na prévia: ligada ou não, e o atalho (ou o aviso
+/// de que o Windows recusou o atalho escolhido).
+const STATUS_GAP: f32 = 8.0;
+const STATUS_H: f32 = 26.0;
+
 /// Altura da prévia (px).
 pub(super) fn preview_height(cfg: &Config, s: f32) -> f32 {
     SAMPLE.with(|(l, lines)| {
         let frame = view::LyricFrame { lyrics: l, lines, focus: 2.0, scroll: 0.0 };
-        preview_geometry(None, cfg, s, &frame).h + 8.0 * s
+        preview_geometry(None, cfg, s, &frame).h + (12.0 + STATUS_GAP + STATUS_H) * s
     })
 }
 
-/// Retângulo da janela dentro da prévia (o mesmo que `draw_preview` usa).
+/// Retângulo da janela dentro da prévia (o mesmo que `draw_preview` usa),
+/// com a faixa do estado embaixo.
 pub(super) fn preview_rect(r: RectF, cfg: &Config, s: f32) -> RectF {
     SAMPLE.with(|(l, lines)| {
         let frame = view::LyricFrame { lyrics: l, lines, focus: 2.0, scroll: 0.0 };
         let g = preview_geometry(None, cfg, s, &frame);
-        RectF::new(r.cx() - g.w / 2.0, r.y + 4.0 * s, g.w, g.h)
+        let status = status_band(r, g.h, s);
+        let x0 = (r.cx() - g.w / 2.0).min(status.x);
+        let x1 = (r.cx() + g.w / 2.0).max(status.right());
+        RectF::new(x0, r.y + 4.0 * s, x1 - x0, status.bottom() - r.y - 4.0 * s)
     })
+}
+
+/// Faixa do estado (a largura toda da prévia, embaixo da janela de exemplo).
+fn status_band(r: RectF, win_h: f32, s: f32) -> RectF {
+    RectF::new(r.x + 16.0 * s, r.y + 4.0 * s + win_h + STATUS_GAP * s, r.w - 32.0 * s, STATUS_H * s)
+}
+
+/// O que a faixa do estado diz: (ícone, texto, é aviso).
+fn status_text(cfg: &Config) -> (&'static str, String, bool) {
+    let lc = &cfg.lyrics;
+    let hk = crate::lyrics_overlay::hotkey_label(lc.hotkey, false);
+    if let Some(k) = hk.filter(|_| crate::lyrics_overlay::hotkey_refused(lc.hotkey)) {
+        return ("\u{E7BA}", tr("O Windows recusou o atalho {}: outro programa já usa essa combinação. Escolha outro em \"Atalho\"").replace("{}", k), true);
+    }
+    let text = match (lc.show, hk) {
+        (true, Some(k)) => tr("Na tela · {} esconde").replace("{}", k),
+        (true, None) => tr("Na tela").to_string(),
+        (false, Some(k)) => tr("Desligada · ligue em \"Letra na tela\", logo abaixo, ou com {}").replace("{}", k),
+        (false, None) => tr("Desligada · ligue em \"Letra na tela\", logo abaixo").to_string(),
+    };
+    (if lc.show { "\u{E7F0}" } else { "\u{E7E8}" }, text, false)
+}
+
+/// Pílula do estado, centrada na faixa.
+fn draw_status(cv: &mut Canvas, tr: &mut TextRenderer, band: RectF, cfg: &Config, colors: &Colors, s: f32) {
+    let (icon, text, warn) = status_text(cfg);
+    let dark = !colors.light_taskbar;
+    let ink: Rgb = match (warn, dark) {
+        (true, true) => [1.0, 0.78, 0.36],
+        (true, false) => [0.60, 0.33, 0.0],
+        (false, true) => [1.0; 3],
+        (false, false) => [0.05, 0.06, 0.12],
+    };
+    let h = band.h;
+    let ic = 16.0 * s;
+    let max_tw = (band.w - ic - 40.0 * s).max(40.0 * s);
+    let tw = tr.mask(&text, Font::Caption, max_tw as i32, (20.0 * s) as i32, Align::Left).used_width().min(max_tw);
+    let w = (ic + 8.0 * s + tw + 26.0 * s).round();
+    let p = RectF::new((band.cx() - w / 2.0).round(), band.y.round(), w, h.round());
+    cv.fill_round(p, h / 2.0, if dark { [0.0; 3] } else { [1.0; 3] }, if dark { 0.55 } else { 0.78 });
+    cv.stroke_round(p, h / 2.0, s, if warn { ink } else if dark { [1.0; 3] } else { [0.0; 3] }, if warn { 0.55 } else { 0.12 });
+    let x = p.x + 13.0 * s;
+    ui::glyph(cv, tr, RectF::new(x, p.y, ic, h), icon, Font::IconSmall, ink, 0.95);
+    ui::text(cv, tr, &text, Font::Caption, x + ic + 8.0 * s, p.y + (h - 20.0 * s) / 2.0, max_tw, 20.0 * s, ink, 0.92);
 }
 
 /// A sobreposição na prévia, com a música de agora (ou a de exemplo) e a letra de exemplo.
@@ -296,7 +354,13 @@ pub(super) fn draw_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg
         };
         let mut sub = SubCanvas::new(r.cx() - g.w / 2.0, r.y + 4.0 * s, g.w, g.h);
         view::draw(&mut sub.canvas(), tr, &g, &v);
-        sub.commit(cv);
+        // Desligada: a janela de exemplo apagada (a faixa embaixo diz como ligar).
+        if lc.show {
+            sub.commit(cv);
+        } else {
+            sub.commit_alpha(cv, 0.32);
+        }
         tr.set_scale(s);
+        draw_status(cv, tr, status_band(r, g.h, s), cfg, colors, s);
     });
 }
