@@ -1186,6 +1186,9 @@ impl St {
             self.shared.update_config(|c| c.lyrics.show = true);
         }
         self.fullscreen = on;
+        // As máscaras de texto da tela cheia são enormes: não ficam guardadas
+        // depois (nem as da janela durante ela).
+        self.tr = None;
         self.anim = None;
         self.hover = None;
         self.pressed = None;
