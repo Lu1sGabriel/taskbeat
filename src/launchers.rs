@@ -83,6 +83,13 @@ const KNOWN: &[(&str, &[&str])] = &[
 /// (o antigo Groove, que também toca vídeo) e o VLC. Escondidos por padrão.
 const GENERAL: &[&str] = &["media player", "vlc media player"];
 
+/// App de música conhecido (Spotify, YouTube Music, Shazam, Apple Music,
+/// Deezer…), e não um player geral ou de vídeo nem um navegador: tem a vez
+/// na escolha da música que o widget mostra (`media`).
+pub fn is_music(name: &str, aumid: &str) -> bool {
+    known(name, aumid).is_some() && !general(name, aumid)
+}
+
 /// Player geral ou de vídeo (não aparece sozinho como atalho).
 fn general(name: &str, aumid: &str) -> bool {
     known(name, aumid).is_some_and(|k| GENERAL.contains(&KNOWN[k].0))
