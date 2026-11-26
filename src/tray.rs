@@ -242,7 +242,7 @@ fn show_menu(hwnd: HWND) {
     }
     // Menus da bandeja seguem o tema do sistema (o da barra de tarefas).
     let dark = !system::taskbar_is_light();
-    let opts = menu::Options { dark, accent: system::app_accent(dark), min_width: 260.0 };
+    let opts = menu::Options { dark, accent: system::app_accent(dark), min_width: 260.0, style: crate::look::Style::of(&shared().config()) };
     let mut playing_override: Option<bool> = None;
     let cmd = menu::popup(hwnd, menu_entries(), menu::Anchor::Cursor(pt), opts, &mut |id| {
         let s = shared();

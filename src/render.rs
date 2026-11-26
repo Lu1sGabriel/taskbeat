@@ -613,6 +613,7 @@ impl<'a> Canvas<'a> {
     }
 
     /// Preenche só a área de recorte com um valor cru.
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn fill_clip(&mut self, v: u32) {
         let (x0, y0, x1, y1) = self.clip;
         for y in y0..y1 {

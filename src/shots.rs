@@ -990,3 +990,87 @@ fn live_settings() {
         println!("{} ({} quadros)", path.display(), frames.len());
     }
 }
+
+/// As peças do app nos três visuais (colunas Palco, Estúdio, Ilha; cantos
+/// "Menos"): widget na barra, card, "A seguir", aviso de teclas e letra.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test looks_sheet -- --ignored`
+#[test]
+#[ignore]
+fn looks_sheet() {
+    use crate::lyrics::config::{Background, Layout, LyricsConfig};
+    const SC: f32 = 1.5;
+    let media = ui::sample_media();
+    let pb = playback(&media);
+    let mut tr = TextRenderer::new();
+    tr.set_scale(SC);
+    let looks = [Look::Palco, Look::Estudio, Look::Ilha];
+    let col_w = 560.0 * SC;
+    let row_h = [70.0 * SC, 270.0 * SC, 120.0 * SC, 120.0 * SC, 330.0 * SC];
+    let (iw, ih) = (col_w * 3.0, 44.0 * SC + row_h.iter().sum::<f32>());
+    let mut layers: Vec<(f32, f32, (usize, usize, Vec<u32>))> = Vec::new();
+    let lrc = "[00:02.00]As luzes da cidade acendem devagar\n[00:04.40]E o rádio toca a nossa canção\n[00:06.80]Corre comigo até o sol nascer\n[00:09.20]Ninguém vai dormir esta noite";
+    let lines = crate::lyrics::with_gaps(&crate::lyrics::parse_lrc(lrc));
+    let lyr = crate::lyrics::Lyrics::Synced(crate::lyrics::parse_lrc(lrc));
+    for (k, look) in looks.into_iter().enumerate() {
+        let cfg = Config { look, corners: Corners::Small, ..Config::default() };
+        let c = colors(&cfg, &media);
+        let x0 = k as f32 * col_w + 20.0 * SC;
+        let mut y = 44.0 * SC;
+        // Widget na barra.
+        let wl = WLayout::build(SC, 40.0 * SC, &cfg, true, false);
+        let widget = render(wl.width, 40.0 * SC, |cv| {
+            let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact { hover: Some(ui::Hit::Next), ..Default::default() }, pb, time: 1.0, viz: None, flyout_open: false, s: SC, change: None, launchers: &[] };
+            ui::draw_widget(cv, &mut tr, &wl, &f);
+        });
+        layers.push((x0, y + 15.0 * SC, widget));
+        y += row_h[0];
+        // Card.
+        let cl = CLayout::build(SC, &cfg, true);
+        let card = render(cl.w, cl.h, |cv| {
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: SC, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
+            ui::draw_card(cv, &mut tr, &cl, &f);
+        });
+        layers.push((x0 - ui::SHADOW_MARGIN * SC, y - 10.0 * SC, card));
+        y += row_h[1];
+        // Aviso de teclas (sólido, para ver o acabamento).
+        let ocfg = Config { osd_material: OsdMaterial::Solid, osd_theme: ThemeMode::Dark, ..cfg.clone() };
+        let (ow, oh) = ui::osd_size(SC, &ocfg);
+        let osd = render(ow, oh, |cv| {
+            let oc = colors(&ocfg, &MediaInfo::default());
+            let th = ui::osd_theme(&ocfg, &oc);
+            ui::draw_osd(cv, &mut tr, &ocfg, &oc, &th, SC, "Caps Lock", false, true, 1.0, None);
+        });
+        layers.push((x0 - ui::SHADOW_MARGIN * SC, y - 14.0 * SC, osd));
+        y += row_h[2];
+        // "A seguir".
+        let (uw, uh) = ui::upnext_size(SC);
+        let up = render(uw, uh, |cv| {
+            let th = ui::card_theme(&cfg, &c, &media);
+            ui::draw_upnext(cv, &mut tr, &cfg, &c, &media, &th, SC, 2.5, cfg.popup_secs as f32 + 0.5, None);
+        });
+        layers.push((x0 - 20.0 * SC, y - 18.0 * SC, up));
+        y += row_h[3];
+        // Letra (compacta).
+        let lc = LyricsConfig { layout: Layout::Compact, background: Background::Artwork, ..Default::default() };
+        let cc = crate::lyrics_view::card_config(&cfg, &lc);
+        let frame = crate::lyrics_view::LyricFrame { lyrics: &lyr, lines: &lines, focus: 2.0, scroll: 0.0 };
+        let g = crate::lyrics_view::geometry(&lc, &cc, SC, (0.0, 0.0), None);
+        let lyr_img = render(g.w, g.h, |cv| {
+            let v = crate::lyrics_view::View { card_cfg: &cc, lc: &lc, colors: &c, media: &media, pb, it: Interact::default(), hover: None, tools: 1.0, bg_time: None, hires: None, change: None, mixer: None, lyr_alpha: 1.0, tip: None, toast: None, frame, s: SC };
+            crate::lyrics_view::draw(cv, &mut tr, &g, &v);
+        });
+        layers.push((x0 - ui::SHADOW_MARGIN * SC, y - 10.0 * SC, lyr_img));
+    }
+    let img = render(iw, ih, |cv| {
+        busy_wallpaper(cv, RectF::new(0.0, 0.0, iw, ih), 0.0);
+        for (k, name) in ["Palco", "Estúdio", "Ilha"].iter().enumerate() {
+            ui::text(cv, &mut tr, name, Font::Display, k as f32 * col_w + 24.0 * SC, 10.0 * SC, 300.0 * SC, 28.0 * SC, [1.0; 3], 1.0);
+        }
+        // Barra de tarefas atrás dos widgets.
+        cv.fill_rrect(0.0, 44.0 * SC + 11.0 * SC, iw, 44.0 * SC + 11.0 * SC + 48.0 * SC, 0.0, 0.96, [0.11, 0.11, 0.12]);
+        for (x, y, l) in layers {
+            blit(cv, x, y, l);
+        }
+    });
+    save_png("visuais.png", img.0, img.1, &img.2);
+}

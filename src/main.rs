@@ -21,6 +21,7 @@ mod dsp;
 mod http;
 mod i18n;
 mod licenses;
+mod look;
 mod lyrics;
 mod notch;
 #[cfg(test)]
@@ -61,6 +62,8 @@ mod mixer;
 mod overlay;
 #[cfg(windows)]
 mod settings;
+#[cfg(all(windows, test))]
+mod settings_mock;
 #[cfg(windows)]
 mod setup;
 #[cfg(all(windows, test))]

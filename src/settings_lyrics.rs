@@ -10,7 +10,7 @@ use crate::lyrics_view as view;
 use crate::lyrics::config::{Align as LAlign, Background, Hotkey, Layout, Position, ZOOM_MAX, ZOOM_MIN};
 
 /// As opções da página (dentro de `Key::Lyrics`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum LK {
     Show,
     CardButton,
@@ -257,7 +257,9 @@ fn preview_geometry(tr: Option<&mut TextRenderer>, cfg: &Config, s: f32, frame: 
         (Layout::Caption, None) => (380.0 * s, 58.0 * s),
         _ => (0.0, 0.0),
     };
-    view::geometry(lc, &cc, s, caption, None)
+    // Mixer (fechado) nos conteúdos com o player, como na janela de verdade.
+    let mixer = (lc.mixer && matches!(lc.layout, Layout::Player | Layout::PlayerLyrics)).then_some((0, 0.0, 0.0));
+    view::geometry(lc, &cc, s, caption, mixer)
 }
 
 /// Faixa embaixo da janela na prévia: ligada ou não, e o atalho (ou o aviso
@@ -331,8 +333,10 @@ fn draw_status(cv: &mut Canvas, tr: &mut TextRenderer, band: RectF, cfg: &Config
 }
 
 /// A sobreposição na prévia, com a música de agora (ou a de exemplo) e a letra de exemplo.
+/// `tr` é só da prévia da letra: fica na escala dela (trocar a escala apaga o cache).
+/// `tools`: a barrinha de cima (travar, tela cheia, fechar) à mostra (0..1).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn draw_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg: &Config, colors: &Colors, media: &MediaInfo, pb: Playback, s: f32, t: f32) {
+pub(super) fn draw_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg: &Config, colors: &Colors, media: &MediaInfo, pb: Playback, s: f32, t: f32, tools: f32) {
     SAMPLE.with(|(l, lines)| {
         let lines = crate::lyrics::with_gaps(lines);
         let n_text = lines.len();
@@ -353,7 +357,7 @@ pub(super) fn draw_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg
             pb,
             it: Interact::default(),
             hover: None,
-            tools: 0.0,
+            tools,
             bg_time: None,
             hires: None,
             change: None,
@@ -374,5 +378,60 @@ pub(super) fn draw_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg
         }
         tr.set_scale(s);
         draw_status(cv, tr, status_band(r, g.h, s), cfg, colors, s);
+    });
+}
+
+/// Tela cheia da letra em miniatura (no retângulo `r`), com o fundo animado.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_fullscreen_preview(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, cfg: &Config, colors: &Colors, media: &MediaInfo, pb: Playback, s: f32, t: f32) {
+    SAMPLE.with(|(l, lines)| {
+        let lines = crate::lyrics::with_gaps(lines);
+        let n_text = lines.len();
+        let frame = view::LyricFrame { lyrics: l, lines: &lines, focus: preview_focus(t, n_text), scroll: 0.0 };
+        let lc = &cfg.lyrics;
+        let cc = view::card_config(cfg, lc);
+        // Um monitor de ~1000 px de largura, reduzido para caber.
+        let fs = (r.w / 1000.0).clamp(0.25, 1.0);
+        tr.set_scale(fs);
+        let g = view::fullscreen_geometry(r.w, r.h, fs);
+        let mut m2 = media.clone();
+        m2.dur = m2.dur.max(1.0);
+        let v = view::View {
+            card_cfg: &cc,
+            lc,
+            colors,
+            media: &m2,
+            pb,
+            it: Interact::default(),
+            hover: None,
+            tools: 0.0,
+            bg_time: lc.animated_bg.then_some(t),
+            hires: None,
+            change: None,
+            mixer: None,
+            lyr_alpha: 1.0,
+            tip: None,
+            toast: None,
+            frame,
+            s: fs,
+        };
+        let mut sub = SubCanvas::new(r.x, r.y, r.w, r.h);
+        view::draw(&mut sub.canvas(), tr, &g, &v);
+        let rad = crate::look::Style::of(cfg).scale(8.0 * s);
+        let mut clip = sub;
+        // Cantos do "monitor".
+        let (w, h) = (clip.w, clip.h);
+        let mut mask = vec![0u32; w * h];
+        {
+            let mut mc = Canvas::new(w, h, &mut mask);
+            mc.fill_round(RectF::new(0.0, 0.0, w as f32, h as f32), rad, [1.0; 3], 1.0);
+        }
+        for (p, m) in clip.px.iter_mut().zip(&mask) {
+            let a = (m >> 24) & 0xff;
+            if a < 255 {
+                *p = crate::render::scale_px(*p, a);
+            }
+        }
+        clip.commit(cv);
     });
 }
