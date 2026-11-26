@@ -167,15 +167,15 @@ mod imp {
     }
 }
 
-// ---------------------------------------------------------------- Mac
+// ---------------------------------------------------------------- Mac e Linux
 
-#[cfg(target_os = "macos")]
+#[cfg(not(windows))]
 mod imp {
     use super::{Response, Url};
     use std::process::Command;
 
-    /// O `curl` que vem com o macOS (7.79 no macOS 12): `%{stderr}` no `-w`
-    /// manda o código HTTP para a saída de erro e o corpo fica intacto.
+    /// O `curl` do sistema (7.79 no macOS 12; 7.81 no Ubuntu 22.04): `%{stderr}`
+    /// no `-w` manda o código HTTP para a saída de erro e o corpo fica intacto.
     pub fn get(u: &Url, ua: &str, headers: &[(&str, &str)], max: usize) -> Result<Response, String> {
         let url = format!("{}://{}:{}{}", if u.secure { "https" } else { "http" }, u.host, u.port, u.path);
         let proto = if u.secure { "=https" } else { "=http,https" };

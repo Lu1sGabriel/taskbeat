@@ -514,6 +514,9 @@ fn offer(shared: &Arc<Shared>, o: Offer, manual: bool) {
         let _ = (shared, manual);
         crate::mac::update::offer(o);
     }
+    // Linux: ainda sem releases (a atualização nem é ligada lá).
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = (shared, o, manual);
 }
 
 /// Resultado de "Procurar agora" sem versão nova (ou com erro).
@@ -525,6 +528,8 @@ fn tell(shared: &Arc<Shared>, result: Result<(), String>) {
         let _ = shared;
         crate::mac::update::tell(result);
     }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = (shared, result);
 }
 
 /// Thread da atualização: procura ~30 s depois de abrir e depois uma vez por
