@@ -18,6 +18,7 @@ mod config;
 mod dsp;
 mod i18n;
 mod licenses;
+mod lyrics;
 mod notch;
 #[cfg(test)]
 mod png;
