@@ -8,7 +8,7 @@
 //
 // Mensagens para o Taskbeat:
 //   {t:"hello", browser, version}
-//   {t:"player", id, title, artist, album, playing, shuffle, repeat}
+//   {t:"player", id, title, artist, album, playing, shuffle, repeat, art}
 //   {t:"gone", id}
 // Do Taskbeat (ou do programa que faz a ponte):
 //   {t:"host"}              o programa abriu

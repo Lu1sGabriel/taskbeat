@@ -45,6 +45,8 @@ mod appicon;
 #[cfg(windows)]
 mod audio;
 #[cfg(windows)]
+mod cover;
+#[cfg(windows)]
 mod launchers;
 #[cfg(windows)]
 mod lyrics_bg;

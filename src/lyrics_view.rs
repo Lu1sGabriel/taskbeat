@@ -235,13 +235,13 @@ pub const EDGE_B: u8 = 8;
 /// Linha do volume do compacto (px lógicos).
 const COMPACT_VOL: f32 = 24.0;
 
-/// Que medidas o layout deixa mudar arrastando: (largura, altura). O player
-/// tem o tamanho do card e a legenda acompanha o texto.
+/// Que medidas o layout deixa mudar arrastando: (largura, altura). "Só o
+/// player" tem a altura do card e a legenda acompanha o texto.
 pub fn resizable(layout: Layout) -> (bool, bool) {
     match layout {
-        Layout::Compact | Layout::Lyrics => (true, true),
-        Layout::PlayerLyrics => (false, true),
-        Layout::Player | Layout::Caption => (false, false),
+        Layout::Compact | Layout::Lyrics | Layout::PlayerLyrics => (true, true),
+        Layout::Player => (true, false),
+        Layout::Caption => (false, false),
     }
 }
 
@@ -254,7 +254,9 @@ fn size_limits(lc: &LyricsConfig) -> ((f32, f32), (f32, f32)) {
             let min_h = 74.0 + if lc.show_time { 14.0 } else { 0.0 } + if lc.volume { COMPACT_VOL } else { 0.0 } + 40.0;
             ((280.0, 1600.0), (min_h, 1200.0))
         }
-        Layout::PlayerLyrics => ((0.0, 0.0), (60.0, 1000.0)),
+        // O player não fica mais estreito que o card.
+        Layout::PlayerLyrics => ((ui::CARD_W, 1200.0), (60.0, 1000.0)),
+        Layout::Player => ((ui::CARD_W, 1200.0), (0.0, 0.0)),
         _ => ((0.0, 0.0), (0.0, 0.0)),
     }
 }
@@ -368,7 +370,8 @@ pub fn geometry(lc: &LyricsConfig, card_cfg: &Config, s: f32, caption: (f32, f32
             g.lyr = RectF::new(g.card.x + pad + 2.0 * s, top, w - 2.0 * pad - 4.0 * s, g.card.bottom() - top - 8.0 * s);
         }
         Layout::Player | Layout::PlayerLyrics => {
-            let mut l = CLayout::build(s, card_cfg, true);
+            let width = (lc.width > 0).then(|| custom(lc.width, ui::CARD_W, lw, s));
+            let mut l = CLayout::build_w(s, card_cfg, true, width);
             l.times = lc.show_time;
             l.center_text = true;
             let mut l = l.with_mixer(mixer.map(|m| m.0), mixer.map(|m| m.1).unwrap_or(0.0), mixer.map(|m| m.2).unwrap_or(0.0), 5, s);
@@ -1286,6 +1289,30 @@ mod tests {
     use crate::lyrics::config::Position;
     use crate::render::lerp3;
 
+    /// O player (com ou sem a letra) estica na largura: o card acompanha, os
+    /// botões ficam do tamanho de sempre no meio da coluna do título, e a
+    /// borda da direita é pega para arrastar. Nunca fica mais estreito que o card.
+    #[test]
+    fn player_estica_na_largura() {
+        let base = Config::default();
+        for layout in [Layout::PlayerLyrics, Layout::Player] {
+            let lc0 = LyricsConfig { layout, ..Default::default() };
+            let cc = card_config(&base, &lc0);
+            let g0 = geometry(&lc0, &cc, 1.0, (0.0, 0.0), None);
+            let lc = LyricsConfig { width: 560, ..lc0.clone() };
+            let g = geometry(&lc, &cc, 1.0, (0.0, 0.0), None);
+            assert_eq!(g.card.w, 560.0, "{layout:?}");
+            let (l0, l) = (g0.cl.as_ref().unwrap(), g.cl.as_ref().unwrap());
+            assert!((l.next.x - l.prev.x - (l0.next.x - l0.prev.x)).abs() < 0.01, "{layout:?}: botões com o espaçamento de sempre");
+            assert!((l.play.cx() - l.title.cx()).abs() < 0.5, "{layout:?}: play no meio da coluna do título");
+            assert!(l.seek.unwrap().w > l0.seek.unwrap().w + 150.0, "{layout:?}: o progresso estica");
+            assert_ne!(resize_edge(&g, &lc, g.card.right() - 2.0, g.card.cy(), 1.0) & EDGE_R, 0, "{layout:?}");
+            // Arrastando: a largura volta igual; mais estreito que o card, fica no card.
+            assert_eq!(size_for(&g, &lc, 560.0, g.card.h, 1.0).0, 560);
+            assert_eq!(size_for(&g, &lc, 200.0, g.card.h, 1.0).0, ui::CARD_W as i32);
+        }
+    }
+
     /// Os nove quadrados das guias nunca se sobrepõem. A letra alta (370 x 450)
     /// num monitor de 1920 x 1018 cruzava os de cima com os do meio; agora eles
     /// encolhem para a sua terça parte. Uma janela pequena fica no lugar exato
@@ -1400,6 +1427,7 @@ mod tests {
             ("lyrics-tools", Layout::Lyrics, Background::Artwork, 3.0, 1.0, false),
             ("player", Layout::Player, Background::Artwork, 3.0, 0.0, false),
             ("player-lyrics", Layout::PlayerLyrics, Background::Artwork, 4.0, 0.0, false),
+            ("player-lyrics-wide", Layout::PlayerLyrics, Background::Artwork, 4.0, 0.0, false),
             ("compact", Layout::Compact, Background::Artwork, 3.0, 0.0, false),
             ("compact-tools", Layout::Compact, Background::Artwork, 3.0, 1.0, false),
             ("compact-album", Layout::Compact, Background::AlbumColor, 0.0, 0.0, false),
@@ -1409,7 +1437,8 @@ mod tests {
             ("lyrics-notfound", Layout::Lyrics, Background::Dark, 0.0, 0.0, true),
         ];
         for (name, layout, bg, focus, tools, notfound) in cases {
-            let lc = LyricsConfig { layout, background: bg, position: Position::TopRight, ..Default::default() };
+            let width = if name.ends_with("-wide") { 560 } else { 0 };
+            let lc = LyricsConfig { layout, background: bg, position: Position::TopRight, width, ..Default::default() };
             let cc = card_config(&base, &lc);
             let l = if notfound { &Lyrics::NotFound } else { &lyr };
             let frame = LyricFrame { lyrics: l, lines: &lines, focus, scroll: 0.0 };

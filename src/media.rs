@@ -664,6 +664,18 @@ mod tests {
         assert_eq!(choose(&[], false), None);
     }
 
+    /// Tamanho da capa que o Windows entrega para a música tocando agora:
+    /// `cargo test capa_da_sessao_agora -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn capa_da_sessao_agora() {
+        unsafe {
+            let _ = super::CoInitializeEx(None, super::COINIT_MULTITHREADED);
+        }
+        let c = super::current_cover(4096);
+        println!("capa: {:?}", c.map(|(t, i)| (t, i.w, i.h)));
+    }
+
     #[test]
     fn apps_de_musica() {
         use crate::launchers::is_music;

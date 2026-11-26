@@ -1920,8 +1920,18 @@ pub struct CLayout {
     pub center_text: bool,
 }
 
+/// Largura do card aberto na horizontal (px lógicos).
+pub const CARD_W: f32 = 372.0;
+
 impl CLayout {
     pub fn build(s: f32, cfg: &Config, has_seek: bool) -> Self {
+        Self::build_w(s, cfg, has_seek, None)
+    }
+
+    /// Como `build`, com outra largura (px, no mínimo `CARD_W`) no card
+    /// horizontal: o progresso e o volume esticam; os botões ficam com o
+    /// tamanho de sempre, no meio da coluna do título (o player da letra).
+    pub fn build_w(s: f32, cfg: &Config, has_seek: bool, width: Option<f32>) -> Self {
         let m = SHADOW_MARGIN * s;
         let pad = 16.0 * s;
         let mut l = CLayout { radius: Style::of(cfg).card_radius() * s, vertical: cfg.card_layout == CardLayout::Vertical, times: true, ..Default::default() };
@@ -1936,13 +1946,16 @@ impl CLayout {
         };
         let (cw, mut y);
         if !l.vertical {
-            cw = 372.0 * s;
+            cw = width.map_or(CARD_W * s, |w| w.max(CARD_W * s));
             let art = 112.0 * s;
             l.art = RectF::new(m + pad, m + pad, art, art);
             let tx = l.art.right() + 18.0 * s;
             let tw = m + cw - pad - tx;
             let by = l.art.bottom() - 40.0 * s;
-            (l.shuffle, l.prev, l.play, l.next, l.repeat) = row(tx, tx + tw, by, 40.0 * s, 9.0 * s);
+            // Mais largo que o normal: a fileira fica do tamanho de sempre, no meio da coluna.
+            let rw = tw.min(m + CARD_W * s - pad - tx);
+            let rx = tx + (tw - rw) / 2.0;
+            (l.shuffle, l.prev, l.play, l.next, l.repeat) = row(rx, rx + rw, by, 40.0 * s, 9.0 * s);
             l.play_size = 38.0 * s;
             // Título e artista ficam centralizados entre o topo da capa e os
             // botões; `draw_card` sobe um pouco se houver álbum.

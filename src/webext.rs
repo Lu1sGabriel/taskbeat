@@ -135,6 +135,9 @@ pub struct PlayerMsg {
     /// "NONE", "ALL" ou "ONE".
     #[serde(default)]
     pub repeat: Option<String>,
+    /// Endereço da capa em alta resolução (extensão 1.1+; vazio nas antigas).
+    #[serde(default)]
+    pub art: String,
 }
 
 pub fn parse(body: &[u8]) -> Option<FromExt> {
@@ -170,6 +173,8 @@ pub struct ExtPlayer {
     pub playing: bool,
     pub shuffle: Option<bool>,
     pub repeat: Option<u8>,
+    /// Capa em alta resolução (endereço; vazio se a extensão não mandou).
+    pub art: String,
     /// Ordem da última mudança (a mais recente ganha num empate).
     pub seq: u64,
 }
@@ -206,6 +211,7 @@ impl Book {
                     playing: m.playing,
                     shuffle: m.shuffle,
                     repeat: m.repeat.as_deref().and_then(repeat_code),
+                    art: m.art,
                     seq: 0,
                 };
                 let old = self.players.iter_mut().find(|p| p.client == client && p.id == new.id);
@@ -806,8 +812,11 @@ mod tests {
         let m = parse(br#"{"t":"player","id":"42","title":"Thanatos","artist":"M83","album":"x","playing":true,"shuffle":true,"repeat":"ONE"}"#);
         assert_eq!(
             m,
-            Some(FromExt::Player(PlayerMsg { id: "42".into(), title: "Thanatos".into(), artist: "M83".into(), playing: true, shuffle: Some(true), repeat: Some("ONE".into()) }))
+            Some(FromExt::Player(PlayerMsg { id: "42".into(), title: "Thanatos".into(), artist: "M83".into(), playing: true, shuffle: Some(true), repeat: Some("ONE".into()), art: String::new() }))
         );
+        // A capa em alta resolução (extensão 1.1).
+        let m = parse(br#"{"t":"player","id":"9","title":"Swim","art":"https://lh3.googleusercontent.com/x=w1200-h1200-l90-rj"}"#);
+        assert!(matches!(m, Some(FromExt::Player(PlayerMsg { ref art, .. })) if art.ends_with("=w1200-h1200-l90-rj")));
         // Página que mudou (sem os atributos): null.
         let m = parse(br#"{"t":"player","id":"1","title":"A","shuffle":null,"repeat":null}"#);
         assert!(matches!(m, Some(FromExt::Player(PlayerMsg { shuffle: None, repeat: None, .. }))));
@@ -826,7 +835,7 @@ mod tests {
     }
 
     fn player(id: &str, title: &str, playing: bool, shuffle: Option<bool>) -> FromExt {
-        FromExt::Player(PlayerMsg { id: id.into(), title: title.into(), artist: String::new(), playing, shuffle, repeat: shuffle.map(|_| "ALL".into()) })
+        FromExt::Player(PlayerMsg { id: id.into(), title: title.into(), artist: String::new(), playing, shuffle, repeat: shuffle.map(|_| "ALL".into()), art: String::new() })
     }
 
     #[test]

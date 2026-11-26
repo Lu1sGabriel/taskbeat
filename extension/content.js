@@ -38,6 +38,31 @@
     return document.querySelector("ytmusic-player-bar");
   }
 
+  /**
+   * A capa na maior resolução: a maior do mediaSession (ou a da barra do
+   * player), pedida em 1200 px quando o endereço é do Google (o Windows só
+   * recebe uma de 120 px do navegador).
+   */
+  function bestArt(md, b) {
+    let best = "";
+    let area = -1;
+    for (const a of (md && md.artwork) || []) {
+      const m = /(\d+)x(\d+)/.exec(a.sizes || "");
+      const n = m ? +m[1] * +m[2] : 0;
+      if (a.src && n > area) {
+        best = a.src;
+        area = n;
+      }
+    }
+    if (!best) {
+      const img = b.querySelector("img.image");
+      best = (img && img.src) || "";
+    }
+    if (!/^https:\/\//.test(best)) return "";
+    // lh3.googleusercontent.com/…=w544-h544-l90-rj: o mesmo arquivo em 1200 px.
+    return best.replace(/=w\d+-h\d+(?=-|$)/, "=w1200-h1200").replace(/=s\d+(?=-|$)/, "=s1200");
+  }
+
   /** Estado atual da página (ou null sem a barra do player). */
   function read() {
     const b = bar && bar.isConnected ? bar : playerBar();
@@ -59,6 +84,7 @@
       playing: !!v && !v.paused && !v.ended,
       shuffle: known ? b.hasAttribute("shuffle-on") : null,
       repeat: known ? (REPEAT.includes(repeat) ? repeat : "NONE") : null,
+      art: bestArt(md, b),
     };
   }
 
