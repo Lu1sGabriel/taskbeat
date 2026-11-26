@@ -9,7 +9,7 @@ acessibilidade do Windows (UI Automation) e a cor do botão do aleatório.
 
 Primeiro instale ou atualize o Taskbeat pelo `Taskbeat-Setup`: o instalador registra
 o programa que a extensão chama (Native Messaging). Depois, no Taskbeat, abra
-**Configurações › Card expandido › Extensão do navegador** e clique em **Instalar
+**Configurações › Apps de música › Extensão do navegador** e clique em **Instalar
 extensão**. A mesma linha mostra quando ela conecta. As abas do YouTube Music já
 abertas recebem a extensão na hora.
 
