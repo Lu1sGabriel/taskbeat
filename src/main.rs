@@ -14,6 +14,7 @@
 #![cfg_attr(target_os = "macos", allow(dead_code))]
 
 // Comuns aos dois sistemas: configurações, análise do áudio, traduções e desenho.
+mod anim;
 mod config;
 mod dsp;
 mod i18n;

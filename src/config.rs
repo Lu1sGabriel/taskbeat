@@ -318,6 +318,37 @@ pub enum OsdAnim {
     Fade,
 }
 
+/// Animação de abrir e fechar do card expandido (e do "A seguir").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardAnim {
+    /// A de sempre (Fluent): sobe um pouco esmaecendo; fecha descendo um pouco.
+    Smooth,
+    /// Sai de trás da barra e volta para trás dela (recortado na borda).
+    Slide,
+    /// Entra subindo e sai subindo.
+    Rise,
+    /// Entra descendo e sai descendo.
+    Drop,
+    /// Cresce com um leve exagero e um brilho; fecha encolhendo.
+    Pop,
+    /// Cresce a partir do centro.
+    Zoom,
+    /// Só esmaece.
+    Fade,
+    /// Aparece e some na hora.
+    None,
+}
+
+/// Velocidade das animações de abrir e fechar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimSpeed {
+    Fast,
+    Normal,
+    Slow,
+}
+
 /// Idioma da interface. `Auto` segue o idioma de exibição do Windows (outros = inglês).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -455,6 +486,9 @@ pub struct Config {
     pub launcher_hidden: Vec<String>,
     /// Mini barras de áudio no card, ao lado do título (com as barras ligadas).
     pub card_viz: bool,
+    /// Como o card (e o "A seguir") abre e fecha, e em que velocidade.
+    pub card_anim: CardAnim,
+    pub anim_speed: AnimSpeed,
 
     // ---- "A seguir"
     /// Cartão animado com a próxima música quando o player troca sozinho.
@@ -613,6 +647,8 @@ impl Config {
             launcher_order: Vec::new(),
             launcher_hidden: Vec::new(),
             card_viz: true,
+            card_anim: CardAnim::Slide,
+            anim_speed: AnimSpeed::Normal,
 
             next_track_popup: true,
             popup_secs: 5,
