@@ -104,6 +104,19 @@ fn main() {
             setup::run(mode);
             return;
         }
+        // Só a tela de configurações, numa instância à parte (capturas e testes
+        // com o Taskbeat aberto): sem widget, bandeja, teclas nem captura de som.
+        // Para não mexer na configuração de verdade, use com outro `APPDATA`.
+        if std::env::var_os("TASKBEAT_SETTINGS_ONLY").is_some() {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let cfg = config::Config::load();
+            i18n::apply(cfg.language);
+            let shared = Arc::new(Shared::new(cfg));
+            launchers::spawn(shared.clone());
+            settings::run_alone(shared);
+            return;
+        }
         // Uma instância só.
         let _mutex = CreateMutexW(None, true, w!("Local\\Taskbeat.SingleInstance"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
