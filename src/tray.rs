@@ -36,7 +36,11 @@ const ID_AUTOSTART: usize = 106;
 /// Sobreposição de letra: mostrar e travar/destravar.
 const ID_LYRICS: usize = 107;
 const ID_LYRICS_LOCK: usize = 108;
+const ID_RESTART: usize = 198;
 const ID_EXIT: usize = 199;
+
+/// "Reiniciar o Taskbeat": ao sair, o `main` abre uma cópia nova.
+pub static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn shared() -> &'static Arc<Shared> {
     SHARED.get().expect("estado compartilhado")
@@ -226,6 +230,7 @@ fn menu_entries() -> Vec<Entry> {
     v.push(Entry::Separator);
     v.push(Entry::toggle(ID_AUTOSTART as u32, "\u{E7E8}", tr("Iniciar com o Windows"), system::autostart_enabled(), true));
     v.push(Entry::Separator);
+    v.push(Entry::action(ID_RESTART as u32, "\u{E72C}", tr("Reiniciar o Taskbeat")));
     v.push(Entry::action(ID_EXIT as u32, "\u{E8BB}", tr("Sair do Taskbeat")));
     v
 }
@@ -277,7 +282,10 @@ fn handle_command(hwnd: HWND, cmd: usize) {
         ID_AUTOSTART => system::set_autostart(!system::autostart_enabled()),
         ID_LYRICS => s.update_config(|c| c.lyrics.show = !c.lyrics.show),
         ID_LYRICS_LOCK => s.update_config(|c| c.lyrics.locked = !c.lyrics.locked),
-        ID_EXIT => {
+        ID_RESTART | ID_EXIT => {
+            if cmd == ID_RESTART {
+                RESTART.store(true, Ordering::Relaxed);
+            }
             settings::close();
             s.running.store(false, Ordering::Relaxed);
             unsafe {

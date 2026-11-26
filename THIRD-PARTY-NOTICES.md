@@ -68,8 +68,8 @@ Arquivo gerado por `python tools/third_party_notices.py`.
 | simd-adler32 | 0.3.10 | MIT | app | Linux | https://github.com/mcountryman/simd-adler32 |
 | smallvec | 1.16.6 | MIT OR Apache-2.0 | app | Linux | https://github.com/smallvec/smallvec |
 | strength_reduce | 0.2.4 | MIT OR Apache-2.0 | app | Windows, Mac e Linux | http://github.com/ejmahler/strength_reduce |
-| syn | 2.0.119 | MIT OR Apache-2.0 | build | Windows e Linux | https://github.com/dtolnay/syn |
 | syn | 3.0.10 | MIT OR Apache-2.0 | build | Windows, Mac e Linux | https://github.com/dtolnay/syn |
+| syn | 2.0.119 | MIT OR Apache-2.0 | build | Windows e Linux | https://github.com/dtolnay/syn |
 | toml | 1.2.2+spec-1.1.0 | MIT OR Apache-2.0 | app | Windows, Mac e Linux | https://github.com/toml-rs/toml |
 | toml_datetime | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | app | Windows, Mac e Linux | https://github.com/toml-rs/toml |
 | toml_parser | 1.1.6+spec-1.1.0 | MIT OR Apache-2.0 | app | Windows, Mac e Linux | https://github.com/toml-rs/toml |

@@ -589,6 +589,14 @@ pub struct Config {
     pub hide_on_fullscreen: bool,
     pub language: Language,
 
+    // ---- atualizações (releases do GitHub)
+    /// Procura versão nova ao abrir e uma vez por dia.
+    pub update_check: bool,
+    /// Instala a versão nova sozinho e reinicia (desligado: pergunta antes).
+    pub update_auto: bool,
+    /// Também oferece as versões de teste (pre-release).
+    pub update_beta: bool,
+
     /// Versão do esquema (para migrar configs antigas para os novos padrões).
     /// Ausente no arquivo = 0 (config antiga).
     #[serde(default)]
@@ -733,6 +741,9 @@ impl Config {
 
             hide_on_fullscreen: true,
             language: Language::Auto,
+            update_check: true,
+            update_auto: false,
+            update_beta: false,
             version: CONFIG_VERSION,
             lyrics: Default::default(),
         }

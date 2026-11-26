@@ -17,6 +17,7 @@ mod osd;
 mod settings;
 mod statusbar;
 pub mod system;
+pub(crate) mod update;
 mod volume;
 
 use crate::config::Config;
@@ -81,6 +82,7 @@ pub fn main() {
         dispatch2::DispatchQueue::main().exec_async(notch::media_changed);
     });
     let audio = audio::spawn(shared.clone());
+    crate::update::spawn(shared.clone());
 
     app.run();
 
