@@ -1687,7 +1687,7 @@ pub struct CLayout {
     pub card: RectF,
     pub radius: f32,
     pub art: RectF,
-    /// Selo do app de origem no canto da capa ("Mostrar app de origem").
+    /// Selo do app de origem no canto da capa ("App de origem").
     pub source: Option<RectF>,
     pub title: RectF,
     pub artist: RectF,
@@ -2166,7 +2166,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let t = title_w(l.title);
         text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
         draw_bars(cv, l.title);
-        text(cv, tr, &artist_album(m), Font::Subtitle, l.artist.x, l.artist.y, l.artist.w, l.artist.h, th.fg, 0.72);
+        artist_line(cv, tr, &artist_album(m), source_name(cfg, m), Font::Subtitle, l.artist, (th.fg, 0.72));
     } else {
         // Álbum numa terceira linha; o bloco sobe metade dela para seguir centralizado.
         let sub = artist_album(m);
@@ -2175,7 +2175,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let (t, a) = (title_w(l.title.offset(0.0, dy)), l.artist.offset(0.0, dy));
         text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
         draw_bars(cv, l.title.offset(0.0, dy));
-        text(cv, tr, if m.artist.is_empty() { &sub } else { &m.artist }, Font::Subtitle, a.x, a.y, a.w, a.h, th.fg, 0.72);
+        artist_line(cv, tr, if m.artist.is_empty() { &sub } else { &m.artist }, source_name(cfg, m), Font::Subtitle, a, (th.fg, 0.72));
         if let Some(album) = album {
             text(cv, tr, album, Font::Small, a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s, th.fg, 0.52);
         }
@@ -2296,6 +2296,25 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     if let Some(b) = l.source.filter(|_| f.it.hover == Some(Hit::Source) && f.it.tip > 0.0 && !m.app.is_empty()) {
         tooltip(cv, tr, &crate::i18n::tr("Tocando no {}").replace("{}", &m.app), b, th, f.it.tip, s);
     }
+}
+
+/// Nome do app para o fim da linha do artista ("App de origem": "Selo e nome").
+fn source_name<'a>(cfg: &Config, m: &'a MediaInfo) -> Option<&'a str> {
+    (cfg.show_source && cfg.source_name && !m.app.is_empty()).then_some(m.app.as_str())
+}
+
+/// Linha do artista com o nome do app no fim, mais apagado ("Artista · Brave").
+/// O nome tem lugar garantido (até metade da linha); o artista corta antes.
+fn artist_line(cv: &mut Canvas, tr: &mut TextRenderer, main: &str, app: Option<&str>, font: Font, r: RectF, (c, a): (Rgb, f32)) {
+    let Some(app) = app else {
+        text(cv, tr, main, font, r.x, r.y, r.w, r.h, c, a);
+        return;
+    };
+    let suffix = if main.is_empty() { app.to_string() } else { format!(" · {app}") };
+    let sw = tr.mask(&suffix, font, r.w.max(1.0) as i32, r.h.max(1.0) as i32, Align::Left).used_width().min(r.w * 0.5);
+    let mw = if main.is_empty() { 0.0 } else { tr.mask(main, font, (r.w - sw).max(1.0) as i32, r.h.max(1.0) as i32, Align::Left).used_width() };
+    text(cv, tr, main, font, r.x, r.y, r.w - sw, r.h, c, a);
+    text(cv, tr, &suffix, font, r.x + mw, r.y, r.w - mw, r.h, c, a * 0.62);
 }
 
 /// Dica do botão da letra, com o atalho quando ele funciona.
@@ -2590,7 +2609,7 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
 
     let title = if media.title.is_empty() { media.app.clone() } else { media.title.clone() };
     text(cv, tr, &title, Font::CardTitle, tx, top + 20.0 * s, tw, 22.0 * s, th.fg, ta);
-    text(cv, tr, &artist_album(media), Font::Subtitle, tx, top + 42.0 * s, tw, 17.0 * s, th.fg, ta * 0.72);
+    artist_line(cv, tr, &artist_album(media), source_name(cfg, media), Font::Subtitle, RectF::new(tx, top + 42.0 * s, tw, 17.0 * s), (th.fg, ta * 0.72));
 
     // Tempo restante do cartão: a base da barrinha encosta na base da capa.
     let hold = ((t - 0.45) / (total - 0.85).max(0.5)).clamp(0.0, 1.0);
