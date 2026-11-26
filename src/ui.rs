@@ -1632,13 +1632,15 @@ pub struct CLayout {
     /// Quanto a lista do mixer rola no máximo (px lógicos) e quanto rolou (px).
     pub mixer_scroll_max: f32,
     pub mixer_scroll: f32,
+    /// Tempos (decorrido e restante) embaixo do progresso.
+    pub times: bool,
 }
 
 impl CLayout {
     pub fn build(s: f32, cfg: &Config, has_seek: bool) -> Self {
         let m = SHADOW_MARGIN * s;
         let pad = 16.0 * s;
-        let mut l = CLayout { radius: cfg.corners.radius() * s, vertical: cfg.card_layout == CardLayout::Vertical, ..Default::default() };
+        let mut l = CLayout { radius: cfg.corners.radius() * s, vertical: cfg.card_layout == CardLayout::Vertical, times: true, ..Default::default() };
         let seek = has_seek && cfg.card_seek;
         // Cinco botões com os ícones das pontas alinhados às bordas da coluna
         // (aleatório começa onde o título começa; repetir termina onde ele termina).
@@ -2129,8 +2131,10 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         }
         let hot = (f.it.hover == Some(Hit::Seek) || f.it.drag == Some(Hit::Seek)) && m.can_seek;
         slider(cv, x0, x1, r.y + 7.0 * s, t, th, hot, hot, s);
-        text(cv, tr, &fmt_time(pos), Font::Small, x0, r.y + 13.0 * s, 60.0 * s, 16.0 * s, th.fg, 0.62);
-        text_right(cv, tr, &format!("-{}", fmt_time((m.dur - pos).max(0.0))), Font::Small, x1, r.y + 13.0 * s, 16.0 * s, th.fg, 0.62, s);
+        if l.times {
+            text(cv, tr, &fmt_time(pos), Font::Small, x0, r.y + 13.0 * s, 60.0 * s, 16.0 * s, th.fg, 0.62);
+            text_right(cv, tr, &format!("-{}", fmt_time((m.dur - pos).max(0.0))), Font::Small, x1, r.y + 13.0 * s, 16.0 * s, th.fg, 0.62, s);
+        }
     }
 
     // Volume.
