@@ -357,9 +357,13 @@ fn install(dir: &Path, autostart: bool, desktop: bool) -> Result<(), String> {
         Ok(())
     })();
     r.map_err(|e| e.to_string())?;
-    // A extensão do navegador é opcional: sem isto o resto funciona.
+    // A extensão do navegador é opcional: sem isto o resto funciona. A pasta
+    // dela vai junto (para carregar sem compactação até ela estar na loja).
     if let Err(e) = register_browser_host(dir, &exe) {
         crate::audio::log::warn(&format!("extensão do navegador: registro falhou ({e})"));
+    }
+    if let Err(e) = crate::webext::write_extension(&dir.join("extension")) {
+        crate::audio::log::warn(&format!("extensão do navegador: pasta não gravada ({e})"));
     }
     Ok(())
 }

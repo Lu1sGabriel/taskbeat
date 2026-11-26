@@ -53,11 +53,72 @@ pub fn install_url() -> &'static str {
     if STORE_URL.is_empty() { GUIDE_URL } else { STORE_URL }
 }
 
-/// Abre a página de instalação da extensão no navegador padrão.
+/// Os arquivos da extensão, dentro do próprio executável (sem a pasta
+/// `store/`, que é só para publicar): enquanto ela não está na Chrome Web
+/// Store, o Taskbeat grava a pasta para o usuário carregar sem compactação.
+const EXT_FILES: &[(&str, &[u8])] = &[
+    ("manifest.json", include_bytes!("../extension/manifest.json")),
+    ("content.js", include_bytes!("../extension/content.js")),
+    ("sw.js", include_bytes!("../extension/sw.js")),
+    ("README.md", include_bytes!("../extension/README.md")),
+    ("icons/icon-16.png", include_bytes!("../extension/icons/icon-16.png")),
+    ("icons/icon-48.png", include_bytes!("../extension/icons/icon-48.png")),
+    ("icons/icon-128.png", include_bytes!("../extension/icons/icon-128.png")),
+    ("_locales/de/messages.json", include_bytes!("../extension/_locales/de/messages.json")),
+    ("_locales/en/messages.json", include_bytes!("../extension/_locales/en/messages.json")),
+    ("_locales/es/messages.json", include_bytes!("../extension/_locales/es/messages.json")),
+    ("_locales/pt_BR/messages.json", include_bytes!("../extension/_locales/pt_BR/messages.json")),
+];
+
+/// Grava a extensão na pasta `dir` (só os arquivos que mudaram: o navegador
+/// lê dali enquanto ela está carregada).
+pub fn write_extension(dir: &std::path::Path) -> io::Result<()> {
+    for (name, bytes) in EXT_FILES {
+        let p = dir.join(name);
+        if std::fs::read(&p).ok().as_deref() == Some(*bytes) {
+            continue;
+        }
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&p, bytes)?;
+    }
+    Ok(())
+}
+
+/// Pasta `extension` ao lado do Taskbeat.exe (a instalação a cria).
+fn installed_extension_dir() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("extension"))
+}
+
+/// Grava a pasta da extensão para carregar sem compactação: ao lado do
+/// Taskbeat.exe ou, sem permissão de escrita lá, em `%LOCALAPPDATA%\Taskbeat`.
+pub fn extension_folder() -> Option<std::path::PathBuf> {
+    let local = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("Taskbeat").join("extension"));
+    [installed_extension_dir(), local].into_iter().flatten().find(|d| write_extension(d).is_ok())
+}
+
+/// O atualizador troca só o executável: a pasta da extensão que já existe é
+/// posta em dia com a do executável novo (o usuário recarrega no navegador).
+pub fn refresh_extension_folder() {
+    if let Some(d) = installed_extension_dir().filter(|d| d.join("manifest.json").exists())
+        && let Err(e) = write_extension(&d)
+    {
+        log::warn(&format!("extensão do navegador: pasta não atualizada ({e})"));
+    }
+}
+
+/// "Instalar extensão": a página da loja quando ela estiver publicada; até
+/// lá, a pasta da extensão (no Explorador) e o passo a passo para carregá-la.
 pub fn open_install_page() {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     unsafe {
+        if STORE_URL.is_empty()
+            && let Some(dir) = extension_folder()
+        {
+            ShellExecuteW(None, windows::core::w!("open"), &HSTRING::from(dir.as_os_str()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+        }
         ShellExecuteW(None, windows::core::w!("open"), &HSTRING::from(install_url()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
     }
 }
@@ -441,6 +502,7 @@ const READY_EVENT: &str = r"Local\Taskbeat.Extension.Ready";
 pub fn spawn(shared: Arc<Shared>) {
     let _ = std::thread::Builder::new().name("browser-extension".into()).spawn(move || {
         crate::system::background_thread();
+        refresh_extension_folder();
         if let Err(e) = serve(&shared) {
             log::warn(&format!("extensão do navegador: pipe indisponível ({e})"));
         }
@@ -805,6 +867,32 @@ mod tests {
         write_frame(&mut buf, "{\"t\":\"player\",\"id\":\"1\",\"title\":\"Canção\"}".as_bytes()).unwrap();
         let body = read_frame(&mut Trickle(&buf)).unwrap().unwrap();
         assert!(matches!(parse(&body), Some(FromExt::Player(PlayerMsg { title, .. })) if title == "Canção"));
+    }
+
+    /// A pasta gravada tem todos os arquivos do `manifest.json` (ícones e
+    /// traduções) e nada da pasta da loja; gravar de novo não muda nada.
+    #[test]
+    fn pasta_da_extensao() {
+        let dir = std::env::temp_dir().join(format!("taskbeat-ext-teste-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write_extension(&dir).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        for icon in manifest["icons"].as_object().unwrap().values() {
+            assert!(dir.join(icon.as_str().unwrap()).exists(), "{icon}");
+        }
+        assert!(dir.join(manifest["background"]["service_worker"].as_str().unwrap()).exists());
+        for js in manifest["content_scripts"][0]["js"].as_array().unwrap() {
+            assert!(dir.join(js.as_str().unwrap()).exists(), "{js}");
+        }
+        for lang in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/extension/_locales")).unwrap() {
+            let lang = lang.unwrap().file_name();
+            assert!(dir.join("_locales").join(&lang).join("messages.json").exists(), "{lang:?}");
+        }
+        assert!(!dir.join("store").exists());
+        let before = std::fs::metadata(dir.join("sw.js")).unwrap().modified().unwrap();
+        write_extension(&dir).unwrap();
+        assert_eq!(std::fs::metadata(dir.join("sw.js")).unwrap().modified().unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

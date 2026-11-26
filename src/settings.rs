@@ -528,7 +528,7 @@ fn ext_connected() -> bool {
 fn browser_ext_status() -> String {
     let on = crate::webext::connected();
     if on.is_empty() {
-        tr("Não conectada. Opcional: com a extensão do Taskbeat no Chrome, Brave ou Edge, o aleatório e o repetir do YouTube Music vêm da própria página").to_string()
+        tr("Não conectada. Opcional: com ela, o aleatório, o repetir e a capa em alta do YouTube Music vêm da própria página. Chega em breve à Chrome Web Store; até lá, o botão abre a pasta dela, que vem com o Taskbeat, e o passo a passo para o Chrome, Brave ou Edge").to_string()
     } else {
         format!("{} ({}): {}", tr("Conectada"), on.join(", "), tr("o aleatório e o repetir do YouTube Music vêm da própria página"))
     }
