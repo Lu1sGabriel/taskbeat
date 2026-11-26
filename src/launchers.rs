@@ -33,7 +33,9 @@ const RESCAN: Duration = Duration::from_secs(30 * 60);
 
 /// Players conhecidos: nome na pasta "Aplicativos" (sem diferenciar
 /// maiúsculas) e trechos do AUMID que identificam o app em qualquer idioma.
-/// A ordem é também a prioridade do atalho escolhido sozinho (`effective`).
+/// A ordem é também a prioridade do atalho escolhido sozinho (`arranged`).
+/// Os de `GENERAL` (players de vídeo e gerais) entram na lista, mas só
+/// aparecem se o usuário ligar: o atalho é para apps de música.
 const KNOWN: &[(&str, &[&str])] = &[
     ("spotify", &["spotifyab.spotifymusic", "spotify.exe"]),
     // App do YouTube Music instalado pelo Brave, Chrome ou Edge (mesmo id em todos).
@@ -58,6 +60,15 @@ const KNOWN: &[(&str, &[&str])] = &[
     ("dopamine", &[]),
     ("vlc media player", &[]),
 ];
+
+/// Players gerais e de vídeo (nomes de `KNOWN`): o Media Player do Windows
+/// (o antigo Groove, que também toca vídeo) e o VLC. Escondidos por padrão.
+const GENERAL: &[&str] = &["media player", "vlc media player"];
+
+/// Player geral ou de vídeo (não aparece sozinho como atalho).
+fn general(name: &str, aumid: &str) -> bool {
+    known(name, aumid).is_some_and(|k| GENERAL.contains(&KNOWN[k].0))
+}
 
 /// Qual player conhecido é este item da pasta "Aplicativos" (posição em `KNOWN`).
 fn known(name: &str, aumid: &str) -> Option<usize> {
@@ -100,7 +111,8 @@ pub fn scan() -> Vec<Launcher> {
             if found.iter().any(|(j, _)| *j == k) {
                 continue;
             }
-            let icon = appicon::shell_item_icon(&item).map(Arc::new);
+            // App da Store: o logo sem a placa do Windows 10 (o quadrado atrás).
+            let icon = appicon::unplated_logo(&id).or_else(|| appicon::shell_item_icon(&item)).map(Arc::new);
             found.push((k, Launcher { name, id, icon }));
         }
     }
@@ -110,16 +122,18 @@ pub fn scan() -> Vec<Launcher> {
 
 /// Todos os apps achados na ordem escolhida pelo usuário, cada um com "à
 /// mostra?". Os que estão em `order` vêm primeiro, nessa ordem; os outros
-/// (achados depois, nunca mexidos) entram no fim, na ordem de sempre, à mostra.
+/// (achados depois, nunca mexidos) entram no fim, na ordem de sempre, à mostra
+/// se forem de música (um player geral, como o VLC, entra escondido).
 pub fn arrange(found: &[Launcher], order: &[String], hidden: &[String]) -> Vec<(Launcher, bool)> {
     let mut out: Vec<(Launcher, bool)> = order.iter().filter_map(|id| found.iter().find(|l| &l.id == id)).map(|l| (l.clone(), true)).collect();
+    let listed = out.len();
     for l in found {
         if !out.iter().any(|(o, _)| o.id == l.id) {
             out.push((l.clone(), true));
         }
     }
-    for (l, on) in &mut out {
-        *on = !hidden.contains(&l.id);
+    for (i, (l, on)) in out.iter_mut().enumerate() {
+        *on = !hidden.contains(&l.id) && (i < listed || !general(&l.name, &l.id));
     }
     out
 }
@@ -131,14 +145,17 @@ pub fn shown(found: &[Launcher], cfg: &crate::config::Config) -> Vec<Launcher> {
 
 /// Todos os apps achados como aparecem (ordem e "à mostra?"). Quem nunca mexeu
 /// na lista (ordem e escondidos vazios) fica com UM atalho, escolhido sozinho:
-/// o primeiro instalado na ordem de `KNOWN` (Spotify, YouTube Music, Shazam,
-/// os outros). Quem já escolheu fica com a própria escolha.
+/// o primeiro app de música instalado na ordem de `KNOWN` (Spotify, YouTube
+/// Music, Shazam, os outros). Sem nenhum app de música, nenhum atalho (um
+/// player geral, como o VLC, só se o usuário ligar). Quem já escolheu fica
+/// com a própria escolha.
 pub fn arranged(found: &[Launcher], cfg: &crate::config::Config) -> Vec<(Launcher, bool)> {
     if cfg.launcher_order.is_empty() && cfg.launcher_hidden.is_empty() {
         let mut all = arrange(found, &[], &[]);
         all.sort_by_key(|(l, _)| known(&l.name, &l.id).unwrap_or(usize::MAX));
+        let first = all.iter().position(|(l, _)| !general(&l.name, &l.id));
         for (i, (_, on)) in all.iter_mut().enumerate() {
-            *on = i == 0;
+            *on = Some(i) == first;
         }
         return all;
     }
@@ -408,13 +425,21 @@ mod tests {
         assert_eq!(on(&[vlc.clone(), ytm.clone(), spotify.clone(), zune.clone()], &auto), ["Spotify"]);
         assert_eq!(on(&[zune.clone(), vlc.clone(), ytm.clone()], &auto), ["YouTube Music"]);
         assert_eq!(on(&[vlc.clone(), shazam.clone(), zune.clone()], &auto), ["Shazam"]);
-        assert_eq!(on(&[vlc.clone(), zune.clone()], &auto), ["Media Player"]);
+        // Só players gerais (o caso de um Windows 10 sem app de música):
+        // nenhum atalho sozinho; eles ficam na lista para quem quiser ligar.
+        assert!(on(&[vlc.clone(), zune.clone()], &auto).is_empty());
+        assert_eq!(arranged(&[vlc.clone(), zune.clone()], &auto).len(), 2);
         assert!(on(&[], &auto).is_empty());
         // Escolha feita (como a do usuário: só o YouTube Music) continua valendo,
         // mesmo com o Spotify instalado depois.
         let found = [ytm.clone(), zune.clone(), vlc.clone()];
         let mine = Config { launcher_order: vec![ytm.id.clone(), zune.id.clone(), vlc.id.clone()], launcher_hidden: vec![zune.id.clone(), vlc.id.clone()], ..Config::default() };
         assert_eq!(on(&found, &mine), ["YouTube Music"]);
+        // Um player geral instalado depois entra escondido; um de música, à mostra.
+        let found3 = [ytm.clone(), zune.clone(), vlc.clone(), spotify.clone()];
+        let mine2 = Config { launcher_order: vec![ytm.id.clone()], launcher_hidden: vec![], ..Config::default() };
+        assert_eq!(on(&[ytm.clone(), vlc.clone()], &mine2), ["YouTube Music"]);
+        assert_eq!(on(&found3, &mine2), ["YouTube Music", "Spotify"]);
         // Primeira mudança a partir da escolha automática: arrastar o VLC para o
         // começo grava a ordem e mantém escondidos os que estavam.
         let all = arranged(&found, &auto);
