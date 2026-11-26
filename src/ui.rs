@@ -345,6 +345,7 @@ fn play_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, playing: bool, f
 /// dos glifos finos de contorno do Segoe Fluent), no espírito dos símbolos
 /// preenchidos do macOS. Cada um vira uma máscara guardada por tamanho.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
 enum VIcon {
     Play,
     Pause,
@@ -357,6 +358,43 @@ enum VIcon {
     Vol1,
     Vol2,
     Vol3,
+    // Barrinha da sobreposição de letra (sempre em vetor: os glifos de
+    // contorno ficam ralos demais nesse tamanho).
+    Lock,
+    Unlock,
+    Expand,
+    Collapse,
+    Close,
+}
+
+/// Glifos da barrinha da letra que têm desenho em vetor próprio (fora de
+/// `vicon_of`, para não mudar o cadeado do aviso de Caps Lock).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn tool_vicon(g: &str) -> Option<VIcon> {
+    match g {
+        "\u{E72E}" => Some(VIcon::Lock),
+        "\u{E785}" => Some(VIcon::Unlock),
+        "\u{E740}" => Some(VIcon::Expand),
+        "\u{E73F}" => Some(VIcon::Collapse),
+        "\u{E711}" => Some(VIcon::Close),
+        _ => vicon_of(g),
+    }
+}
+
+/// Ícone cheio e opaco (traço grosso, em vetor) quando há desenho para ele;
+/// senão o glifo da fonte. Para os botões da barrinha da letra.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn solid_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32, s: f32) {
+    let Some(v) = tool_vicon(g) else { return glyph(cv, tr, r, g, font, c, a) };
+    let em = match font {
+        Font::IconSmall => 13.0,
+        Font::IconMd => 16.0,
+        Font::IconLg => 18.0,
+        _ => 15.0,
+    } * s;
+    let m = vector_mask(v, em, r.w.round().max(1.0) as i32, r.h.round().max(1.0) as i32);
+    cv.blit_mask(r.x.round() as i32, r.y.round() as i32, &m, c, a);
 }
 
 fn vicon_of(g: &str) -> Option<VIcon> {
@@ -449,7 +487,29 @@ fn vicon_shape(v: VIcon) -> Shape2 {
         parts.push(tri((-0.31 + dx, -0.13), (-0.08 + dx, -0.37), (-0.08 + dx, 0.37), 0.035));
         parts.push(tri((-0.31 + dx, -0.13), (-0.08 + dx, 0.37), (-0.31 + dx, 0.13), 0.035));
     };
+    // Cadeado: corpo cheio e a alça (aberta: levantada, com a perna da direita solta).
+    let padlock = |parts: &mut Vec<Box<dyn Fn(Pt) -> f32>>, open: bool| {
+        parts.push(Box::new(move |p| sd_box(p, (0.0, 0.17), (0.33, 0.24), 0.08)));
+        let top = if open { -0.25 } else { -0.13 };
+        let mut pts = vec![(-0.19, -0.02)];
+        pts.extend(arc_pts((0.0, top), 0.19, 180.0, 360.0, 12));
+        pts.push((0.19, if open { -0.18 } else { -0.02 }));
+        parts.push(path(pts, 0.075));
+    };
     match v {
+        VIcon::Lock => padlock(&mut parts, false),
+        VIcon::Unlock => padlock(&mut parts, true),
+        // Tela cheia: quatro cantos para fora; sair dela: os cantos para dentro.
+        VIcon::Expand | VIcon::Collapse => {
+            let (a, b) = if v == VIcon::Expand { (0.38, 0.13) } else { (0.13, 0.38) };
+            for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                parts.push(path(vec![(sx * a, sy * b), (sx * a, sy * a), (sx * b, sy * a)], 0.07));
+            }
+        }
+        VIcon::Close => {
+            parts.push(path(vec![(-0.30, -0.30), (0.30, 0.30)], 0.075));
+            parts.push(path(vec![(-0.30, 0.30), (0.30, -0.30)], 0.075));
+        }
         VIcon::Play => parts.push(tri((-0.29, -0.38), (-0.29, 0.38), (0.39, 0.0), 0.07)),
         VIcon::Pause => {
             for cx in [-0.19, 0.19] {

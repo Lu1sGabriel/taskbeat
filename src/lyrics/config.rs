@@ -104,7 +104,13 @@ pub struct LyricsConfig {
     pub click_through: bool,
     /// Tamanho da janela (%), além da escala do monitor.
     pub zoom: i32,
-    /// Volume e mixer de volume nos layouts com player (como no card).
+    /// Largura e altura escolhidas arrastando as bordas (px lógicos, antes do
+    /// `zoom`; 0 = o tamanho do layout). No "Player e letra" a altura é a da
+    /// área da letra. Voltam a 0 quando o conteúdo muda.
+    pub width: i32,
+    pub height: i32,
+    /// Volume (slider e mudo) no compacto e nos layouts com player; o mixer
+    /// de volume só nos com player (como no card).
     pub volume: bool,
     pub mixer: bool,
     /// Fundo animado na tela cheia (a capa desfocada girando devagar).
@@ -145,6 +151,8 @@ impl Default for LyricsConfig {
             locked: false,
             click_through: false,
             zoom: 100,
+            width: 0,
+            height: 0,
             volume: true,
             mixer: true,
             animated_bg: true,
@@ -171,6 +179,8 @@ impl LyricsConfig {
         self.offset_ms = self.offset_ms.clamp(-5000, 5000);
         self.opacity = self.opacity.clamp(10, 100);
         self.zoom = self.zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+        self.width = self.width.clamp(0, 4000);
+        self.height = self.height.clamp(0, 4000);
     }
 
     /// Letra centralizada?
