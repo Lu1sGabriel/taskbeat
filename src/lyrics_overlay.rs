@@ -1190,10 +1190,16 @@ impl St {
     /// Onde o painel fica (x, y na tela) num lugar pronto do monitor `m`.
     fn grid_spot(&self, m: &Mon, p: Position, cw: f32, ch: f32) -> Option<(f32, f32)> {
         let (fx, fy) = p.frac()?;
+        let a = self.grid_area(m);
+        Some((a.x + (a.w - cw) * fx, a.y + (a.h - ch) * fy))
+    }
+
+    /// Onde os lugares prontos cabem: a área de trabalho de `m` menos a margem
+    /// (em coordenadas da tela).
+    fn grid_area(&self, m: &Mon) -> RectF {
         let work = m.work;
-        let (ww, wh) = ((work.right - work.left) as f32, (work.bottom - work.top) as f32);
         let margin = 24.0 * self.dpi;
-        Some((work.left as f32 + margin + (ww - 2.0 * margin - cw) * fx, work.top as f32 + margin + (wh - 2.0 * margin - ch) * fy))
+        RectF::new(work.left as f32 + margin, work.top as f32 + margin, (work.right - work.left) as f32 - 2.0 * margin, (work.bottom - work.top) as f32 - 2.0 * margin)
     }
 
     /// Onde a superfície fica na tela para o painel ir ao lugar escolhido.
@@ -1785,10 +1791,14 @@ impl St {
         let (w, h) = (m.rc.right - m.rc.left, m.rc.bottom - m.rc.top);
         Surface::ensure(&mut self.guides.surface, w, h);
         let accent = view::theme(&self.card_cfg, self.lc(), &self.colors, &self.media).accent;
+        // Cada lugar na sua terça parte da tela, sem cruzar com os vizinhos.
+        let a = self.grid_area(m);
+        let area = RectF::new(a.x - m.rc.left as f32, a.y - m.rc.top as f32, a.w, a.h);
         let mut slots: Vec<(RectF, &'static str, bool)> = Vec::new();
         for p in Position::GRID {
-            if let Some((x, y)) = self.grid_spot(m, p, card.w, card.h) {
-                let r = RectF::new((x - m.rc.left as f32).round(), (y - m.rc.top as f32).round(), card.w.round(), card.h.round());
+            if let Some(frac) = p.frac() {
+                let g = view::guide_rect(card.w, card.h, frac, area, 16.0 * self.dpi);
+                let r = RectF::new(g.x.round(), g.y.round(), g.w.round(), g.h.round());
                 slots.push((r, crate::i18n::tr(position_name(p)), snap == Some(p)));
             }
         }

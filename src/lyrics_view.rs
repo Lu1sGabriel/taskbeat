@@ -1139,6 +1139,21 @@ fn dashed(cv: &mut Canvas, r: RectF, radius: f32, width: f32, dash: f32, gap: f3
 
 /// Lugares onde soltar a janela (durante o arrasto): borda tracejada e o
 /// nome de cada um; o que vai receber a janela fica destacado ("Solte aqui").
+/// O quadrado tracejado de um lugar pronto (`frac`, de `Position::frac`) para
+/// uma janela `cw` x `ch` em `area` (a área de trabalho menos a margem). Cada
+/// lugar tem a sua terça parte da área, com `gap` entre elas: se a janela cabe
+/// ali, o quadrado é ela no lugar exato; senão, ela reduzida (mesma proporção)
+/// para caber, encostada no mesmo canto ou lado. Assim os nove nunca se
+/// sobrepõem, mesmo com a letra alta numa tela baixa.
+pub fn guide_rect(cw: f32, ch: f32, frac: (f32, f32), area: RectF, gap: f32) -> RectF {
+    let (cell_w, cell_h) = (((area.w - 2.0 * gap) / 3.0).max(1.0), ((area.h - 2.0 * gap) / 3.0).max(1.0));
+    let k = (cell_w / cw.max(1.0)).min(cell_h / ch.max(1.0)).min(1.0);
+    let (w, h) = (cw * k, ch * k);
+    let (col, row) = ((frac.0 * 2.0).round(), (frac.1 * 2.0).round());
+    let (x0, y0) = (area.x + col * (cell_w + gap), area.y + row * (cell_h + gap));
+    RectF::new(x0 + (cell_w - w) * frac.0, y0 + (cell_h - h) * frac.1, w, h)
+}
+
 pub fn draw_guides(cv: &mut Canvas, tr: &mut TextRenderer, slots: &[(RectF, &str, bool)], accent: Rgb, radius: f32, s: f32) {
     for &(r, name, on) in slots {
         if on {
@@ -1253,6 +1268,59 @@ mod tests {
     use super::*;
     use crate::lyrics::config::Position;
     use crate::render::lerp3;
+
+    /// Os nove quadrados das guias nunca se sobrepõem. A letra alta (370 x 450)
+    /// num monitor de 1920 x 1018 cruzava os de cima com os do meio; agora eles
+    /// encolhem para a sua terça parte. Uma janela pequena fica no lugar exato
+    /// em que o ímã a deixa.
+    #[test]
+    fn guias_sem_sobrepor() {
+        let area = RectF::new(24.0, 24.0, 1920.0 - 48.0, 1018.0 - 48.0);
+        let overlap = |a: RectF, b: RectF| a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom();
+        for (cw, ch) in [(370.0, 450.0), (900.0, 200.0), (600.0, 600.0)] {
+            let rs: Vec<RectF> = Position::GRID.iter().map(|p| guide_rect(cw, ch, p.frac().unwrap(), area, 16.0)).collect();
+            for (i, a) in rs.iter().enumerate() {
+                assert!(a.x >= area.x - 0.01 && a.right() <= area.right() + 0.01 && a.y >= area.y - 0.01 && a.bottom() <= area.bottom() + 0.01, "{cw}x{ch}: {i} fora da área");
+                assert!((a.w / a.h - cw / ch).abs() < 0.01, "{cw}x{ch}: {i} mudou a proporção");
+                for (j, b) in rs.iter().enumerate().skip(i + 1) {
+                    assert!(!overlap(*a, *b), "{cw}x{ch}: {i} e {j} se sobrepõem");
+                }
+            }
+        }
+        // Pequena: o quadrado é a janela no lugar do ímã (o mesmo cálculo de `grid_spot`).
+        let (cw, ch) = (320.0, 180.0);
+        for p in Position::GRID {
+            let (fx, fy) = p.frac().unwrap();
+            let r = guide_rect(cw, ch, (fx, fy), area, 16.0);
+            let spot = (area.x + (area.w - cw) * fx, area.y + (area.h - ch) * fy);
+            assert!((r.x - spot.0).abs() < 0.01 && (r.y - spot.1).abs() < 0.01 && r.w == cw && r.h == ch, "{p:?}");
+        }
+    }
+
+    /// As guias numa tela de 1920 x 1018 com a letra alta, uma delas acesa:
+    /// `$env:TASKBEAT_SHOTS_DIR="…"; cargo test lyrics_guides_shot -- --ignored`
+    #[test]
+    #[ignore]
+    fn lyrics_guides_shot() {
+        let (w, h) = (1920usize, 1018usize);
+        let mut tr = TextRenderer::new();
+        tr.set_scale(1.0);
+        let area = RectF::new(24.0, 24.0, w as f32 - 48.0, h as f32 - 48.0);
+        let slots: Vec<(RectF, &str, bool)> = Position::GRID
+            .iter()
+            .map(|p| {
+                let g = guide_rect(370.0, 450.0, p.frac().unwrap(), area, 16.0);
+                (RectF::new(g.x.round(), g.y.round(), g.w.round(), g.h.round()), "Lugar", *p == Position::Left)
+            })
+            .collect();
+        let mut px = vec![0u32; w * h];
+        {
+            let mut cv = Canvas::new(w, h, &mut px);
+            cv.fill_rrect_ca(0.0, 0.0, w as f32, h as f32, 0.0, |x, y| (lerp3([0.10, 0.18, 0.45], [0.35, 0.20, 0.55], (x / w as f32 + y / h as f32) / 2.0), 1.0));
+            draw_guides(&mut cv, &mut tr, &slots, [0.93, 0.32, 0.62], 12.0, 1.0);
+        }
+        save("lyrics-guides", w, h, &px);
+    }
 
     /// Letra inventada para as prévias e capturas.
     pub const SAMPLE_LRC: &str = "[00:06.00]As luzes da cidade acendem devagar\n[00:12.00]E o rádio toca a nossa canção\n[00:18.00]Corre comigo até o sol nascer\n[00:24.00]Ninguém vai dormir esta noite, nem amanhã, nem depois do fim do mundo\n[00:30.00]O céu inteiro cabe na janela\n[00:36.00]E a estrada some no retrovisor\n[00:42.00]";
