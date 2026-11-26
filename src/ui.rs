@@ -1456,7 +1456,7 @@ fn rich_widget_bg(cv: &mut Canvas, l: &WLayout, f: &WidgetFrame, m: &MediaInfo, 
         rect_bits(bg),
         l.radius.to_bits(),
         (glow_at.0.to_bits(), glow_at.1.to_bits()),
-        (cfg.widget_intensity, cfg.widget_glow, light),
+        (cfg.widget_intensity, cfg.widget_glow, cfg.widget_border, light),
     ));
     let radius = l.radius;
     cached_layer(cv, LayerTag::Widget, key, alpha, |cv| {
