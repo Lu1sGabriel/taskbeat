@@ -259,6 +259,7 @@ const BARS: &[usize] = &[6, 8, 10, 12, 16, 24, 32];
 const SIZES: &[&str] = &["Pequeno", "Normal", "Grande"];
 const COVER_SIZES: &[&str] = &["Pequena", "Normal", "Grande"];
 const SECOND_LINES: &[&str] = &["Artista", "Artista · Álbum", "Álbum", "Tempo"];
+const SOURCES: &[&str] = &["Só o selo", "Selo e nome", "Desligado"];
 const CONTROL_COLORS: &[&str] = &["Branco", "Branco e destaque", "Cor da capa", "Cor de destaque", "Personalizada"];
 const SIDE_COLORS: &[&str] = &["Igual ao botão do meio", "Branco", "Cor da capa", "Cor de destaque"];
 /// Cores prontas do seletor de cor.
@@ -448,7 +449,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E7C4}", title: "Onde ficam os atalhos", desc: "Embaixo do card, dentro do widget na barra ou nos dois", key: Key::LauncherPlace, kind: Kind::Segmented(LAUNCHER_PLACES) },
             Row { icon: "\u{E8FD}", title: "Apps nos atalhos", desc: "Ligue só os que você quer; arraste para mudar a ordem (no card também dá para arrastar os ícones)", key: Key::LauncherApps, kind: Kind::AppList },
             Section("Players"),
-            Row { icon: "\u{E7F4}", title: "Mostrar app de origem", desc: "Selo com o app (Spotify, Brave…) no card, no \"A seguir\" e sobre a capa na barra", key: Key::ShowSource, kind: Kind::Toggle },
+            Row { icon: "\u{E7F4}", title: "App de origem", desc: "Selo com o ícone do app (Spotify, Brave…) no canto da capa, na barra, no card e no \"A seguir\"; com o nome, ele aparece também na linha do artista", key: Key::ShowSource, kind: Kind::Segmented(SOURCES) },
             Row { icon: "\u{E8B1}", title: "Aleatório e repetir", desc: "No card e na barra: sempre (apagados quando o player não deixa mudar) ou só quando o player permite. No YouTube Music do navegador valem os botões da própria página", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
             Row { icon: "\u{E774}", title: "Extensão do navegador", desc: "", key: Key::BrowserExt, kind: Kind::Button("Instalar extensão") },
         ],
@@ -582,7 +583,11 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::LauncherPlace => idx(LAUNCHER_PLACE_V, c.launcher_place),
         Key::Popup => c.next_track_popup as i32,
         Key::PopupSecs => c.popup_secs,
-        Key::ShowSource => c.show_source as i32,
+        Key::ShowSource => match (c.show_source, c.source_name) {
+            (false, _) => 2,
+            (true, true) => 1,
+            (true, false) => 0,
+        },
         Key::CapsOsd => c.caps_lock_osd as i32,
         Key::NumOsd => c.num_lock_osd as i32,
         Key::OsdShowOff => c.osd_show_off as i32,
@@ -686,7 +691,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::LauncherPlace => c.launcher_place = pick(LAUNCHER_PLACE_V, i),
         Key::Popup => c.next_track_popup = v != 0,
         Key::PopupSecs => c.popup_secs = v,
-        Key::ShowSource => c.show_source = v != 0,
+        Key::ShowSource => (c.show_source, c.source_name) = (v != 2, v == 1),
         Key::CapsOsd => c.caps_lock_osd = v != 0,
         Key::NumOsd => c.num_lock_osd = v != 0,
         Key::OsdShowOff => c.osd_show_off = v != 0,
