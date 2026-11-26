@@ -9,7 +9,7 @@ edition = "2024"
 [dependencies]
 realfft = "3.5"
 serde = { version = "1.0.229", features = ["derive"] }
-# Respostas do LRCLIB (letras) e mensagens da extensão do navegador.
+# JSON das letras (LRCLIB), da extensão do navegador e das releases do GitHub.
 serde_json = "1"
 toml = "1.2.2"
 
@@ -33,7 +33,8 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"
     "Win32_System_Pipes",
     "Win32_System_IO",
     "Win32_Security_Authorization",
-    "Win32_Networking_WinHttp"] }
+    "Win32_Networking_WinHttp",
+    "Win32_Security_Cryptography"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
@@ -66,6 +67,11 @@ zune-jpeg = "0.4"
 zune-png = "0.4"
 zune-core = "0.4"
 image-webp = "0.2"
+
+[features]
+# Teste de ponta a ponta do atualizador: aceita um servidor local e uma chave
+# de teste (variáveis TASKBEAT_UPDATE_*). Nunca usar nas releases.
+e2e = []
 
 [profile.release]
 opt-level = 3

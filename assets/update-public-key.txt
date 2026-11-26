@@ -1,0 +1,5 @@
+# Chave pública que confere as atualizações do Taskbeat: ECDSA P-256, X‖Y em
+# hexadecimal (128 dígitos) na primeira linha sem "#".
+# Gerada por tools/new-update-key.ps1. A chave privada fica só com o mantenedor,
+# fora do repositório. Sem chave aqui, o app procura versões novas mas não
+# avisa nem instala nenhuma (nada pode ser conferido).
