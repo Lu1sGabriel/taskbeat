@@ -872,7 +872,13 @@ fn blurred_cached(img: &Arc<Image>, wash: bool) -> Arc<Image> {
             let level = (0..8).find(|&k| img.w >> k <= 24).unwrap_or(8);
             Arc::new(img.mip(level).blurred(4))
         } else {
-            let small = img.mip(if img.w >= 128 { 2 } else { 1 });
+            // Um quarto da capa (as de até 512 px: Windows e Linux guardam
+            // 384), ou a redução pela metade seguinte que caiba em 128 px. O
+            // Mac guarda capas de até 768: com um quarto delas (192 px), o
+            // desfoque, que roda na thread da tela ao abrir o card, ia de
+            // ~2 para ~27 ms.
+            let level = if img.w < 128 { 1 } else { (2..8).find(|&k| img.w >> k <= 128).unwrap_or(8) };
+            let small = img.mip(level);
             Arc::new(small.blurred((small.w / 14).max(2)))
         };
         if c.len() >= 3 {
