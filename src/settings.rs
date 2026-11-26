@@ -146,6 +146,8 @@ enum Key {
     Reset,
     Licenses,
     About,
+    /// Página "Letra" (opções em `settings_lyrics.rs`).
+    Lyrics(lyrics_page::LK),
 }
 
 #[derive(Clone, Copy)]
@@ -174,6 +176,7 @@ enum Preview {
     UpNext,
     LockKeys,
     Visualizer,
+    Lyrics,
     None,
 }
 
@@ -186,6 +189,10 @@ struct Page {
 }
 
 use Item::{Row, Section};
+
+/// Página da sobreposição de letra (módulo à parte, para mexer pouco aqui).
+#[path = "settings_lyrics.rs"]
+mod lyrics_page;
 
 const SHAPES: &[&str] = &["Arredondada", "Círculo", "Quadrada"];
 const PLAY_SHAPES: &[&str] = &["Círculo", "Arredondado", "Quadrado"];
@@ -358,6 +365,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E8B1}", title: "Só quando um player estiver tocando", desc: "Ignora jogos, chamadas e notificações", key: Key::OnlyMedia, kind: Kind::Toggle },
         ],
     },
+    lyrics_page::PAGE,
     Page {
         name: "Geral",
         icon: "\u{E713}",
@@ -491,6 +499,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::Fullscreen => c.hide_on_fullscreen as i32,
         Key::Language => idx(LANG_V, c.language),
         Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => 0,
+        Key::Lyrics(k) => lyrics_page::get(c, k),
     }
 }
 
@@ -584,6 +593,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
             crate::i18n::apply(c.language);
         }
         Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => {}
+        Key::Lyrics(k) => lyrics_page::set(c, k, v),
     }
 }
 
@@ -623,6 +633,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdShape | OsdSize | OsdTheme | OsdDuration | OsdSwitch | OsdMaterial | OsdOpacity | OsdBlur | OsdIcon | OsdAnim if !osd_on => Some(OSD),
         OsdBlur if c.osd_material != crate::config::OsdMaterial::Acrylic => Some(BLUR),
         Style | Palette | Bars | Width | Sens | OnlyMedia | Peaks if !c.show_visualizer => Some(VIZ),
+        Lyrics(k) => lyrics_page::requirement(c, k),
         _ => None,
     }
 }
@@ -631,6 +642,7 @@ fn value_label(kind: Kind, key: Key, v: i32) -> String {
     let Kind::Slider { unit, .. } = kind else { return String::new() };
     match key {
         Key::Sens | Key::Offset | Key::OsdOffX | Key::OsdOffY => format!("{v:+} {unit}"),
+        Key::Lyrics(k) if lyrics_page::signed(k) => format!("{v:+} {unit}"),
         _ if unit == "%" => format!("{v}%"),
         Key::OsdDuration => format!("{},{} {unit}", v / 10, v % 10),
         _ => format!("{v} {unit}"),
@@ -1081,6 +1093,7 @@ impl Ui {
             Preview::Card => self.preview_card(s, cfg).h + 8.0 * s,
             Preview::UpNext => ui::upnext_size(s).1 + 24.0 * s,
             Preview::LockKeys => ui::osd_size(s, cfg).1 + 40.0 * s,
+            Preview::Lyrics => lyrics_page::preview_height(cfg, s),
             Preview::None => 0.0,
         }
     }
@@ -1388,6 +1401,7 @@ impl Ui {
             Preview::Widget => 0.0,
             Preview::Card if self.media_paused() => 0.0,
             Preview::Card => 2.0,
+            Preview::Lyrics => 30.0,
             Preview::None => 0.0,
         }
     }
@@ -1963,7 +1977,7 @@ impl Ui {
         });
         // "Janelas" coloridas no papel de parede das prévias de cartões: dão
         // forma ao que o acrílico desfoca (num degradê liso ele não aparece).
-        if matches!(preview, Preview::Card | Preview::UpNext | Preview::LockKeys) {
+        if matches!(preview, Preview::Card | Preview::UpNext | Preview::LockKeys | Preview::Lyrics) {
             // (deslocamento do centro e largura em px lógicos; topo e altura em fração da prévia)
             let shapes: [(f32, f32, f32, f32, Rgb); 4] = [
                 (-330.0, 0.20, 250.0, 0.55, [0.98, 0.45, 0.55]),
@@ -2039,6 +2053,7 @@ impl Ui {
                 let (ow, oh) = ui::osd_size(s, cfg);
                 RectF::new(r.cx() - ow / 2.0, r.y + 22.0 * s, ow, oh)
             }
+            Preview::Lyrics => lyrics_page::preview_rect(r, cfg, s),
             Preview::None => RectF::default(),
         };
         RectF::new(rect.x.round(), rect.y.round(), rect.w.ceil(), rect.h.ceil())
@@ -2211,6 +2226,7 @@ impl Ui {
                 ui::draw_osd(&mut sub.canvas(), &mut self.preview_text, cfg, &colors, &th, s, tr("Caps Lock"), false, on, tt, backdrop.as_deref());
                 sub.commit(cv);
             }
+            Preview::Lyrics => lyrics_page::draw_preview(cv, &mut self.preview_text, r, cfg, &colors, &media, pb, s, t),
             Preview::None => {}
         }
     }
@@ -2493,6 +2509,12 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 }
                 Kind::Button(_) if key == Key::OsdTest => {
                     u.shared.osd_test.store(true, Ordering::Relaxed);
+                    Action::Redraw
+                }
+                Kind::Button(_) if matches!(key, Key::Lyrics(_)) => {
+                    if let Key::Lyrics(k) = key {
+                        lyrics_page::press(&u.shared, k);
+                    }
                     Action::Redraw
                 }
                 _ => Action::None,
