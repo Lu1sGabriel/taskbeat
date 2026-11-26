@@ -27,45 +27,29 @@ pub fn to_cgimage(px: &[u32], w: usize, h: usize) -> Option<CFRetained<CGImage>>
     unsafe { CGImage::new(w, h, 8, 32, w * 4, Some(&space), CGBitmapInfo(BGRA), Some(&provider), std::ptr::null(), false, CGColorRenderingIntent::RenderingIntentDefault) }
 }
 
-/// Maior lado copiado do original pixel a pixel (16 MB de pixels). Capas
-/// maiores (raras) o CoreGraphics reduz primeiro para este lado.
-const DECODE_MAX: usize = 2048;
-
 /// O quadrado do meio de `img` (corta as sobras, como "aspect fill"), com lado
 /// de até `max` px, no formato do app.
 ///
-/// O quadrado sai do original pixel a pixel (deslocamento inteiro, sem
-/// reamostrar) e, se for maior que `max`, é reduzido uma vez só, por média de
-/// área: cada pixel novo é a média exata dos pixels que cobre (a mesma redução
-/// do desenho, `Image::resampled`). Antes o CoreGraphics reduzia para 384 px e
-/// o desenho reduzia de novo. Nunca amplia: uma capa pequena fica no tamanho
-/// dela (o desenho amplia na hora, se precisar).
+/// Capa maior que `max`: o CoreGraphics a reduz em alta qualidade direto para
+/// `max`. Medido no CI (`cover_shots`), isso sai um pouco melhor no card do
+/// que guardar a capa maior e reduzir por média de área. Até `max`, o quadrado
+/// sai do original pixel a pixel (deslocamento inteiro: sem meio pixel de
+/// borrão) e nunca é ampliado; o desenho amplia na hora, se precisar.
 pub fn cover_square(img: &CGImage, max: usize) -> Option<Image> {
     let (iw, ih) = (CGImage::width(Some(img)), CGImage::height(Some(img)));
     if iw == 0 || ih == 0 || max == 0 {
         return None;
     }
     let full = iw.min(ih);
-    let side = full.min(DECODE_MAX);
+    let side = full.min(max);
     let k = side as f64 / full as f64;
     let (dw, dh) = (iw as f64 * k, ih as f64 * k);
-    let rect = CGRect::new(CGPoint::new(((side as f64 - dw) / 2.0).floor(), ((side as f64 - dh) / 2.0).floor()), CGSize::new(dw, dh));
-    let px = draw_px(side, side, |ctx| CGContext::draw_image(Some(ctx), rect, Some(img)))?;
-    Some(square_at_most(side, px, max))
-}
-
-/// `px` (`side`×`side`) reduzido por média de área para no máximo `max` de
-/// lado; com a análise de cor da capa (`Image::new`).
-fn square_at_most(side: usize, px: Vec<u32>, max: usize) -> Image {
-    if side <= max {
-        return Image::new(side, side, px);
+    let (mut x, mut y) = ((side as f64 - dw) / 2.0, (side as f64 - dh) / 2.0);
+    if side == full {
+        (x, y) = (x.floor(), y.floor());
     }
-    let big = Image::plain(side, side, px);
-    let small = big.resampled(crate::render::RectF::new(0.0, 0.0, side as f32, side as f32), max, max);
-    // Solta a cópia guardada na grande para ficar com os pixels sem copiar.
-    drop(big);
-    let px = std::sync::Arc::try_unwrap(small).map(|i| i.px).unwrap_or_else(|a| a.px.clone());
-    Image::new(max, max, px)
+    let rect = CGRect::new(CGPoint::new(x, y), CGSize::new(dw, dh));
+    draw_px(side, side, |ctx| CGContext::draw_image(Some(ctx), rect, Some(img))).map(|px| Image::new(side, side, px))
 }
 
 /// Desenha `img` inteiro dentro de `w`×`h` (ícones).
@@ -176,7 +160,7 @@ mod tests {
     #[test]
     fn capa_pequena_fica_igual() {
         let f = |x: usize, y: usize| 0xff00_0000 | (((x * 7) & 0xff) << 16) as u32 | (((y * 13) & 0xff) << 8) as u32 | ((x ^ y) & 0xff) as u32;
-        let img = cover_square(&cg(120, 90, f), 768).unwrap();
+        let img = cover_square(&cg(120, 90, f), 384).unwrap();
         assert_eq!((img.w, img.h), (90, 90), "não amplia");
         for y in 0..90 {
             for x in 0..90 {
@@ -186,15 +170,16 @@ mod tests {
         }
     }
 
-    /// Capa grande: corta o meio e reduz por média de área. Um xadrez de 1 px
-    /// reduzido à metade vira cinza liso (uma amostragem bilinear serrilharia).
+    /// Capa grande: corta o meio e reduz filtrando. Um xadrez de 1 px reduzido
+    /// à metade vira cinza liso (pegar um pixel de cada quatro daria só preto
+    /// ou só branco).
     #[test]
-    fn capa_grande_reduz_por_area() {
+    fn capa_grande_reduz_sem_serrilhar() {
         let img = cover_square(&cg(1600, 1200, |x, y| if (x + y) % 2 == 0 { 0xffff_ffff } else { 0xff00_0000 }), 600).unwrap();
         assert_eq!((img.w, img.h), (600, 600));
         for (i, &p) in img.px.iter().enumerate() {
             let c = rgb(p);
-            assert!(c.iter().all(|&v| (124..=132).contains(&v)), "pixel {i}: {c:?}");
+            assert!(c.iter().all(|&v| (112..=143).contains(&v)), "pixel {i}: {c:?}");
         }
         // Metade vermelha à esquerda, azul à direita: o recorte pega o meio.
         let img = cover_square(&cg(1000, 500, |x, _| if x < 500 { 0xffff_0000 } else { 0xff00_00ff }), 250).unwrap();
@@ -204,20 +189,25 @@ mod tests {
         assert_eq!(rgb(row[249]), [0, 0, 255]);
     }
 
-    /// O caminho de antes: o CoreGraphics reduzia direto para 384 px.
-    fn cover_square_384(img: &CGImage) -> Image {
-        let (iw, ih) = (CGImage::width(Some(img)) as f64, CGImage::height(Some(img)) as f64);
-        let size = 384usize.min(iw.min(ih) as usize).max(64);
-        let k = (size as f64 / iw).max(size as f64 / ih);
-        let rect = CGRect::new(CGPoint::new((size as f64 - iw * k) / 2.0, (size as f64 - ih * k) / 2.0), CGSize::new(iw * k, ih * k));
-        Image::new(size, size, draw_px(size, size, |ctx| CGContext::draw_image(Some(ctx), rect, Some(img))).unwrap())
+    /// Alternativa medida e descartada: guardar o original (até 768 px)
+    /// reduzido por média de área, a mesma redução do desenho.
+    fn area_768(img: &CGImage) -> Image {
+        let (iw, ih) = (CGImage::width(Some(img)), CGImage::height(Some(img)));
+        let side = iw.min(ih);
+        let rect = CGRect::new(CGPoint::new(((side as f64 - iw as f64) / 2.0).floor(), ((side as f64 - ih as f64) / 2.0).floor()), CGSize::new(iw as f64, ih as f64));
+        let big = Image::plain(side, side, draw_px(side, side, |ctx| CGContext::draw_image(Some(ctx), rect, Some(img))).unwrap());
+        let n = side.min(768);
+        Image::new(n, n, big.resampled(crate::render::RectF::new(0.0, 0.0, side as f32, side as f32), n, n).px.clone())
     }
 
-    /// Capa de antes e de agora no tamanho do card aberto em Retina (72 pt =
-    /// 144 px), a partir de uma capa de teste de 1200 px com anéis cada vez
-    /// mais finos (placa de zonas): no miolo os anéis cabem nos 144 px (devem
-    /// ficar com contraste), na borda não cabem (devem virar cinza liso, sem
-    /// moiré). Salva as duas, ampliadas 4×, em `TASKBEAT_SHOTS_DIR`.
+    /// A capa como o app guarda (CoreGraphics, 384 px) e a alternativa de
+    /// guardar maior (768 px, média de área), desenhadas no tamanho do card
+    /// aberto em Retina (72 pt = 144 px), a partir de uma capa de teste de
+    /// 1200 px com anéis cada vez mais finos (placa de zonas): no miolo os
+    /// anéis cabem nos 144 px (devem ficar com contraste), na borda não cabem
+    /// (devem virar cinza liso, sem moiré). No CI (26/11/2026): 384 pelo CG,
+    /// contraste 79,3 e moiré 5,2; 768 por área, 78,5 e 6,4. Salva as duas,
+    /// ampliadas 4×, em `TASKBEAT_SHOTS_DIR`.
     /// `cargo test --release cover_shots -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -232,7 +222,7 @@ mod tests {
             0xff00_0000 | (v << 16) | (v << 8) | v
         });
         let dir = std::env::var_os("TASKBEAT_SHOTS_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("taskbeat-shots"));
-        for (name, img) in [("antes-384", cover_square_384(&src)), ("agora", cover_square(&src, 768).unwrap())] {
+        for (name, img) in [("guardada-384-cg", cover_square(&src, 384).unwrap()), ("alternativa-768-area", area_768(&src))] {
             let t0 = std::time::Instant::now();
             let mut px = vec![0xff00_0000u32; D * D];
             Canvas::new(D, D, &mut px).draw_image_cover(RectF::new(0.0, 0.0, D as f32, D as f32), &img, 0.0, 1.0);

@@ -712,7 +712,6 @@ mod tests {
     #[test]
     #[ignore]
     fn custo_visual_mac() {
-        use std::sync::Arc;
         use std::time::Instant;
         fn ms(n: usize, mut f: impl FnMut()) -> f64 {
             f();
@@ -756,26 +755,6 @@ mod tests {
         for bg in [NotchBg::Album, NotchBg::Artwork] {
             let cfg = Config { notch_bg: bg, ..Config::default().with_mac_defaults() };
             println!("card aberto inteiro ({bg:?}): {:.2} ms por quadro", ms(30, || drop(open_island_with(&mut tr, &cfg))));
-        }
-        // Capa guardada: redução de uma capa grande (feita uma vez por música,
-        // fora da thread da tela) e desfoque para o fundo "Capa" (uma vez por
-        // capa, na thread da tela), com o limite de antes (384) e o de agora (768).
-        let big = |n: usize| Image::plain(n, n, (0..n * n).map(|i| 0xff00_0000 | ((i as u32).wrapping_mul(2_654_435_761) & 0x00ff_ffff)).collect());
-        for (src, max) in [(640usize, 384usize), (1200, 384), (640, 768), (1200, 768)] {
-            let full = big(src);
-            let k = src.min(max);
-            // Como `mac::gfx::square_at_most`: sem redução quando já cabe.
-            let reduce = ms(5, || {
-                let px = if src <= max { full.px.clone() } else { full.resampled(RectF::new(0.0, 0.0, src as f32, src as f32), k, k).px.clone() };
-                std::hint::black_box(Image::new(k, k, px));
-                full.sized.lock().unwrap().clear();
-            });
-            let stored = Arc::new(Image::new(k, k, full.resampled(RectF::new(0.0, 0.0, src as f32, src as f32), k, k).px.clone()));
-            let t = Instant::now();
-            let b = ui::blurred(&stored);
-            let blur = t.elapsed().as_secs_f64() * 1000.0;
-            let mem = (k * k * 4) as f64 * 4.0 / 3.0 / 1e6;
-            println!("capa de {src} px, limite {max}: guardada {k} px (~{mem:.1} MB com as reduções), reduzir {reduce:.1} ms, desfoque do fundo {blur:.1} ms ({} px)", b.w);
         }
     }
 
