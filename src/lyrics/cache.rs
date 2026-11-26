@@ -185,7 +185,7 @@ pub fn local(dir: &Path, t: &Track) -> Option<Lyrics> {
         if !matches!(ext.as_deref(), Some("lrc" | "txt")) {
             continue;
         }
-        let stem = file_norm(&p.file_stem().and_then(|x| x.to_str()).unwrap_or_default().to_string());
+        let stem = file_norm(p.file_stem().and_then(|x| x.to_str()).unwrap_or_default());
         // Quanto mais cedo na lista, melhor ("Artista - Música" vence "Música").
         if let Some(rank) = names.iter().position(|n| !n.is_empty() && *n == stem) {
             let rank = rank * 2 + usize::from(ext.as_deref() == Some("txt"));

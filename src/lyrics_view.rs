@@ -384,9 +384,14 @@ pub fn seek_track(g: &Geo, s: f32) -> Option<(f32, f32)> {
 
 // ---------------------------------------------------------------- desenho
 
+/// Camada guardada: chave, largura, altura e pixels.
+type Cached = (u64, usize, usize, Rc<Vec<u32>>);
+/// Camada guardada da tela cheia: chave, área e pixels.
+type CachedArea = (u64, RectF, Rc<Vec<u32>>);
+
 thread_local! {
     /// Fundo do painel guardado (refeito quando muda tamanho, capa, estilo…).
-    static BG: RefCell<Option<(u64, usize, usize, Rc<Vec<u32>>)>> = const { RefCell::new(None) };
+    static BG: RefCell<Option<Cached>> = const { RefCell::new(None) };
 }
 
 /// Solta o que fica guardado entre quadros (a janela escondeu).
@@ -467,6 +472,7 @@ thread_local! {
 }
 
 /// Máscara com sombra (texto sem fundo).
+#[allow(clippy::too_many_arguments)]
 fn blit_text(cv: &mut Canvas, m: &crate::render::Mask, x: f32, y: f32, c: Rgb, a: f32, shadow: bool, s: f32) {
     let a = a * FADE.with(|f| f.get());
     if a <= 0.003 {
@@ -643,6 +649,7 @@ pub fn plain_height(tr: &mut TextRenderer, lines: &[String], font: Font, w: f32,
     lines.iter().map(|l| if l.is_empty() { 12.0 * s } else { tr.mask_wrapped(l, font, w as i32, 3, Align::Left).h as f32 + 3.0 * s }).sum()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plain(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, lines: &[String], scroll: f32, font: Font, center: bool, fg: Rgb, shadow: bool, s: f32) {
     let align = if center { Align::Center } else { Align::Left };
     let clip = cv.clip_rect();
@@ -669,6 +676,7 @@ fn plain(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, lines: &[String], scr
 }
 
 /// Mensagem centralizada (sem letra, procurando…).
+#[allow(clippy::too_many_arguments)]
 fn message_box(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, l: &Lyrics, present: bool, fg: Rgb, shadow: bool, s: f32, small: bool) {
     let (title, sub) = message(l, present);
     if title.is_empty() {
@@ -753,7 +761,7 @@ fn draw_toolbar(cv: &mut Canvas, tr: &mut TextRenderer, g: &Geo, v: &View) {
     // Borda na cor de destaque: destravada, a janela pode ser arrastada.
     if !g.fullscreen && !locked {
         let th = theme(v.card_cfg, v.lc, v.colors, v.media);
-        cv.stroke_round(g.card.inset(-1.0 * s), g.radius + 1.0 * s, 1.5 * s, th.accent, 0.85 * a);
+        cv.stroke_round(g.card.inset(-s), g.radius + s, 1.5 * s, th.accent, 0.85 * a);
     }
     // Dica do botão sob o mouse, logo abaixo da barrinha.
     if let (Some((msg, ta)), Some(b)) = (v.tip, [(g.lock, LHit::Lock), (g.full, LHit::Full), (g.close, LHit::Close)].iter().find(|(_, h)| v.hover == Some(*h)).map(|(r, _)| *r)) {
@@ -857,7 +865,7 @@ thread_local! {
     /// Tela cheia: capa (com sombra), título e artista já desenhados, numa
     /// camada do tamanho da coluna da esquerda (a da música atual e a da
     /// anterior, para a troca cruzar as duas).
-    static FS_LEFT: RefCell<Vec<(u64, RectF, Rc<Vec<u32>>)>> = const { RefCell::new(Vec::new()) };
+    static FS_LEFT: RefCell<Vec<CachedArea>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Capa, título e artista da tela cheia (guardados entre quadros), com

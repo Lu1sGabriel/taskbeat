@@ -225,7 +225,7 @@ fn preview_focus(t: f32, n: usize) -> f32 {
     let step = 2.4;
     let k = (t / step).floor();
     let u = ((t - k * step) / 0.3).min(1.0);
-    let base = (k % n) as f32;
+    let base = k % n;
     // Volta ao começo sem animar (a última linha para a primeira).
     if base == 0.0 { 0.0 } else { base - 1.0 + crate::ui::ease_out_cubic(u) }
 }

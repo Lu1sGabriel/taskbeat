@@ -102,10 +102,10 @@ pub fn clean_title(t: &str) -> String {
     }
     // "Música - Official Video" / "Música | Lyrics".
     for sep in [" - ", " | ", " – ", " — "] {
-        if let Some(i) = s.rfind(sep) {
-            if is_noise(&s[i + sep.len()..]) {
-                s.truncate(i);
-            }
+        if let Some(i) = s.rfind(sep)
+            && is_noise(&s[i + sep.len()..])
+        {
+            s.truncate(i);
         }
     }
     // "Música feat. Fulano" sem parênteses.
@@ -159,7 +159,7 @@ fn get_query(artist: &str, title: &str, album: &str, dur: f64) -> Query {
     if !album.trim().is_empty() {
         p.push_str(&format!("&album_name={}", encode(album.trim())));
     }
-    if dur >= 1.0 && dur <= 3600.0 {
+    if (1.0..=3600.0).contains(&dur) {
         p.push_str(&format!("&duration={}", dur.round() as i64));
     }
     Query { path: p, search: false }

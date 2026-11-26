@@ -148,10 +148,10 @@ static FULL_REQ: AtomicBool = AtomicBool::new(false);
 /// Abre a tela cheia (botão das configurações); liga a sobreposição se precisar.
 pub fn open_fullscreen() {
     FULL_REQ.store(true, Ordering::Relaxed);
-    if let Some(shared) = SHARED.get() {
-        if !shared.config().lyrics.show {
-            shared.update_config(|c| c.lyrics.show = true);
-        }
+    if let Some(shared) = SHARED.get()
+        && !shared.config().lyrics.show
+    {
+        shared.update_config(|c| c.lyrics.show = true);
     }
     post(WM_APP_FULL);
 }
@@ -767,10 +767,10 @@ impl St {
             // A duração costuma chegar depois do título.
             self.track.dur = self.media.dur;
         }
-        if let Some((p, t)) = self.play_override {
-            if p == self.media.playing || t.elapsed() > Duration::from_secs(2) {
-                self.play_override = None;
-            }
+        if let Some((p, t)) = self.play_override
+            && (p == self.media.playing || t.elapsed() > Duration::from_secs(2))
+        {
+            self.play_override = None;
         }
         if self.fullscreen {
             self.ask_hires();
@@ -862,10 +862,10 @@ impl St {
     /// Posição da música agora, com o ajuste de tempo.
     fn position(&self) -> f64 {
         let mut pos = self.media.position_now();
-        if let Some((p, t)) = self.seek_sent {
-            if t.elapsed() < Duration::from_millis(1500) {
-                pos = p + if self.media.playing { t.elapsed().as_secs_f64() } else { 0.0 };
-            }
+        if let Some((p, t)) = self.seek_sent
+            && t.elapsed() < Duration::from_millis(1500)
+        {
+            pos = p + if self.media.playing { t.elapsed().as_secs_f64() } else { 0.0 };
         }
         pos + self.lc().offset_ms as f64 / 1000.0
     }
@@ -886,12 +886,13 @@ impl St {
             self.cur = new;
             self.last_sig = None;
         }
-        if self.media.playing && self.visible {
-            if let Some(next) = lyrics::next_change(&self.lines, t) {
-                // Acorda um pouquinho antes (o timer do Windows atrasa até ~16 ms).
-                let ms = ((next - t) * 1000.0 - 8.0).ceil().clamp(5.0, 3_600_000.0) as u32;
-                self.set_timer(T_LINE, ms);
-            }
+        if self.media.playing
+            && self.visible
+            && let Some(next) = lyrics::next_change(&self.lines, t)
+        {
+            // Acorda um pouquinho antes (o timer do Windows atrasa até ~16 ms).
+            let ms = ((next - t) * 1000.0 - 8.0).ceil().clamp(5.0, 3_600_000.0) as u32;
+            self.set_timer(T_LINE, ms);
         }
     }
 
@@ -1455,13 +1456,11 @@ impl St {
                 self.pressed = None;
             }
             Ev::Wheel(delta) => self.wheel(delta),
-            Ev::Key(k) => {
-                if self.fullscreen {
-                    if k == VK_ESCAPE.0 as u32 {
-                        self.set_fullscreen(false);
-                    } else if k == VK_SPACE.0 as u32 {
-                        self.click(LHit::Card(Hit::Play));
-                    }
+            Ev::Key(k) if self.fullscreen => {
+                if k == VK_ESCAPE.0 as u32 {
+                    self.set_fullscreen(false);
+                } else if k == VK_SPACE.0 as u32 {
+                    self.click(LHit::Card(Hit::Play));
                 }
             }
             _ => {}
@@ -1586,11 +1585,11 @@ impl St {
                 .iter()
                 .filter_map(|p| self.grid_spot(m, *p, card.w, card.h).map(|(x, y)| (*p, x, y, ((x - px).powi(2) + (y - py).powi(2)).sqrt())))
                 .min_by(|a, b| a.3.total_cmp(&b.3));
-            if let Some((p, x, y, dist)) = best {
-                if dist < reach {
-                    (px, py) = (x, y);
-                    d.snap = Some((mi, p));
-                }
+            if let Some((p, x, y, dist)) = best
+                && dist < reach
+            {
+                (px, py) = (x, y);
+                d.snap = Some((mi, p));
             }
             self.show_guides(mi, m, d.snap.map(|(_, p)| p));
         }

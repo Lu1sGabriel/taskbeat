@@ -200,10 +200,11 @@ pub fn with_gaps(lines: &[Line]) -> Vec<Line> {
             continue;
         }
         out.push(l.clone());
-        if let Some(n) = lines.get(i + 1) {
-            if !l.text.is_empty() && n.t - l.t > LONG_GAP {
-                out.push(gap(l.t + LINE_HOLD));
-            }
+        if let Some(n) = lines.get(i + 1)
+            && !l.text.is_empty()
+            && n.t - l.t > LONG_GAP
+        {
+            out.push(gap(l.t + LINE_HOLD));
         }
     }
     out
