@@ -556,6 +556,7 @@ static T: &[[&str; 4]] = &[
     ["Players", "Players", "Reproductores", "Player"],
     ["Ícones", "Icons", "Iconos", "Symbole"],
     ["Na tela", "On screen", "En pantalla", "Auf dem Bildschirm"],
+    ["Tocando no {}", "Playing on {}", "Sonando en {}", "Läuft in {}"],
     ["Visual", "Look", "Aspecto", "Aussehen"],
     ["Visual do cartão", "Card look", "Aspecto de la tarjeta", "Aussehen der Karte"],
     ["Usa o fundo, o tema, os cantos e a sombra do card expandido", "Uses the background, theme, corners and shadow of the expanded card", "Usa el fondo, el tema, las esquinas y la sombra de la tarjeta expandida", "Nutzt Hintergrund, Design, Ecken und Schatten der erweiterten Karte"],
