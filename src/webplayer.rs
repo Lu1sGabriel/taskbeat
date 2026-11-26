@@ -78,6 +78,7 @@ pub fn spawn(shared: Arc<Shared>) {
                 drop(cur);
                 // O overlay relê a música (e junta isto a ela).
                 shared.media_version.fetch_add(1, Ordering::Relaxed);
+                crate::lyrics_overlay::media_changed();
             }
         }
     });

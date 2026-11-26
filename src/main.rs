@@ -19,6 +19,7 @@ mod config;
 mod dsp;
 mod i18n;
 mod licenses;
+mod lyrics;
 mod notch;
 #[cfg(test)]
 mod png;
@@ -41,6 +42,12 @@ mod appicon;
 mod audio;
 #[cfg(windows)]
 mod launchers;
+#[cfg(windows)]
+mod lyrics_bg;
+#[cfg(windows)]
+mod lyrics_overlay;
+#[cfg(windows)]
+mod lyrics_view;
 #[cfg(windows)]
 mod media;
 #[cfg(windows)]
@@ -169,6 +176,7 @@ fn main() {
         webplayer::spawn(shared.clone());
         mixer::spawn(shared.clone());
         let overlay = overlay::spawn(shared.clone());
+        lyrics_overlay::init(shared.clone());
 
         if let Err(e) = tray::run(shared.clone()) {
             audio::log::warn(&format!("bandeja falhou: {e}"));

@@ -100,24 +100,28 @@ fn system_lang() -> Lang {
 
 /// Texto no idioma atual (a chave é o texto em português).
 pub fn tr(pt: &'static str) -> &'static str {
-    static MAP: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    static MAP: OnceLock<HashMap<&'static str, &'static [&'static str; 4]>> = OnceLock::new();
     let col = match lang() {
         Lang::Pt => return pt,
         Lang::En => 1,
         Lang::Es => 2,
         Lang::De => 3,
     };
-    let map = MAP.get_or_init(|| T.iter().enumerate().map(|(i, r)| (r[0], i)).collect());
+    let map = MAP.get_or_init(|| T.iter().chain(lyrics_t::T).map(|r| (r[0], r)).collect());
     match map.get(pt) {
-        Some(&i) => T[i][col],
+        Some(r) => r[col],
         None => pt,
     }
 }
 
 #[cfg(test)]
 pub fn has(pt: &str) -> bool {
-    T.iter().any(|r| r[0] == pt)
+    T.iter().chain(lyrics_t::T).any(|r| r[0] == pt)
 }
+
+/// Textos da sobreposição de letra (tabela à parte).
+#[path = "i18n_lyrics.rs"]
+mod lyrics_t;
 
 /// [português, inglês, espanhol, alemão]
 static T: &[[&str; 4]] = &[

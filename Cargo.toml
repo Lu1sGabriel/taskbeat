@@ -9,11 +9,14 @@ edition = "2024"
 [dependencies]
 realfft = "3.5"
 serde = { version = "1.0.229", features = ["derive"] }
+# Respostas do LRCLIB (letras) e mensagens da extensão do navegador.
 serde_json = "1"
 toml = "1.2.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"
+# Ponto de origem do texto quebrado em linhas (DirectWrite); já vem com o `windows`.
+windows-numerics = "0.3"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_Media_Audio", "Win32_Media_KernelStreaming", "Win32_Media_Multimedia", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_HiDpi", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Devices_FunctionDiscovery", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Variant", "Win32_System_Com_StructuredStorage", "Media_Control", "Foundation", "UI", "UI_ViewManagement", "Win32_Security", "Graphics", "Graphics_Imaging", "Storage", "Storage_Streams", "Win32_Media_Audio_Endpoints", "Win32_System_Diagnostics", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Controls", "Win32_System_Memory",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
@@ -29,7 +32,8 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"
     "Win32_Storage_Xps",
     "Win32_System_Pipes",
     "Win32_System_IO",
-    "Win32_Security_Authorization"] }
+    "Win32_Security_Authorization",
+    "Win32_Networking_WinHttp"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"

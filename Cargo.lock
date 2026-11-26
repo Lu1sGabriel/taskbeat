@@ -634,6 +634,7 @@ dependencies = [
  "wayland-protocols-wlr",
  "windows",
  "windows-core",
+ "windows-numerics",
  "x11rb",
  "zune-core",
  "zune-jpeg",

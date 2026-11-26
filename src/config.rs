@@ -559,6 +559,9 @@ pub struct Config {
     /// Ausente no arquivo = 0 (config antiga).
     #[serde(default)]
     pub version: u32,
+
+    /// Sobreposição de letra (tabela `[lyrics]`; fica no fim, depois dos valores simples).
+    pub lyrics: crate::lyrics::config::LyricsConfig,
 }
 
 const CONFIG_VERSION: u32 = 5;
@@ -695,6 +698,7 @@ impl Config {
             hide_on_fullscreen: true,
             language: Language::Auto,
             version: CONFIG_VERSION,
+            lyrics: Default::default(),
         }
     }
 }
@@ -826,6 +830,7 @@ impl Config {
         self.glass_blur = self.glass_blur.clamp(0, 100);
         self.glass_tint = self.glass_tint.clamp(20, 100);
         self.artwork_dim = self.artwork_dim.clamp(50, 150);
+        self.lyrics.sanitize();
     }
 }
 

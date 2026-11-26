@@ -157,6 +157,8 @@ enum Key {
     BarShape,
     /// Situação da extensão do navegador (só texto, muda com a conexão).
     BrowserExt,
+    /// Página "Letra" (opções em `settings_lyrics.rs`).
+    Lyrics(lyrics_page::LK),
 }
 
 #[derive(Clone, Copy)]
@@ -189,6 +191,7 @@ enum Preview {
     Visualizer,
     /// Card aberto sobre a barra com o widget (opções que valem para os dois).
     Overview,
+    Lyrics,
     None,
 }
 
@@ -206,6 +209,10 @@ struct Page {
 }
 
 use Item::{Row, Section};
+
+/// Página da sobreposição de letra (módulo à parte, para mexer pouco aqui).
+#[path = "settings_lyrics.rs"]
+mod lyrics_page;
 
 const SHAPES: &[&str] = &["Arredondada", "Círculo", "Quadrada"];
 const PLAY_SHAPES: &[&str] = &["Círculo", "Arredondado", "Quadrado"];
@@ -361,6 +368,7 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{E8B1}", title: "Só quando um player estiver tocando", desc: "Ignora jogos, chamadas e notificações", key: Key::OnlyMedia, kind: Kind::Toggle },
         ],
     },
+    lyrics_page::PAGE,
     Page {
         name: "Caps Lock",
         icon: "\u{E765}",
@@ -583,6 +591,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::ArtworkDim => c.artwork_dim,
         Key::BarShape => idx(BAR_SHAPE_V, c.bar_shape),
         Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::Advanced | Key::BrowserExt => 0,
+        Key::Lyrics(k) => lyrics_page::get(c, k),
     }
 }
 
@@ -683,6 +692,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::ArtworkDim => c.artwork_dim = v,
         Key::BarShape => c.bar_shape = pick(BAR_SHAPE_V, i),
         Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::Advanced | Key::BrowserExt => {}
+        Key::Lyrics(k) => lyrics_page::set(c, k, v),
     }
 }
 
@@ -730,6 +740,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         AccentRgb if c.accent_source != AccentSource::Custom => Some(ACCENT),
         GlassBlur | GlassTint if c.card_style != crate::config::CardStyle::Glass => Some(GLASS),
         ArtworkDim if c.card_style != crate::config::CardStyle::Artwork => Some(ARTWORK),
+        Lyrics(k) => lyrics_page::requirement(c, k),
         _ => None,
     }
 }
@@ -738,6 +749,7 @@ fn value_label(kind: Kind, key: Key, v: i32) -> String {
     let Kind::Slider { unit, .. } = kind else { return String::new() };
     match key {
         Key::Sens | Key::Offset | Key::OsdOffX | Key::OsdOffY => format!("{v:+} {unit}"),
+        Key::Lyrics(k) if lyrics_page::signed(k) => format!("{v:+} {unit}"),
         _ if unit == "%" => format!("{v}%"),
         Key::OsdDuration => format!("{},{} {unit}", v / 10, v % 10),
         _ => format!("{v} {unit}"),
@@ -1291,6 +1303,7 @@ impl Ui {
             Preview::LockKeys => (ui::osd_size(s, cfg).1 + 40.0 * s).max(166.0 * s),
             // Card aberto em cima da barra com o widget, como na tela.
             Preview::Overview => self.preview_card(s, cfg).h - ui::SHADOW_MARGIN * s + 72.0 * s,
+            Preview::Lyrics => lyrics_page::preview_height(cfg, s),
             Preview::None => 0.0,
         }
     }
@@ -1725,6 +1738,7 @@ impl Ui {
             Preview::Widget | Preview::Visualizer => widget,
             Preview::Card if st == 0 => 2.0,
             Preview::Overview if st == 0 => widget.max(2.0),
+            Preview::Lyrics => 30.0,
             Preview::Card | Preview::Overview | Preview::None => 0.0,
         }
     }
@@ -2407,7 +2421,7 @@ impl Ui {
         });
         // "Janelas" coloridas no papel de parede das prévias de cartões: dão
         // forma ao que o acrílico desfoca (num degradê liso ele não aparece).
-        if matches!(preview, Preview::Card | Preview::UpNext | Preview::LockKeys | Preview::Overview) {
+        if matches!(preview, Preview::Card | Preview::UpNext | Preview::LockKeys | Preview::Overview | Preview::Lyrics) {
             // (deslocamento do centro e largura em px lógicos; topo e altura em fração da prévia)
             let shapes: [(f32, f32, f32, f32, Rgb); 4] = [
                 (-330.0, 0.20, 250.0, 0.55, [0.98, 0.45, 0.55]),
@@ -2580,6 +2594,7 @@ impl Ui {
                     None => osd,
                 }
             }
+            Preview::Lyrics => lyrics_page::preview_rect(r, cfg, s),
             Preview::None => RectF::default(),
         };
         let rect = rect.intersect(r);
@@ -2694,6 +2709,7 @@ impl Ui {
                 }
             }
             Preview::LockKeys => self.draw_osd_preview(cv, r, cfg, &sc, s),
+            Preview::Lyrics => lyrics_page::draw_preview(cv, &mut self.preview_text, r, cfg, &sc.colors, &sc.media, sc.pb, s, sc.t),
             Preview::None => {}
         }
     }
@@ -3210,6 +3226,12 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 }
                 Kind::Button(_) if key == Key::OsdTest => {
                     u.shared.osd_test.store(true, Ordering::Relaxed);
+                    Action::Redraw
+                }
+                Kind::Button(_) if matches!(key, Key::Lyrics(_)) => {
+                    if let Key::Lyrics(k) = key {
+                        lyrics_page::press(&u.shared, k);
+                    }
                     Action::Redraw
                 }
                 _ => Action::None,

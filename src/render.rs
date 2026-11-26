@@ -601,6 +601,12 @@ impl<'a> Canvas<'a> {
         self.clip = (x0.min(x1), y0.min(y1), x1, y1);
     }
 
+    /// Linha `y` inteira (para quem pinta a tela toda de uma vez, como o
+    /// fundo animado da tela cheia da letra).
+    pub fn row_mut(&mut self, y: usize) -> &mut [u32] {
+        &mut self.px[y * self.w..(y + 1) * self.w]
+    }
+
     pub fn clip_rect(&self) -> RectF {
         let (x0, y0, x1, y1) = self.clip;
         RectF::new(x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32)

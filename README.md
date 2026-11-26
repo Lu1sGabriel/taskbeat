@@ -39,6 +39,10 @@ parado, praticamente não gasta CPU.
   bolinha mostra quando estão ligados) e mini barras que dançam com o som.
 - **Mixer de volume** (Windows): o volume de cada app, como no Mixer do Windows, e
   a troca da saída de áudio (fone, caixa de som…) com um clique.
+- **Letra na tela** (Windows): a letra sincronizada e o player numa janela sempre
+  por cima, como as sobreposições do Discord e da Steam. Arraste para um canto (ela
+  gruda nos lugares prontos), trave, mude o tamanho com Ctrl+roda, abra em tela
+  cheia com o fundo da capa em movimento. Win+Alt+L mostra e esconde.
 - **"A seguir"**: um cartão com a próxima música quando o player troca sozinho.
 - **Aviso de Caps Lock e Num Lock** bonito, no lugar do nada.
 - **YouTube Music no navegador**: aleatório e repetir funcionam, mesmo o
@@ -171,6 +175,10 @@ Sem entrar em detalhes, o Taskbeat conversa direto com o sistema:
   **PulseAudio/PipeWire** (só o som do player, quando dá para achar), o texto do
   **FreeType + HarfBuzz**, e a ilha é uma superfície **Wayland (layer-shell)** ou
   uma janela **X11**.
+- **Letras**: vêm do [LRCLIB](https://lrclib.net), um banco de letras aberto e
+  gratuito. Só o título, o artista, o álbum e a duração da música saem do PC (dá
+  para desligar a busca), e a letra fica guardada no disco. Letras próprias
+  (`Artista - Música.lrc`) numa pasta valem mais que a busca.
 - **Só trabalha quando precisa**: não redesenha o que não mudou, segue o ritmo do
   monitor nas animações e só capta o som quando as barras estão à vista.
 
@@ -191,7 +199,8 @@ Medido num Windows com i5-10400F:
 - **Mixer de volume no Mac**, se o macOS deixar controlar o volume por app.
 - **Mais players do navegador** com aleatório e repetir (como já funciona com o
   YouTube Music).
-- **Letra da música** no card.
+- **Letra no Mac e no Linux**: a busca, a leitura do LRC e a sincronia já são do
+  código comum; falta a janela de cada sistema.
 
 ## Para desenvolvedores
 
