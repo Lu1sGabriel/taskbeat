@@ -9,7 +9,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-PLATFORMS = {"Windows": "x86_64-pc-windows-msvc", "Mac": "aarch64-apple-darwin"}
+PLATFORMS = {"Windows": "x86_64-pc-windows-msvc", "Mac": "aarch64-apple-darwin", "Linux": "x86_64-unknown-linux-gnu"}
 
 
 def walk(platform):
@@ -87,9 +87,14 @@ out.append("|---|---|---|---|---|---|")
 for p in rows:
     kind = "app" if p["id"] in in_app else "build"
     repo = p.get("repository") or ""
-    systems = " e ".join(where.get(p["id"], []))
+    ws = where.get(p["id"], [])
+    systems = ", ".join(ws[:-1]) + " e " + ws[-1] if len(ws) > 1 else "".join(ws)
     out.append(f"| {p['name']} | {p['version']} | {p.get('license') or '—'} | {kind} | {systems} | {repo} |")
 out.append("| mediaremote-adapter | 2ef957c | BSD-3-Clause | app (dentro do Taskbeat.app) | Mac | https://github.com/ungive/mediaremote-adapter |")
+out.append("")
+out.append("No Linux o app também usa bibliotecas do próprio sistema, que não vão no pacote (são")
+out.append("as que já vêm com o desktop, ligadas na hora de abrir): fontconfig (MIT), FreeType (FTL),")
+out.append("HarfBuzz (MIT), libdbus (AFL-2.1 ou GPL-2.0) e libpulse (LGPL-2.1).")
 
 out.append("\n## Avisos de copyright\n")
 for p in rows:

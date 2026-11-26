@@ -121,8 +121,27 @@ Por enquanto ela não está na loja: carregue a pasta `extension` em
 3. O macOS pede para gravar o áudio do sistema (para as barras) e, com o Spotify,
    para automatizá-lo (aleatório e repetir). Nada é gravado nem guardado.
 
+### Linux (em teste)
+
+Ainda sem versão publicada: o `.deb` (Ubuntu, Debian, Mint, Pop!_OS) e o AppImage
+(qualquer distro) saem do `build-linux.sh`. O widget é a mesma ilha do Mac, no
+topo da tela:
+
+- **KDE Plasma 6, Sway, Hyprland, COSMIC, niri**: fica sobre as janelas
+  (layer-shell do Wayland), nítido em qualquer escala.
+- **GNOME** (Ubuntu, Fedora), **XFCE, Cinnamon, MATE**: janela X11 (no GNOME,
+  pelo XWayland), logo abaixo da barra de cima.
+- Ícone na bandeja com o menu onde houver bandeja (no Ubuntu ela vem ligada; no
+  Fedora com GNOME, abrir o app de novo abre as configurações).
+
+Funciona com qualquer player que publique no **MPRIS** (Spotify, VLC, Rhythmbox,
+Elisa, os navegadores…). Aleatório e repetir aparecem nos players que os
+publicam. As configurações, por enquanto, ficam em `~/.config/taskbeat/config.toml`
+(o menu **Configurações…** abre o arquivo, e o app relê ao salvar).
+
 Para remover: no Windows, **Configurações → Apps → Taskbeat → Desinstalar**; no
-Mac, arraste o app para o Lixo.
+Mac, arraste o app para o Lixo; no Linux, `sudo apt remove taskbeat` (ou apague o
+AppImage).
 
 ## Por que Rust
 
@@ -148,6 +167,10 @@ Sem entrar em detalhes, o Taskbeat conversa direto com o sistema:
   aparece em **janelas em camadas** transparentes, coladas na barra de tarefas.
 - **Mac**: a música vem do **Tocando Agora** (MediaRemote), as barras do
   **Core Audio**, e a ilha e as configurações são janelas do **AppKit**.
+- **Linux**: a música vem do **MPRIS** (D-Bus), as barras e o volume do
+  **PulseAudio/PipeWire** (só o som do player, quando dá para achar), o texto do
+  **FreeType + HarfBuzz**, e a ilha é uma superfície **Wayland (layer-shell)** ou
+  uma janela **X11**.
 - **Só trabalha quando precisa**: não redesenha o que não mudou, segue o ritmo do
   monitor nas animações e só capta o som quando as barras estão à vista.
 
@@ -161,8 +184,8 @@ Medido num Windows com i5-10400F:
 
 ## Próximos passos
 
-- **Linux**: o widget no painel do GNOME e do KDE, com a música pelo MPRIS e o
-  som pelo PipeWire.
+- **Linux**: tela de configurações própria, com prévia ao vivo; uma extensão do
+  GNOME e um widget do Plasma para morar dentro do painel.
 - **Assinatura de código**: o pedido na SignPath Foundation está em análise; com
   ela, o aviso do Windows na instalação some.
 - **Mixer de volume no Mac**, se o macOS deixar controlar o volume por app.
@@ -179,6 +202,7 @@ cargo build --release      # Windows: target\release\taskbeat.exe
 
 ```bash
 ./build-macos.sh           # Mac: dist/Taskbeat.app e dist/Taskbeat-<versão>.dmg
+./build-linux.sh           # Linux: dist/taskbeat_<versão>_amd64.deb e dist/Taskbeat-<versão>-x86_64.AppImage
 ```
 
 ## Licença

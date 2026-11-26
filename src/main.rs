@@ -7,11 +7,12 @@
 //! - overlay: análise FFT + desenho sobre a barra de tarefas (overlay.rs)
 //!
 //! macOS: veja `mac/mod.rs` (widget no notch, AppKit na thread principal).
+//! Linux: veja `linux/mod.rs` (ilha no topo da tela, Wayland ou X11).
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-// No Mac parte do código comum (opções da barra de tarefas, aviso de teclas…)
-// não é usada.
-#![cfg_attr(target_os = "macos", allow(dead_code))]
+// No Mac e no Linux parte do código comum (opções da barra de tarefas, aviso
+// de teclas…) não é usada.
+#![cfg_attr(any(target_os = "macos", target_os = "linux"), allow(dead_code))]
 
 // Comuns aos dois sistemas: configurações, análise do áudio, traduções e desenho.
 mod config;
@@ -24,8 +25,10 @@ mod png;
 mod render;
 mod shared;
 mod ui;
-// Mesma interface nos dois sistemas; DirectWrite no Windows, CoreText no Mac.
+// Mesma interface nos três sistemas; DirectWrite no Windows, CoreText no Mac,
+// FreeType + HarfBuzz no Linux.
 #[cfg_attr(target_os = "macos", path = "mac/text.rs")]
+#[cfg_attr(target_os = "linux", path = "linux/text.rs")]
 mod text;
 
 #[cfg(test)]
@@ -74,6 +77,15 @@ mod mac;
 #[cfg(target_os = "macos")]
 fn main() {
     mac::main();
+}
+
+// Só Linux.
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+fn main() {
+    linux::main();
 }
 
 #[cfg(windows)]

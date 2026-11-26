@@ -81,6 +81,23 @@ fn system_lang() -> Lang {
     }
 }
 
+/// Idioma da sessão (variáveis de localidade, na ordem que o gettext usa).
+#[cfg(target_os = "linux")]
+fn system_lang() -> Lang {
+    let first = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .flat_map(|v| v.split(':').map(str::to_string).collect::<Vec<_>>())
+        .find(|v| !v.is_empty() && v != "C" && v != "POSIX" && !v.starts_with("C."))
+        .unwrap_or_default();
+    match first.to_ascii_lowercase().get(..2) {
+        Some("pt") => Lang::Pt,
+        Some("es") => Lang::Es,
+        Some("de") => Lang::De,
+        _ => Lang::En,
+    }
+}
+
 /// Texto no idioma atual (a chave é o texto em português).
 pub fn tr(pt: &'static str) -> &'static str {
     static MAP: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
@@ -556,4 +573,8 @@ static T: &[[&str; 4]] = &[
     ["Sem música, o widget some da barra", "With no music, the widget leaves the taskbar", "Sin música, el widget desaparece de la barra", "Ohne Musik verschwindet das Widget aus der Taskleiste"],
     ["O widget está desligado", "The widget is off", "El widget está desactivado", "Das Widget ist aus"],
     ["Exemplo: um player que não deixa mudar o aleatório e o repetir", "Example: a player that doesn't allow changing shuffle and repeat", "Ejemplo: un reproductor que no deja cambiar el aleatorio y el repetir", "Beispiel: ein Player, der Zufall und Wiederholen nicht ändern lässt"],
+    // ---- Linux
+    ["Este player não deixa mudar isso", "This player doesn't allow changing this", "Este reproductor no permite cambiar esto", "Dieser Player lässt das nicht ändern"],
+    ["Widget de música", "Music widget", "Widget de música", "Musik-Widget"],
+    ["Mostrar/esconder o card", "Show/hide the card", "Mostrar/ocultar la tarjeta", "Karte ein-/ausblenden"],
 ];
