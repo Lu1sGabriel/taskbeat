@@ -143,6 +143,7 @@ static T: &[[&str; 4]] = &[
     ["Cartão \"A seguir\"", "\"Up next\" card", "Tarjeta \"A continuación\"", "„Als Nächstes“-Karte"],
     ["Aviso de Caps Lock", "Caps Lock alert", "Aviso de Bloq Mayús", "Feststelltasten-Hinweis"],
     ["Sair do Taskbeat", "Quit Taskbeat", "Salir de Taskbeat", "Taskbeat beenden"],
+    ["Reiniciar o Taskbeat", "Restart Taskbeat", "Reiniciar Taskbeat", "Taskbeat neu starten"],
     // ---- opções
     ["Arredondada", "Rounded", "Redondeada", "Abgerundet"],
     ["Arredondado", "Rounded", "Redondeado", "Abgerundet"],

@@ -103,11 +103,11 @@ use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::atomic::Ordering;
 #[cfg(windows)]
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
 #[cfg(windows)]
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 #[cfg(windows)]
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, PostMessageW, WM_LBUTTONUP};
 #[cfg(windows)]
@@ -146,7 +146,7 @@ fn main() {
             return;
         }
         // Uma instância só.
-        let _mutex = CreateMutexW(None, true, w!("Local\\Taskbeat.SingleInstance"));
+        let mutex = CreateMutexW(None, true, w!("Local\\Taskbeat.SingleInstance"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
             // Já está aberto (ex.: clicou no atalho do Menu Iniciar de novo):
             // abre as configurações da instância que está rodando.
@@ -186,5 +186,22 @@ fn main() {
         shared.running.store(false, Ordering::Relaxed);
         let _ = overlay.join();
         let _ = audio.join();
+
+        // "Reiniciar o Taskbeat" (bandeja): solta a instância única antes de
+        // abrir a cópia nova (senão ela acharia esta e sairia).
+        if tray::RESTART.load(Ordering::Relaxed) {
+            if let Ok(m) = mutex {
+                let _ = ReleaseMutex(m);
+                let _ = CloseHandle(m);
+            }
+            match std::env::current_exe() {
+                Ok(exe) => {
+                    if let Err(e) = std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
+                        audio::log::warn(&format!("reiniciar: não abriu a cópia nova: {e}"));
+                    }
+                }
+                Err(e) => audio::log::warn(&format!("reiniciar: caminho do exe: {e}")),
+            }
+        }
     }
 }
