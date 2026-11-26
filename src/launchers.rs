@@ -6,13 +6,24 @@
 //! (YouTube Music no Brave, Chrome ou Edge). Só entram os players conhecidos,
 //! na ordem abaixo. Abrir é o mesmo que clicar no Menu Iniciar
 //! (`shell:AppsFolder\<AUMID>`).
+//!
+//! A lista é refeita logo que um app é instalado ou removido (`Watch`): o
+//! Windows avisa quando mudam as pastas de atalhos do Menu Iniciar ou a lista
+//! de pacotes da Store. Sem aviso, a thread fica parada esperando.
 
 use crate::appicon;
 use crate::audio::log;
 use crate::shared::{Launcher, Shared};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Storage::FileSystem::{
+    FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
+};
+use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, KEY_NOTIFY, REG_NOTIFY_CHANGE_NAME, RegCloseKey, RegNotifyChangeKeyValue, RegOpenKeyExW};
+use windows::Win32::System::Threading::{CreateEventW, WaitForMultipleObjects};
+use windows::Win32::UI::Shell::{FOLDERID_CommonPrograms, FOLDERID_Programs, KNOWN_FOLDER_FLAG, SHGetKnownFolderPath};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize};
 use windows::Win32::UI::Shell::{
     BHID_EnumItems, FOLDERID_AppsFolder, IEnumShellItems, IShellItem, KF_FLAG_DEFAULT, SHGetKnownFolderItem, SIGDN, SIGDN_NORMALDISPLAY, SIGDN_PARENTRELATIVEPARSING,
@@ -28,8 +39,15 @@ use windows::core::{BOOL, HSTRING, w};
 
 /// No máximo tantos atalhos (a linha cabe no card).
 pub const MAX: usize = 7;
-/// A lista é refeita de tempos em tempos (apps instalados ou removidos).
+/// Sem aviso do Windows, a lista ainda é refeita de tempos em tempos (por garantia).
 const RESCAN: Duration = Duration::from_secs(30 * 60);
+/// Depois de um aviso, espera o instalador parar de mexer nas pastas
+/// (sem aviso novo por este tempo)...
+const SETTLE: Duration = Duration::from_secs(2);
+/// ... mas não mais que isto.
+const SETTLE_MAX: Duration = Duration::from_secs(15);
+/// Chave onde o Windows lista os pacotes (apps da Store) do usuário.
+const PACKAGES_KEY: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
 
 /// Players conhecidos: nome na pasta "Aplicativos" (sem diferenciar
 /// maiúsculas) e trechos do AUMID que identificam o app em qualquer idioma.
@@ -64,6 +82,13 @@ const KNOWN: &[(&str, &[&str])] = &[
 /// Players gerais e de vídeo (nomes de `KNOWN`): o Media Player do Windows
 /// (o antigo Groove, que também toca vídeo) e o VLC. Escondidos por padrão.
 const GENERAL: &[&str] = &["media player", "vlc media player"];
+
+/// App de música conhecido (Spotify, YouTube Music, Shazam, Apple Music,
+/// Deezer…), e não um player geral ou de vídeo nem um navegador: tem a vez
+/// na escolha da música que o widget mostra (`media`).
+pub fn is_music(name: &str, aumid: &str) -> bool {
+    known(name, aumid).is_some() && !general(name, aumid)
+}
 
 /// Player geral ou de vídeo (não aparece sozinho como atalho).
 fn general(name: &str, aumid: &str) -> bool {
@@ -193,6 +218,7 @@ pub fn spawn(shared: Arc<Shared>) {
         crate::system::background_thread();
         // Deixa o app abrir primeiro.
         std::thread::sleep(Duration::from_secs(3));
+        let watch = Watch::start_menu_and_store();
         while shared.is_running() {
             let list = scan();
             let names: Vec<&str> = list.iter().map(|l| l.name.as_str()).collect();
@@ -206,14 +232,134 @@ pub fn spawn(shared: Arc<Shared>) {
                 // Redesenha o card (e as prévias) com a lista nova.
                 shared.config_version.fetch_add(1, Ordering::Relaxed);
             }
-            let mut slept = Duration::ZERO;
-            while slept < RESCAN && shared.is_running() {
-                std::thread::sleep(Duration::from_secs(1));
-                slept += Duration::from_secs(1);
+            // Espera um aviso (app instalado ou removido) ou o tempo de garantia.
+            let t = Instant::now();
+            let mut changed = false;
+            while !changed && t.elapsed() < RESCAN && shared.is_running() {
+                changed = watch.wait(Duration::from_secs(1));
+            }
+            if changed {
+                // Um instalador cria várias pastas e atalhos: espera aquietar.
+                let t = Instant::now();
+                while t.elapsed() < SETTLE_MAX && shared.is_running() && watch.wait(SETTLE) {}
             }
         }
+        drop(watch);
         unsafe { CoUninitialize() };
     });
+}
+
+/// De onde vem cada aviso de `Watch`.
+enum Source {
+    /// Pasta vigiada (rearma com `FindNextChangeNotification`).
+    Dir,
+    /// Chave do registro (rearma com outro `RegNotifyChangeKeyValue`).
+    Key(HKEY),
+}
+
+/// Avisos do Windows quando algo muda nas pastas e chaves vigiadas: a thread
+/// dorme no próprio Windows até um deles (custo zero parado).
+struct Watch {
+    handles: Vec<HANDLE>,
+    sources: Vec<Source>,
+}
+
+impl Watch {
+    /// As pastas de atalhos do Menu Iniciar (do usuário e de todos, com as
+    /// subpastas: programas comuns e os apps instalados pelo navegador, como o
+    /// YouTube Music) e a lista de pacotes da Store.
+    fn start_menu_and_store() -> Self {
+        let mut dirs = Vec::new();
+        for id in [&FOLDERID_Programs, &FOLDERID_CommonPrograms] {
+            unsafe {
+                if let Ok(p) = SHGetKnownFolderPath(id, KNOWN_FOLDER_FLAG(0), None) {
+                    dirs.push(p.to_string().unwrap_or_default());
+                    CoTaskMemFree(Some(p.0 as _));
+                }
+            }
+        }
+        let mut w = Self::dirs(&dirs);
+        w.add_key(PACKAGES_KEY);
+        log::info(&format!("lista de apps: vigiando {} pastas e chaves", w.handles.len()));
+        w
+    }
+
+    /// Vigia as pastas `dirs` (com as subpastas): arquivos ou pastas criados,
+    /// renomeados ou apagados.
+    fn dirs(dirs: &[String]) -> Self {
+        let mut w = Watch { handles: Vec::new(), sources: Vec::new() };
+        for d in dirs.iter().filter(|d| !d.is_empty()) {
+            let filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME;
+            if let Ok(h) = unsafe { FindFirstChangeNotificationW(&HSTRING::from(d.as_str()), true, filter) } {
+                w.handles.push(h);
+                w.sources.push(Source::Dir);
+            }
+        }
+        w
+    }
+
+    /// Vigia a chave `path` de `HKEY_CURRENT_USER` (subchaves criadas ou apagadas).
+    fn add_key(&mut self, path: &str) {
+        unsafe {
+            let mut key = HKEY::default();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(path), None, KEY_NOTIFY, &mut key) != ERROR_SUCCESS {
+                return;
+            }
+            let Ok(ev) = CreateEventW(None, false, false, None) else {
+                let _ = RegCloseKey(key);
+                return;
+            };
+            if RegNotifyChangeKeyValue(key, true, REG_NOTIFY_CHANGE_NAME, Some(ev), true) != ERROR_SUCCESS {
+                let _ = CloseHandle(ev);
+                let _ = RegCloseKey(key);
+                return;
+            }
+            self.handles.push(ev);
+            self.sources.push(Source::Key(key));
+        }
+    }
+
+    /// Espera até `max` por um aviso. `true` se algo mudou (e já volta a vigiar).
+    fn wait(&self, max: Duration) -> bool {
+        if self.handles.is_empty() {
+            std::thread::sleep(max);
+            return false;
+        }
+        let r = unsafe { WaitForMultipleObjects(&self.handles, false, max.as_millis() as u32) };
+        let i = r.0.wrapping_sub(WAIT_OBJECT_0.0) as usize;
+        if i >= self.handles.len() {
+            return false;
+        }
+        unsafe {
+            match self.sources[i] {
+                Source::Dir => {
+                    let _ = FindNextChangeNotification(self.handles[i]);
+                }
+                Source::Key(key) => {
+                    let _ = RegNotifyChangeKeyValue(key, true, REG_NOTIFY_CHANGE_NAME, Some(self.handles[i]), true);
+                }
+            }
+        }
+        true
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        for (h, src) in self.handles.iter().zip(&self.sources) {
+            unsafe {
+                match src {
+                    Source::Dir => {
+                        let _ = FindCloseChangeNotification(*h);
+                    }
+                    Source::Key(key) => {
+                        let _ = RegCloseKey(*key);
+                        let _ = CloseHandle(*h);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Abre o app. Se ele já estiver aberto, traz a janela dele para a frente: o
@@ -361,6 +507,21 @@ fn bring_forward(id: &str, title: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Um atalho novo numa pasta vigiada (como o de um app instalado no Menu
+    /// Iniciar) acorda a espera; sem mudança, ela só volta no fim do prazo.
+    #[test]
+    fn aviso_de_app_instalado() {
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("taskbeat-watch-{}", std::process::id()));
+        let sub = dir.join("Brave Apps");
+        std::fs::create_dir_all(&sub).unwrap();
+        let w = super::Watch::dirs(&[dir.to_string_lossy().into_owned()]);
+        assert!(!w.wait(Duration::from_millis(50)));
+        std::fs::write(sub.join("Spotify.lnk"), b"x").unwrap();
+        assert!(w.wait(Duration::from_secs(5)));
+        drop(w);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     /// Qual janela seria trazida para a frente para o player atual (sem trazer).
     /// `cargo test --release player_window_here -- --ignored --nocapture`
     #[test]

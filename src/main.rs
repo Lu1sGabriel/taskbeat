@@ -18,6 +18,7 @@
 mod anim;
 mod config;
 mod dsp;
+mod http;
 mod i18n;
 mod licenses;
 mod lyrics;
@@ -27,6 +28,7 @@ mod png;
 mod render;
 mod shared;
 mod ui;
+mod update;
 // Mesma interface nos três sistemas; DirectWrite no Windows, CoreText no Mac,
 // FreeType + HarfBuzz no Linux.
 #[cfg_attr(target_os = "macos", path = "mac/text.rs")]
@@ -105,11 +107,11 @@ use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::atomic::Ordering;
 #[cfg(windows)]
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError};
 #[cfg(windows)]
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 #[cfg(windows)]
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, PostMessageW, WM_LBUTTONUP};
 #[cfg(windows)]
@@ -148,11 +150,24 @@ fn main() {
             return;
         }
         // Uma instância só.
-        let _mutex = CreateMutexW(None, true, w!("Local\\Taskbeat.SingleInstance"));
-        if GetLastError() == ERROR_ALREADY_EXISTS {
+        let mutex = CreateMutexW(None, true, &windows::core::HSTRING::from(instance_mutex()));
+        let existed = GetLastError() == ERROR_ALREADY_EXISTS;
+        let after_update = std::env::args().any(|a| a.starts_with("--after-update="));
+        if existed && after_update {
+            // Versão nova recém-instalada: a antiga está fechando; espera ela
+            // soltar a instância (até 15 s) em vez de chamar por ela.
+            let Ok(m) = &mutex else { return };
+            let r = WaitForSingleObject(*m, 15_000);
+            if r != windows::Win32::Foundation::WAIT_OBJECT_0 && r != windows::Win32::Foundation::WAIT_ABANDONED {
+                return;
+            }
+        } else if existed {
             // Já está aberto (ex.: clicou no atalho do Menu Iniciar de novo):
-            // abre as configurações da instância que está rodando.
-            if let Ok(tray) = FindWindowW(w!("TaskbeatTray"), windows::core::PCWSTR::null()) {
+            // abre as configurações da instância que está rodando. (A cópia de
+            // teste do atualizador não chama ninguém: poderia achar a de verdade.)
+            if instance_mutex().ends_with("SingleInstance")
+                && let Ok(tray) = FindWindowW(w!("TaskbeatTray"), windows::core::PCWSTR::null())
+            {
                 let mut pid = 0u32;
                 GetWindowThreadProcessId(tray, Some(&mut pid));
                 let _ = AllowSetForegroundWindow(pid);
@@ -178,6 +193,7 @@ fn main() {
         webext::spawn(shared.clone());
         webplayer::spawn(shared.clone());
         mixer::spawn(shared.clone());
+        update::spawn(shared.clone());
         let overlay = overlay::spawn(shared.clone());
         lyrics_overlay::init(shared.clone());
 
@@ -188,5 +204,33 @@ fn main() {
         shared.running.store(false, Ordering::Relaxed);
         let _ = overlay.join();
         let _ = audio.join();
+
+        // "Reiniciar o Taskbeat" (bandeja): solta a instância única antes de
+        // abrir a cópia nova (senão ela acharia esta e sairia).
+        if tray::RESTART.load(Ordering::Relaxed) {
+            if let Ok(m) = mutex {
+                let _ = ReleaseMutex(m);
+                let _ = CloseHandle(m);
+            }
+            match std::env::current_exe() {
+                Ok(exe) => {
+                    if let Err(e) = std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
+                        audio::log::warn(&format!("reiniciar: não abriu a cópia nova: {e}"));
+                    }
+                }
+                Err(e) => audio::log::warn(&format!("reiniciar: caminho do exe: {e}")),
+            }
+        }
     }
+}
+
+/// Nome da instância única. No teste de ponta a ponta do atualizador
+/// (`TASKBEAT_INSTANCE`) a cópia de teste roda ao lado do Taskbeat de verdade.
+#[cfg(windows)]
+fn instance_mutex() -> String {
+    #[cfg(any(debug_assertions, feature = "e2e"))]
+    if let Some(i) = update::test_env("TASKBEAT_INSTANCE") {
+        return format!("Local\\Taskbeat.SingleInstance.{i}");
+    }
+    "Local\\Taskbeat.SingleInstance".to_string()
 }

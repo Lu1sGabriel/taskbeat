@@ -147,6 +147,22 @@ Para remover: no Windows, **Configurações → Apps → Taskbeat → Desinstala
 Mac, arraste o app para o Lixo; no Linux, `sudo apt remove taskbeat` (ou apague o
 AppImage).
 
+### Atualizações
+
+Ao abrir e uma vez por dia, o Taskbeat procura uma versão nova nas releases do
+GitHub. No Windows, um aviso perto do relógio oferece **Atualizar agora**,
+**Depois** ou **Pular esta versão**; atualizar troca o app e o reabre em um
+segundo, sem perder as configurações. Em **Configurações → Geral →
+Atualizações** dá para desligar a procura, instalar sozinho sem perguntar ou
+receber as versões de teste. No Mac, por enquanto, o aviso abre a página da
+versão nova.
+
+O app só instala uma versão **assinada pela chave do projeto** (ECDSA P-256,
+conferida pela criptografia do próprio Windows). A chave privada não fica no
+GitHub: mesmo com a conta invadida, ninguém consegue empurrar um executável
+falso. A consulta mostra o seu IP ao GitHub, como abrir qualquer site; nada
+mais é enviado.
+
 ## Por que Rust
 
 O Taskbeat fica aberto o dia todo, então precisa ser leve. O Rust ajuda nisso:
@@ -206,8 +222,15 @@ Medido num Windows com i5-10400F:
 
 ```powershell
 cargo build --release      # Windows: target\release\taskbeat.exe
-.\build-installer.ps1      # Windows: dist\Taskbeat-Setup-<versão>.exe
+.\build-installer.ps1      # Windows: dist\Taskbeat-Setup-<versão>.exe e o .sig
 ```
+
+Cada release do Windows publica o `.exe` **e** o `.sig`. O `build-installer.ps1`
+assina com a chave privada de `%USERPROFILE%\.taskbeat-keys` (gerada uma vez
+com `.\tools\new-update-key.ps1`, que grava a chave pública em
+`assets\update-public-key.txt`); sem `.sig` válido, o app não instala a versão
+sozinho. `.\tools\update-e2e.ps1` testa a atualização de ponta a ponta com uma
+release falsa em `127.0.0.1`.
 
 ```bash
 ./build-macos.sh           # Mac: dist/Taskbeat.app e dist/Taskbeat-<versão>.dmg
