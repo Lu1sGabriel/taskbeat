@@ -48,8 +48,11 @@ parado, praticamente não gasta CPU.
 - **"A seguir"**: um cartão com a próxima música quando o player troca sozinho.
 - **Aviso de Caps Lock e Num Lock** bonito, no lugar do nada.
 - **YouTube Music no navegador**: aleatório e repetir funcionam, mesmo o
-  navegador não contando isso ao Windows (com a [extensão](extension/README.md)
-  opcional, lidos da própria página).
+  navegador não contando isso ao Windows; com a [extensão](extension/README.md)
+  opcional (que já vem com o app e chega em breve à Chrome Web Store), eles e a
+  capa em alta resolução vêm da própria página.
+- **Visual do app**: Palco, Estúdio ou Ilha, com o nível de arredondamento dos
+  cantos, valendo para o widget, o card, o aviso, a letra e as configurações.
 - **Atalhos** para abrir seus apps de música.
 - **Do seu jeito**: cores, formatos, tamanhos e posição, com prévia ao vivo.
 - **Em português, inglês, espanhol e alemão.**
@@ -112,9 +115,17 @@ card. Sem notch, fica no meio da barra de menus.
    de administrador.
 
 **Opcional, YouTube Music no navegador:** a [extensão do Taskbeat](extension/README.md)
-(Chrome, Brave, Edge) lê o aleatório e o repetir da própria página do YouTube Music.
-Por enquanto ela não está na loja: carregue a pasta `extension` em
-`brave://extensions` → **Modo do desenvolvedor** → **Carregar sem compactação**.
+(Chrome, Brave, Edge) lê o aleatório, o repetir e a capa em alta resolução da
+própria página do YouTube Music.
+
+> **A extensão chega em breve à Chrome Web Store.** Até lá, ela já vem com o
+> Taskbeat: o instalador grava a pasta `extension` junto do app
+> (`%LOCALAPPDATA%\Programs\Taskbeat\extension`, na pasta padrão), e o botão
+> **Configurações › Apps de música › Extensão do navegador › Instalar extensão**
+> abre essa pasta e o passo a passo. No navegador: `brave://extensions` (ou
+> `chrome://extensions`, `edge://extensions`) → **Modo do desenvolvedor** →
+> **Carregar sem compactação** → escolha a pasta. A mesma pasta também sai em
+> `.zip` em cada release.
 
 ### macOS 12 ou mais novo
 
@@ -224,7 +235,7 @@ Medido num Windows com i5-10400F:
 
 ```powershell
 cargo build --release      # Windows: target\release\taskbeat.exe
-.\build-installer.ps1      # Windows: dist\Taskbeat-Setup-<versão>.exe e o .sig
+.\build-installer.ps1      # Windows: dist\Taskbeat-Setup-<versão>.exe, o .sig e o .zip da extensão
 ```
 
 Cada release do Windows publica o `.exe` **e** o `.sig`. O `build-installer.ps1`

@@ -2,23 +2,30 @@
 
 Opcional. Com ela, o Taskbeat sabe o estado real do **aleatório** e do **repetir**
 do YouTube Music no navegador (numa aba ou no app instalado pelo navegador) e
-comanda os dois, lendo a própria página. Sem ela, o Taskbeat continua usando a
-acessibilidade do Windows (UI Automation) e a cor do botão do aleatório.
+comanda os dois, lendo a própria página. Ela também manda o endereço da **capa em
+alta resolução** (o navegador só passa ao Windows uma de 120 px), que a letra em
+tela cheia usa. Sem ela, o Taskbeat continua usando a acessibilidade do Windows
+(UI Automation) e a cor do botão do aleatório.
+
+> **Em breve na Chrome Web Store.** Até ela ser publicada, a extensão já vem com
+> o Taskbeat, para instalar sem a loja (os passos abaixo).
 
 ## Instalar
 
 Primeiro instale ou atualize o Taskbeat pelo `Taskbeat-Setup`: o instalador registra
-o programa que a extensão chama (Native Messaging). Depois, no Taskbeat, abra
-**Configurações › Apps de música › Extensão do navegador** e clique em **Instalar
-extensão**. A mesma linha mostra quando ela conecta. As abas do YouTube Music já
-abertas recebem a extensão na hora.
+o programa que a extensão chama (Native Messaging) e grava a pasta da extensão
+junto do app (`%LOCALAPPDATA%\Programs\Taskbeat\extension`, na pasta padrão). A
+pasta também sai em `.zip` em cada release.
 
-Enquanto a extensão não está na Chrome Web Store, o botão traz até aqui. Para
-instalar sem a loja:
-
-1. No navegador, abra `brave://extensions` (ou `chrome://extensions`,
+1. No Taskbeat, abra **Configurações › Apps de música › Extensão do navegador** e
+   clique em **Instalar extensão**: abre a pasta da extensão e esta página.
+2. No navegador, abra `brave://extensions` (ou `chrome://extensions`,
    `edge://extensions`) e ligue o **Modo do desenvolvedor**.
-2. Clique em **Carregar sem compactação** e escolha esta pasta `extension`.
+3. Clique em **Carregar sem compactação** e escolha a pasta `extension`.
+
+A linha das configurações mostra quando ela conecta. As abas do YouTube Music já
+abertas recebem a extensão na hora. Quando o Taskbeat atualiza, a pasta é posta em
+dia junto: recarregue a extensão no navegador (o botão ↻ dela) para usar a nova.
 
 Carregada assim, o ID é fixo (`abofmfclmpmmbgecemcglhcklnmcapfh`, pela chave
 pública do `manifest.json`), e só ele (e, depois de publicada, o da loja) pode abrir
@@ -54,14 +61,16 @@ Formato do Native Messaging: 4 bytes com o tamanho (ordem do processador) e o JS
 
 | De | Mensagem |
 |---|---|
-| extensão | `{"t":"hello","browser":"Brave","version":"1.0.0"}` |
-| extensão | `{"t":"player","id":"123","title":"…","artist":"…","album":"…","playing":true,"shuffle":false,"repeat":"ALL"}` |
+| extensão | `{"t":"hello","browser":"Brave","version":"1.1.0"}` |
+| extensão | `{"t":"player","id":"123","title":"…","artist":"…","album":"…","playing":true,"shuffle":false,"repeat":"ALL","art":"https://lh3.googleusercontent.com/…=w1200-h1200"}` |
 | extensão | `{"t":"gone","id":"123"}` |
 | programa | `{"t":"host"}` (abriu) e `{"t":"sync"}` (o Taskbeat conectou: mande tudo) |
 | Taskbeat | `{"t":"cmd","id":"123","cmd":"shuffle"}` ou `"repeat"` |
 
 `shuffle` e `repeat` chegam como `null` se a página não tiver mais o atributo do
-repetir (o YouTube mudou a página): aí o Taskbeat volta ao caminho antigo.
+repetir (o YouTube mudou a página): aí o Taskbeat volta ao caminho antigo. `art`
+(1.1+) é a maior capa do `navigator.mediaSession`, pedida em 1200 px; o Taskbeat
+só baixa endereços HTTPS dos servidores de imagem do Google e do YouTube.
 
 ## Créditos
 
