@@ -744,6 +744,9 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     const ARTWORK: &str = "Só vale para o fundo \"Capa desfocada\" do card";
     const WAVE: &str = "As pontas não valem para o estilo \"Onda\"";
     const NO_ANIM: &str = "Escolha uma animação em \"Abrir e fechar\" para usar esta opção";
+    const INDICATOR: &str = "Com as barras de áudio ligadas, elas ficam no lugar do indicador";
+    const DARK_ART: &str = "Com o fundo \"Capa desfocada\" o card é sempre escuro";
+    const PEAKS: &str = "Os picos só aparecem no estilo \"Barras\"";
     let osd_on = c.caps_lock_osd || c.num_lock_osd;
     match key {
         AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetControls | WidgetControlsRgb | WidgetSides | WidgetSidesAlpha | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
@@ -769,6 +772,9 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         ArtworkDim if c.card_style != crate::config::CardStyle::Artwork => Some(ARTWORK),
         Lyrics(k) => lyrics_page::requirement(c, k),
         AnimSpeed if c.card_anim == crate::config::CardAnim::None => Some(NO_ANIM),
+        Indicator if c.show_visualizer => Some(INDICATOR),
+        Theme if c.card_style == crate::config::CardStyle::Artwork => Some(DARK_ART),
+        Peaks if c.style != crate::config::Style::Bars => Some(PEAKS),
         _ => None,
     }
 }
@@ -4263,6 +4269,7 @@ mod tests {
         let off = Config { show_media: false, show_visualizer: false, caps_lock_osd: false, num_lock_osd: false, next_track_popup: false, ..Config::default() };
         let off2 = Config { taskbar_controls: false, widget_pill: false, show_artist: false, osd_material: OsdMaterial::Solid, ..Config::default() };
         let off3 = Config { widget_tint: WidgetTint::Gradient, style: Style::Wave, card_style: CardStyle::AlbumColor, ..Config::default() };
+        let off4 = Config { show_visualizer: true, card_style: CardStyle::Artwork, style: Style::Mirror, ..Config::default() };
         for p in PAGES {
             check(p.name);
             check(p.subtitle);
@@ -4281,7 +4288,7 @@ mod tests {
                             _ => {}
                         }
                         // As dicas de opção desativada também.
-                        for c in [&off, &off2, &off3] {
+                        for c in [&off, &off2, &off3, &off4] {
                             if let Some(why) = requirement(c, *key) {
                                 check(why);
                             }

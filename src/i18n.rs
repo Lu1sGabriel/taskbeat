@@ -455,6 +455,9 @@ static T: &[[&str; 4]] = &[
     ["Ligue o aviso de Caps Lock ou de Num Lock para usar esta opção", "Turn on the Caps Lock or Num Lock alert to use this option", "Activa el aviso de Bloq Mayús o Bloq Num para usar esta opción", "Aktiviere den Hinweis für Feststelltaste oder Num-Taste, um diese Option zu nutzen"],
     ["O desfoque só vale para o material Acrílico", "Blur only applies to the Acrylic material", "El desenfoque solo se aplica al material Acrílico", "Die Unschärfe gilt nur für das Material Acryl"],
     ["Ligue \"Mostrar barras dinâmicas\" para usar esta opção", "Turn on \"Show dynamic bars\" to use this option", "Activa \"Mostrar barras dinámicas\" para usar esta opción", "Aktiviere \"Dynamische Balken anzeigen\", um diese Option zu nutzen"],
+    ["Com as barras de áudio ligadas, elas ficam no lugar do indicador", "With the audio bars on, they take the indicator's place", "Con las barras de audio activadas, ocupan el lugar del indicador", "Mit eingeschalteten Audiobalken stehen sie an der Stelle des Indikators"],
+    ["Com o fundo \"Capa desfocada\" o card é sempre escuro", "With the \"Blurred cover\" background the card is always dark", "Con el fondo \"Portada difuminada\" la tarjeta siempre es oscura", "Mit dem Hintergrund \"Unscharfes Cover\" ist die Karte immer dunkel"],
+    ["Os picos só aparecem no estilo \"Barras\"", "Peaks only show in the \"Bars\" style", "Los picos solo aparecen en el estilo \"Barras\"", "Spitzen erscheinen nur im Stil \"Balken\""],
     // ---- Mac (notch, menu e configurações)
     ["Preto", "Black", "Negro", "Schwarz"],
     ["Cor do sistema", "System color", "Color del sistema", "Systemfarbe"],
