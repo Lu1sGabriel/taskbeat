@@ -185,7 +185,7 @@ fn shots() {
         let l = CLayout::build(S, &cfg, true);
         let (w, h) = (l.w, l.h);
         let bg = render(w, h, |cv| busy_wallpaper(cv, RectF::new(0.0, 0.0, w, h), 14.0 * S));
-        let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::GLASS_BLUR * S);
+        let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::glass_blur_px(&cfg, S));
         let card = render(w, h, |cv| {
             let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
             ui::draw_card(cv, &mut tr, &l, &f);

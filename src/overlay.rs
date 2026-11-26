@@ -2103,7 +2103,7 @@ impl Overlay {
         let backdrop = if ui::card_wants_backdrop(&self.cfg) {
             let c = l.card;
             let rect = (x + c.x.round() as i32, y + c.y.round() as i32, c.w.round() as i32, c.h.round() as i32);
-            self.flyout.backdrop(rect, ui::GLASS_BLUR * s, now, false)
+            self.flyout.backdrop(rect, ui::glass_blur_px(&self.cfg, s), now, false)
         } else {
             None
         };
@@ -2205,7 +2205,7 @@ impl Overlay {
         let backdrop = if ui::card_wants_backdrop(&self.cfg) {
             let c = ui::upnext_card(s);
             let rect = (x + c.x.round() as i32, y + c.y.round() as i32, c.w.round() as i32, c.h.round() as i32);
-            self.popup.backdrop(rect, ui::GLASS_BLUR * s, now, false)
+            self.popup.backdrop(rect, ui::glass_blur_px(&self.cfg, s), now, false)
         } else {
             None
         };

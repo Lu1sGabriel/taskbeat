@@ -7,7 +7,7 @@
 //! Segoe UI Variable) e cards de "now playing" populares no Dribbble (capa
 //! desfocada como fundo, cor extraída da capa, vidro, play circular).
 
-use crate::config::{CardLayout, CardStyle, Config, OsdIcon, OsdMaterial, OsdShape, OsdSize, SecondLine, Shape, ShuffleRepeat, Size3, TaskbarPlay, ThemeMode, WidgetShape, WidgetTint};
+use crate::config::{CardLayout, CardShadow, CardStyle, Config, OsdIcon, OsdMaterial, OsdShape, OsdSize, SecondLine, Shape, ShuffleRepeat, Size3, TaskbarPlay, ThemeMode, WidgetShape, WidgetTint};
 use crate::render::*;
 use crate::shared::MediaInfo;
 use crate::text::*;
@@ -17,8 +17,12 @@ use std::sync::Arc;
 
 /// Margem (lógica) em volta dos cards para caber a sombra.
 pub const SHADOW_MARGIN: f32 = 26.0;
-/// Desfoque (px lógicos) do fundo acrílico do card e do "A seguir".
-pub const GLASS_BLUR: f32 = 30.0;
+/// Desfoque (px físicos) do fundo acrílico do card e do "A seguir", conforme
+/// a opção "Desfoque do acrílico" (0% = 6 px lógicos, 50% = 30 px, o de
+/// sempre, 100% = 54 px).
+pub fn glass_blur_px(cfg: &Config, s: f32) -> f32 {
+    (6.0 + cfg.glass_blur as f32 * 0.48) * s
+}
 /// Cartão "A seguir" (sem a margem da sombra), em px lógicos.
 const UPNEXT_W: f32 = 360.0;
 const UPNEXT_H: f32 = 92.0;
@@ -564,6 +568,24 @@ fn album_bg(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Rgb {
     if card_is_dark(cfg, colors) { lerp3(readable(base, true), [0.0; 3], 0.52) } else { lerp3(base, [1.0; 3], 0.72) }
 }
 
+/// Cor de destaque escolhida ("Cor de destaque": capa, Windows ou uma cor
+/// personalizada) para um fundo escuro ou claro. A da capa e a do Windows
+/// ganham contraste; a personalizada vale como foi escolhida.
+pub fn chosen_accent(cfg: &Config, colors: &Colors, media: &MediaInfo, dark: bool) -> Rgb {
+    use crate::config::AccentSource;
+    match (cfg.accent_source, &media.art) {
+        (AccentSource::Album, Some(a)) => readable(a.vibrant, dark),
+        (AccentSource::Custom, _) => crate::config::parse_hex(&cfg.accent_rgb).unwrap_or(colors.accent),
+        _ => {
+            if dark {
+                colors.accent_light
+            } else {
+                colors.accent
+            }
+        }
+    }
+}
+
 /// Cores do card expandido / "A seguir" / aviso de teclas.
 pub fn card_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     let has_art = media.art.is_some();
@@ -576,16 +598,7 @@ pub fn card_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
         let bg = album_bg(cfg, colors, media);
         return Theme { fg, accent: fg, on_accent: readable(bg, !dark), dark };
     }
-    let accent = match (cfg.accent_source, &media.art) {
-        (crate::config::AccentSource::Album, Some(a)) => readable(a.vibrant, dark),
-        _ => {
-            if dark {
-                colors.accent_light
-            } else {
-                colors.accent
-            }
-        }
-    };
+    let accent = chosen_accent(cfg, colors, media, dark);
     Theme { fg, accent, on_accent: on_color(accent), dark }
 }
 
@@ -595,16 +608,7 @@ pub fn card_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
 pub fn widget_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     let dark = luma(widget_bg_mean(cfg, colors, media)) < 0.47;
     let fg = if dark { [1.0; 3] } else { [0.10, 0.10, 0.10] };
-    let accent = match (cfg.accent_source, &media.art) {
-        (crate::config::AccentSource::Album, Some(a)) => readable(a.vibrant, dark),
-        _ => {
-            if dark {
-                colors.accent_light
-            } else {
-                colors.accent
-            }
-        }
-    };
+    let accent = chosen_accent(cfg, colors, media, dark);
     Theme { fg, accent, on_accent: on_color(accent), dark }
 }
 
@@ -1368,6 +1372,7 @@ fn widget_tint(cfg: &Config, colors: &Colors, m: &MediaInfo) -> Rgb {
         WidgetTint::Album | WidgetTint::Gradient | WidgetTint::Artwork => album.unwrap_or(taskbar_accent(colors)),
         WidgetTint::Accent => match (cfg.accent_source, album) {
             (crate::config::AccentSource::Album, Some(c)) => c,
+            (crate::config::AccentSource::Custom, _) => crate::config::parse_hex(&cfg.accent_rgb).unwrap_or_else(|| taskbar_accent(colors)),
             _ => taskbar_accent(colors),
         },
     }
@@ -1584,7 +1589,7 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         launcher_icon(cv, tr, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), app, th, 1.0);
     }
     if let (Some(r), Some((values, peaks))) = (l.viz, f.viz) {
-        draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s });
+        draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s, square: cfg.bar_shape == crate::config::BarShape::Square });
     }
 }
 
@@ -1809,6 +1814,12 @@ pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, 
     card_bg(cv, &BgSpec { card, radius, cfg, colors, media, th, s, backdrop }, None);
 }
 
+/// Opções de design que mudam o fundo do card e do "A seguir" (entram na
+/// chave das camadas guardadas; o desfoque já vem no `id` do fundo acrílico).
+fn card_look(cfg: &Config) -> (u8, bool, i32, i32) {
+    (cfg.card_shadow as u8, cfg.card_grain, cfg.glass_tint, cfg.artwork_dim)
+}
+
 /// O que `card_background` desenha (para passar adiante sem uma lista enorme).
 struct BgSpec<'a> {
     card: RectF,
@@ -1823,6 +1834,9 @@ struct BgSpec<'a> {
 
 /// Intensidade do granulado do card (o acrílico tem o dele).
 fn card_grain(cfg: &Config, th: &Theme, backdrop: bool) -> f32 {
+    if !cfg.card_grain {
+        return 0.0;
+    }
     match cfg.card_style {
         CardStyle::Glass if backdrop => 0.026,
         CardStyle::Glass => 0.0,
@@ -1835,13 +1849,23 @@ fn card_grain(cfg: &Config, th: &Theme, backdrop: bool) -> f32 {
 /// estica com o mixer: o granulado dela é feito depois, na altura certa).
 fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
     let BgSpec { card, radius, cfg, colors, media, th, s, backdrop } = *b;
-    cv.drop_shadow(card, radius, 28.0 * s, 10.0 * s, if th.dark { 0.58 } else { 0.24 });
-    cv.drop_shadow(card, radius, 6.0 * s, 1.5 * s, if th.dark { 0.30 } else { 0.10 });
+    match cfg.card_shadow {
+        CardShadow::Strong => {
+            cv.drop_shadow(card, radius, 28.0 * s, 10.0 * s, if th.dark { 0.58 } else { 0.24 });
+            cv.drop_shadow(card, radius, 6.0 * s, 1.5 * s, if th.dark { 0.30 } else { 0.10 });
+        }
+        CardShadow::Soft => {
+            cv.drop_shadow(card, radius, 16.0 * s, 5.0 * s, if th.dark { 0.30 } else { 0.12 });
+            cv.drop_shadow(card, radius, 4.0 * s, 1.0 * s, if th.dark { 0.18 } else { 0.06 });
+        }
+        CardShadow::None => {}
+    }
     let (x0, y0, w, h) = (card.x, card.y, card.w, card.h);
     // Posição relativa (0..1) e distância ao centro, para as luzes e a vinheta.
     let rel = move |x: f32, y: f32| (((x - x0) / w).clamp(0.0, 1.0), ((y - y0) / h).clamp(0.0, 1.0));
     match (cfg.card_style, &media.art) {
         (CardStyle::Artwork, Some(art)) => {
+            let dim = cfg.artwork_dim as f32 / 100.0;
             let b = blurred(art);
             cv.draw_image_cover(card, &b, radius, 1.0);
             // Película escura (mais forte embaixo, onde ficam os controles), um
@@ -1852,7 +1876,7 @@ fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
                 let light = (-(((u - 0.18) * 2.0).powi(2) + ((v - 0.15) * 2.2).powi(2))).exp();
                 let edge = ((u - 0.5).powi(2) * 1.6 + (v - 0.5).powi(2) * 2.2).min(1.0);
                 let c = lerp3([0.02, 0.02, 0.03], glow, 0.22 * light);
-                (c, (0.34 + 0.30 * v + 0.30 * edge - 0.10 * light).clamp(0.0, 0.92))
+                (c, ((0.34 + 0.30 * v + 0.30 * edge - 0.10 * light) * dim).clamp(0.0, 0.92))
             });
         }
         (CardStyle::AlbumColor, _) | (CardStyle::Artwork, None) => {
@@ -1878,7 +1902,8 @@ fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
                 // Acrílico sem o granulado dele: vem logo abaixo, com o dos outros.
                 Some(b) => {
                     cv.draw_image_cover(card, b, radius, 1.0);
-                    cv.fill_round(card, radius, c, if th.dark { 0.70 } else { 0.66 });
+                    let tint = cfg.glass_tint as f32 / 100.0;
+                    cv.fill_round(card, radius, c, if th.dark { tint } else { (tint - 0.04).max(0.16) });
                 }
                 None => cv.fill_round(card, radius, c, 0.96),
             }
@@ -2003,7 +2028,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     let grow = if band.1 > band.0 + 4 && grow < cv.h { grow } else { 0 };
     let base = RectF { h: l.card.h - grow as f32, ..l.card };
     let key = layer_key((
-        (cfg.card_style as u8, art_shape as u8, cfg.show_source, l.vertical),
+        (cfg.card_style as u8, art_shape as u8, cfg.show_source, l.vertical, card_look(cfg)),
         (rect_bits(base), rect_bits(l.art), l.radius.to_bits()),
         (m.art.as_ref().map(|a| a.id), m.icon.as_ref().map(|a| a.id)),
         (th.dark, th.accent.map(f32::to_bits), th.fg.map(f32::to_bits), f.colors.accent.map(f32::to_bits)),
@@ -2402,7 +2427,7 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
     let card = upnext_card(s);
     let radius = cfg.corners.radius() * s;
     let key = layer_key((
-        (cfg.card_style as u8, rect_bits(card), radius.to_bits()),
+        (cfg.card_style as u8, rect_bits(card), radius.to_bits(), card_look(cfg)),
         media.art.as_ref().map(|a| a.id),
         (th.dark, th.accent.map(f32::to_bits), colors.accent.map(f32::to_bits)),
         backdrop.map(|b| b.id),

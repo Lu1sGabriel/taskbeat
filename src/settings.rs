@@ -2178,7 +2178,7 @@ impl Ui {
                 let mut m2 = media.clone();
                 m2.dur = m2.dur.max(1.0);
                 let mut sub = SubCanvas::new(r.cx() - l.w / 2.0, r.y + 4.0 * s, l.w, l.h);
-                let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(l.card.offset(sub.x, sub.y), ui::GLASS_BLUR * s)).flatten();
+                let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(l.card.offset(sub.x, sub.y), ui::glass_blur_px(cfg, s))).flatten();
                 // Mini barras paradas num desenho de exemplo (a prévia do card não anima a 60 fps).
                 const BARS: &[f32] = &[0.55, 0.9, 0.62, 0.38, 0.74, 0.5];
                 let viz = cfg.card_viz.then_some(if self.media_paused() { &[0.0; 6][..] } else { BARS });
@@ -2193,7 +2193,7 @@ impl Ui {
                 let tt = (t % (total + 1.2)).min(total - 0.6);
                 let th = ui::card_theme(cfg, &colors, &media);
                 let mut sub = SubCanvas::new(r.cx() - uw / 2.0, r.y + 12.0 * s, uw, uh);
-                let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(ui::upnext_card(s).offset(sub.x, sub.y), ui::GLASS_BLUR * s)).flatten();
+                let backdrop = ui::card_wants_backdrop(cfg).then(|| self.preview_backdrop(ui::upnext_card(s).offset(sub.x, sub.y), ui::glass_blur_px(cfg, s))).flatten();
                 ui::draw_upnext(&mut sub.canvas(), &mut self.preview_text, cfg, &colors, &media, &th, s, tt, total, backdrop.as_deref());
                 sub.commit(cv);
             }

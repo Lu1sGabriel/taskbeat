@@ -74,6 +74,26 @@ pub enum ThemeMode {
 pub enum AccentSource {
     Windows,
     Album,
+    /// Uma cor escolhida (`accent_rgb`).
+    Custom,
+}
+
+/// Sombra do card expandido e do cartão "A seguir".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardShadow {
+    /// A de sempre: larga e escura.
+    Strong,
+    Soft,
+    None,
+}
+
+/// Pontas das barras de áudio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarShape {
+    Rounded,
+    Square,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -455,6 +475,18 @@ pub struct Config {
     pub launcher_hidden: Vec<String>,
     /// Mini barras de áudio no card, ao lado do título (com as barras ligadas).
     pub card_viz: bool,
+    /// Cor de destaque na opção "Personalizada" ("#RRGGBB").
+    pub accent_rgb: String,
+    /// Sombra do card e do "A seguir".
+    pub card_shadow: CardShadow,
+    /// Granulado fino no fundo do card e do "A seguir".
+    pub card_grain: bool,
+    /// Desfoque do fundo acrílico do card e do "A seguir" (%; 50 = o de sempre).
+    pub glass_blur: i32,
+    /// Quanto a película do acrílico do card cobre o desfoque (%).
+    pub glass_tint: i32,
+    /// Película escura sobre a capa desfocada do card (% da de sempre).
+    pub artwork_dim: i32,
 
     // ---- "A seguir"
     /// Cartão animado com a próxima música quando o player troca sozinho.
@@ -503,6 +535,8 @@ pub struct Config {
     /// Barras ouvem só o app que está tocando (e não chamadas, jogos, avisos).
     pub viz_player_only: bool,
     pub show_peaks: bool,
+    /// Pontas das barras (arredondadas ou retas).
+    pub bar_shape: BarShape,
 
     // ---- notch (Mac)
     /// Abre o card ao passar o mouse no notch (desligado: só com clique).
@@ -613,6 +647,13 @@ impl Config {
             launcher_order: Vec::new(),
             launcher_hidden: Vec::new(),
             card_viz: true,
+            // Opções de design de 2026-11-25: o padrão é o visual de antes delas.
+            accent_rgb: "#5EB1FF".into(),
+            card_shadow: CardShadow::Strong,
+            card_grain: true,
+            glass_blur: 50,
+            glass_tint: 70,
+            artwork_dim: 100,
 
             next_track_popup: true,
             popup_secs: 5,
@@ -643,6 +684,7 @@ impl Config {
             only_when_media: false,
             viz_player_only: true,
             show_peaks: true,
+            bar_shape: BarShape::Rounded,
 
             notch_hover: true,
             notch_bg: NotchBg::Album,
@@ -749,7 +791,7 @@ impl Config {
     }
 
     fn sanitize(&mut self) {
-        for c in [&mut self.widget_controls_rgb, &mut self.card_controls_rgb] {
+        for c in [&mut self.widget_controls_rgb, &mut self.card_controls_rgb, &mut self.accent_rgb] {
             if parse_hex(c).is_none() {
                 *c = "#5EB1FF".into();
             }
@@ -770,6 +812,9 @@ impl Config {
         self.widget_intensity = self.widget_intensity.clamp(10, 100);
         self.widget_sides_alpha = self.widget_sides_alpha.clamp(20, 100);
         self.card_sides_alpha = self.card_sides_alpha.clamp(20, 100);
+        self.glass_blur = self.glass_blur.clamp(0, 100);
+        self.glass_tint = self.glass_tint.clamp(20, 100);
+        self.artwork_dim = self.artwork_dim.clamp(50, 150);
     }
 }
 
@@ -803,6 +848,21 @@ mod tests {
         };
         let text = toml::to_string_pretty(&c2).unwrap();
         assert_eq!(toml::from_str::<Config>(&text).unwrap(), c2);
+    }
+
+    /// As opções de design de 2026-11-25 vêm com o visual de antes delas,
+    /// também para quem já tinha config (nada muda sem o usuário escolher).
+    #[test]
+    fn opcoes_de_design_vem_com_o_visual_de_antes() {
+        use super::{BarShape, CardShadow};
+        let c: Config = toml::from_str("card_style = \"glass\"\nversion = 5\n").unwrap();
+        assert_eq!((c.card_shadow, c.card_grain, c.glass_blur, c.glass_tint, c.artwork_dim, c.bar_shape), (CardShadow::Strong, true, 50, 70, 100, BarShape::Rounded));
+        assert_eq!(c.accent_rgb, "#5EB1FF");
+        // 50% de desfoque = os 30 px de sempre.
+        assert_eq!(crate::ui::glass_blur_px(&c, 1.0), 30.0);
+        let mut c = Config { glass_blur: 500, glass_tint: 1, artwork_dim: 999, accent_rgb: "zz".into(), ..c };
+        c.sanitize();
+        assert_eq!((c.glass_blur, c.glass_tint, c.artwork_dim, c.accent_rgb.as_str()), (100, 20, 150, "#5EB1FF"));
     }
 
     /// Os controles vêm brancos (também para quem já tinha config). Cores em

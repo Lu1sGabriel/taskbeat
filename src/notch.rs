@@ -363,7 +363,7 @@ fn right_wing(cv: &mut Canvas, r: RectF, f: &NotchFrame, alpha: f32, s: f32) {
             let mut px = vec![0u32; (r.w.ceil() * r.h.ceil()) as usize];
             {
                 let mut layer = Canvas::new(r.w.ceil() as usize, r.h.ceil() as usize, &mut px);
-                crate::render::draw(&mut layer, RectF::new(0.0, 0.0, r.w, r.h), &Frame { style: f.cfg.style, values, peaks, show_peaks: f.cfg.show_peaks, colors: f.colors, scale: s });
+                crate::render::draw(&mut layer, RectF::new(0.0, 0.0, r.w, r.h), &Frame { style: f.cfg.style, values, peaks, show_peaks: f.cfg.show_peaks, colors: f.colors, scale: s, square: f.cfg.bar_shape == crate::config::BarShape::Square });
             }
             cv.composite(r.x.round() as i32, r.y.round() as i32, &px, r.w.ceil() as usize, r.h.ceil() as usize, alpha);
         }

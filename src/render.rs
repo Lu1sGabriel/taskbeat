@@ -1125,6 +1125,8 @@ pub struct Frame<'a> {
     pub show_peaks: bool,
     pub colors: &'a Colors,
     pub scale: f32,
+    /// Barras de pontas retas (senão, arredondadas).
+    pub square: bool,
 }
 
 /// Desenha o visualizador dentro de `area` (sem limpar o resto do canvas).
@@ -1141,7 +1143,7 @@ fn bars(cv: &mut Canvas, a: RectF, f: &Frame, mirror: bool) {
     let (w, h) = (a.w, a.h);
     let slot = w / n as f32;
     let bw = (slot * 0.62).max(1.0);
-    let radius = bw * 0.5;
+    let radius = if f.square { (bw * 0.12).min(1.2 * f.scale) } else { bw * 0.5 };
     let min_h = bw.min(3.0 * f.scale).max(1.0);
     let span = (h - min_h).max(1.0);
     let colors = f.colors;
