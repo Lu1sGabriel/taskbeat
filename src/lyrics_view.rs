@@ -92,6 +92,7 @@ pub fn card_config(base: &Config, lc: &LyricsConfig) -> Config {
         card_launchers: false,
         card_viz: false,
         show_source: false,
+        lyrics: LyricsConfig { card_button: false, ..base.lyrics.clone() },
         ..base.clone()
     }
 }

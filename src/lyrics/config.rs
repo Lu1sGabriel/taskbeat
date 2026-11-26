@@ -125,6 +125,8 @@ pub struct LyricsConfig {
     pub hide_fullscreen: bool,
     /// Some quando nada está tocando (sem player aberto).
     pub hide_idle: bool,
+    /// Botão no card aberto (Windows) que mostra e esconde a sobreposição.
+    pub card_button: bool,
 }
 
 /// Limites do tamanho da janela (%).
@@ -156,6 +158,7 @@ impl Default for LyricsConfig {
             hotkey: Hotkey::WinAltL,
             hide_fullscreen: false,
             hide_idle: true,
+            card_button: true,
         }
     }
 }
