@@ -61,7 +61,14 @@ pub enum Hit {
     MixMute(u8),
     /// Saída de áudio no cabeçalho do mixer (abre a lista para trocar).
     MixDevice,
+    /// Botão do card que mostra e esconde a letra na tela (Windows).
+    Lyrics,
+    /// Selo do app de origem na capa do card (a dica diz o nome do app).
+    Source,
 }
+
+/// Ícone da letra (o mesmo da aba Letras e do menu da bandeja).
+const G_LYRICS: &str = "\u{E7F0}";
 
 /// Cores de um componente já resolvidas (tema + cor de destaque).
 #[derive(Clone, Copy, Debug)]
@@ -987,6 +994,20 @@ fn source_badge(cv: &mut Canvas, art: RectF, icon: &Image, size: f32, th: &Theme
     cv.draw_image(RectF::new(cx - k / 2.0, cy - k / 2.0, k, k), icon, k * 0.22, alpha);
 }
 
+/// Selo do app no canto da capa do card e do "A seguir": o mesmo da barra,
+/// mas com um anel escuro em volta no lugar do recorte (lá o vão mostra a
+/// barra; aqui furaria o fundo do card).
+fn card_badge(cv: &mut Canvas, b: RectF, media: &MediaInfo, th: &Theme, s: f32) {
+    let Some(icon) = &media.icon else { return };
+    let (cx, cy, r) = (b.cx(), b.cy(), b.w / 2.0);
+    cv.fill_circle(cx, cy, r + 2.0 * s, [0.0; 3], 0.42);
+    let base: Rgb = if th.dark { [0.16, 0.16, 0.17] } else { [0.98, 0.98, 0.985] };
+    cv.fill_circle(cx, cy, r, base, 1.0);
+    cv.stroke_round(b, r, (0.8 * s).max(0.8), th.fg, 0.12);
+    let k = b.w * 0.74;
+    cv.draw_image(RectF::new(cx - k / 2.0, cy - k / 2.0, k, k), icon, k * 0.22, 1.0);
+}
+
 pub fn draw_art_a(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, media: &MediaInfo, th: &Theme, shape: Shape, s: f32, source: Option<f32>, alpha: f32) {
     let badge = source.unwrap_or(0.0);
     let icon = if source.is_some() { &media.icon } else { &None };
@@ -1666,7 +1687,8 @@ pub struct CLayout {
     pub card: RectF,
     pub radius: f32,
     pub art: RectF,
-    pub chip: RectF,
+    /// Selo do app de origem no canto da capa ("Mostrar app de origem").
+    pub source: Option<RectF>,
     pub title: RectF,
     pub artist: RectF,
     pub shuffle: RectF,
@@ -1702,6 +1724,8 @@ pub struct CLayout {
     pub mixer_scroll: f32,
     /// Tempos (decorrido e restante) embaixo do progresso.
     pub times: bool,
+    /// Botão que mostra e esconde a letra na tela (ponta direita da linha do volume).
+    pub lyrics: Option<RectF>,
 }
 
 impl CLayout {
@@ -1725,13 +1749,12 @@ impl CLayout {
             l.art = RectF::new(m + pad, m + pad, art, art);
             let tx = l.art.right() + 18.0 * s;
             let tw = m + cw - pad - tx;
-            l.chip = RectF::new(tx, m + pad, tw, 22.0 * s);
             let by = l.art.bottom() - 40.0 * s;
             (l.shuffle, l.prev, l.play, l.next, l.repeat) = row(tx, tx + tw, by, 40.0 * s, 9.0 * s);
             l.play_size = 38.0 * s;
-            // Título e artista ficam centralizados entre o topo da capa (ou o nome
-            // do app) e os botões; `draw_card` desce um pouco se houver álbum.
-            let top = if cfg.show_source { l.chip.bottom() + 4.0 * s } else { l.art.y };
+            // Título e artista ficam centralizados entre o topo da capa e os
+            // botões; `draw_card` sobe um pouco se houver álbum.
+            let top = l.art.y;
             let ty = top + ((by - top) - 43.0 * s) / 2.0;
             l.title = RectF::new(tx, ty.round(), tw, 24.0 * s);
             l.artist = RectF::new(tx, (ty + 24.0 * s).round(), tw, 19.0 * s);
@@ -1740,7 +1763,6 @@ impl CLayout {
             cw = 304.0 * s;
             let art = cw - 2.0 * pad;
             l.art = RectF::new(m + pad, m + pad, art, art);
-            l.chip = RectF::new(l.art.x + 10.0 * s, l.art.y + 10.0 * s, art - 20.0 * s, 24.0 * s);
             l.title = RectF::new(m + pad, l.art.bottom() + 14.0 * s, art, 26.0 * s);
             l.artist = RectF::new(m + pad, l.art.bottom() + 40.0 * s, art, 19.0 * s);
             let by = l.art.bottom() + 66.0 * s;
@@ -1748,16 +1770,32 @@ impl CLayout {
             l.play_size = 46.0 * s;
             y = by + 46.0 * s + 12.0 * s;
         }
+        // Selo do app no canto de baixo da capa, como o da barra (um pouco
+        // para fora dela, com um anel em volta).
+        if cfg.show_source {
+            let k = (if l.vertical { 32.0 } else { 24.0 } * s).round();
+            let (cx, cy) = (l.art.right() - k * 0.22, l.art.bottom() - k * 0.22);
+            l.source = Some(RectF::new(cx - k / 2.0, cy - k / 2.0, k, k));
+        }
         // Progresso e volume com os trilhos nas mesmas bordas (as da capa e do texto).
         if seek {
             l.seek = Some(RectF::new(m + pad, y, cw - 2.0 * pad, 30.0 * s));
             y += 34.0 * s;
         }
-        if cfg.show_volume {
-            let b = RectF::new(m + pad - 8.0 * s, y, 32.0 * s, 32.0 * s);
-            l.vol_btn = Some(b);
-            let vx = m + pad + 26.0 * s;
-            l.vol = Some(RectF::new(vx, y, m + cw - pad - vx, 32.0 * s));
+        // Botão da letra na ponta direita da linha do volume, espelhando o do
+        // volume na esquerda (o slider encolhe); sem o volume, a linha fica só com ele.
+        let lyrics = cfg.lyrics.card_button;
+        if cfg.show_volume || lyrics {
+            if lyrics {
+                l.lyrics = Some(RectF::new(m + cw - pad - 24.0 * s, y, 32.0 * s, 32.0 * s));
+            }
+            if cfg.show_volume {
+                let b = RectF::new(m + pad - 8.0 * s, y, 32.0 * s, 32.0 * s);
+                l.vol_btn = Some(b);
+                let vx = m + pad + 26.0 * s;
+                let right = m + cw - pad - if lyrics { 30.0 * s } else { 0.0 };
+                l.vol = Some(RectF::new(vx, y, right - vx, 32.0 * s));
+            }
             y += 36.0 * s;
         }
         let ch = y + 8.0 * s - m;
@@ -1857,6 +1895,8 @@ impl CLayout {
             (self.seek, Hit::Seek),
             (self.vol_btn, Hit::VolBtn),
             (self.vol, Hit::Vol),
+            (self.lyrics, Hit::Lyrics),
+            (self.source, Hit::Source),
         ];
         if let Some(h) = all.iter().find(|(r, _)| r.is_some_and(|r| r.contains(x, y))).map(|(_, h)| *h) {
             return Some(h);
@@ -1994,39 +2034,6 @@ fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
     cv.stroke_round(card, radius, s, line, if th.dark { 0.12 } else { 0.08 });
 }
 
-/// Selo com ícone + nome do app de origem ("de onde vem a música").
-/// `align_right`: encosta a pílula na direita de `r`. Devolve o retângulo usado.
-pub fn app_chip(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, media: &MediaInfo, th: &Theme, s: f32, on_art: bool, align_right: bool, alpha: f32) -> Option<RectF> {
-    if media.app.is_empty() || r.w < 40.0 * s || alpha <= 0.0 {
-        return None;
-    }
-    let name_w = tr.mask(&media.app, Font::CaptionStrong, (240.0 * s) as i32, r.h as i32, Align::Left).used_width();
-    let icon = (r.h - 8.0 * s).clamp(10.0 * s, 15.0 * s).round();
-    let pad = ((r.h - icon) / 2.0).max(3.0 * s);
-    let w = (pad + icon + 6.0 * s + name_w + 9.0 * s).min(r.w).round();
-    let pill = RectF::new(if align_right { r.right() - w } else { r.x }, r.y, w, r.h);
-    let rad = r.h / 2.0;
-    if on_art {
-        cv.fill_round(pill, rad, [0.0; 3], 0.42 * alpha);
-        cv.stroke_round(pill, rad, s, [1.0; 3], 0.16 * alpha);
-    } else {
-        cv.fill_round(pill, rad, th.fg, (if th.dark { 0.09 } else { 0.06 }) * alpha);
-        cv.stroke_round(pill, rad, s, th.fg, (if th.dark { 0.10 } else { 0.09 }) * alpha);
-    }
-    let fg = if on_art { [1.0; 3] } else { th.fg };
-    let ic = RectF::new(pill.x + pad, (pill.cy() - icon / 2.0).round(), icon, icon);
-    match &media.icon {
-        Some(i) => cv.draw_image(ic, i, icon * 0.24, alpha),
-        None => {
-            cv.fill_circle(ic.cx(), ic.cy(), icon / 2.0, th.accent, alpha);
-            glyph(cv, tr, ic, G_MUSIC, Font::Small, on_color(th.accent), alpha);
-        }
-    }
-    let x = ic.right() + 6.0 * s;
-    text(cv, tr, &media.app, Font::CaptionStrong, x, pill.y, pill.right() - x - 7.0 * s, pill.h, fg, 0.92 * alpha);
-    Some(pill)
-}
-
 pub struct CardFrame<'a> {
     pub cfg: &'a Config,
     pub colors: &'a Colors,
@@ -2114,6 +2121,10 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
                 None => draw_art(cv, tr, l.art, m, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
             },
         }
+        // Sem capa o próprio ícone do app já está no lugar dela.
+        if let (Some(b), Some(_)) = (l.source, &m.art) {
+            card_badge(cv, b, m, th, s);
+        }
     };
     // Fundo na altura atual: o guardado (esticado com o mixer) e o granulado
     // da faixa do meio feito por cima, na altura certa. Fechado ou aberto
@@ -2131,10 +2142,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     });
     cv.composite(0, 0, &fin, w, h, 1.0);
 
-    // App, título, artista.
-    if cfg.show_source {
-        app_chip(cv, tr, l.chip, m, th, s, l.vertical && m.art.is_some(), false, 1.0);
-    }
+    // Título, artista.
     let title = if !m.present() {
         crate::i18n::tr("Nada tocando").to_string()
     } else if m.title.is_empty() {
@@ -2161,14 +2169,13 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         text(cv, tr, &artist_album(m), Font::Subtitle, l.artist.x, l.artist.y, l.artist.w, l.artist.h, th.fg, 0.72);
     } else {
         // Álbum numa terceira linha; o bloco sobe metade dela para seguir centralizado.
-        // Com o selo do app em cima não sobra espaço: "Artista · Álbum" numa linha só.
         let sub = artist_album(m);
-        let album = (sub != m.artist && !m.artist.is_empty() && !cfg.show_source).then(|| m.album.trim());
+        let album = (sub != m.artist && !m.artist.is_empty()).then(|| m.album.trim());
         let dy = if album.is_some() { -8.0 * s } else { 0.0 };
         let (t, a) = (title_w(l.title.offset(0.0, dy)), l.artist.offset(0.0, dy));
         text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
         draw_bars(cv, l.title.offset(0.0, dy));
-        text(cv, tr, if m.artist.is_empty() || cfg.show_source { &sub } else { &m.artist }, Font::Subtitle, a.x, a.y, a.w, a.h, th.fg, 0.72);
+        text(cv, tr, if m.artist.is_empty() { &sub } else { &m.artist }, Font::Subtitle, a.x, a.y, a.w, a.h, th.fg, 0.72);
         if let Some(album) = album {
             text(cv, tr, album, Font::Small, a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s, th.fg, 0.52);
         }
@@ -2177,7 +2184,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     // Controles. Aleatório/repetir: sempre (apagados quando o player não deixa
     // mudar pelo Windows, como os navegadores) ou só quando dá, conforme a opção.
     let always = cfg.card_shuffle_repeat == ShuffleRepeat::Always;
-    for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::VolBtn] {
+    for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::VolBtn, Hit::Lyrics] {
         let shown = match h {
             Hit::Shuffle => m.can_shuffle || always,
             Hit::Repeat => m.can_repeat || always,
@@ -2189,6 +2196,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
                 Hit::Prev => l.prev,
                 Hit::Next => l.next,
                 Hit::Repeat => l.repeat,
+                Hit::Lyrics => l.lyrics.unwrap_or_default(),
                 _ => l.vol_btn.unwrap_or_default(),
             };
             let k = r.h.min(r.w) - 4.0 * s;
@@ -2243,6 +2251,17 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         slider(cv, x0, x1, r.cy(), fill, th, hot, true, s);
     }
 
+    // Letra na tela: ícone com o pontinho embaixo quando ela está à vista
+    // (como o aleatório e o repetir ligados).
+    if let Some(b) = l.lyrics {
+        let on = cfg.lyrics.show;
+        ctrl_glyph(cv, tr, b, G_LYRICS, Font::IconSmall, th.fg, if on { 1.0 } else { 0.9 }, &it, Hit::Lyrics, s);
+        if on {
+            let y = (b.bottom() - 5.0 * s).max(b.cy() + 8.0 * s).min(b.bottom() - 2.0 * s);
+            cv.fill_circle(b.cx(), y, 1.7 * s, th.fg, 0.95);
+        }
+    }
+
     // Mixer de volume (setinha embaixo; aberto, uma linha por app).
     if let Some(mx) = f.mixer.filter(|_| l.mixer_btn.is_some()) {
         mixer_section(cv, tr, l, f, mx);
@@ -2271,6 +2290,22 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let msg = crate::i18n::tr(if l.mixer_open > 0.5 { "Fechar mixer de volume" } else { "Abrir mixer de volume" });
         tooltip(cv, tr, msg, b, th, f.it.tip, s);
     }
+    if let Some(b) = l.lyrics.filter(|_| f.it.hover == Some(Hit::Lyrics) && f.it.tip > 0.0) {
+        tooltip(cv, tr, &lyrics_tip(cfg), b, th, f.it.tip, s);
+    }
+    if let Some(b) = l.source.filter(|_| f.it.hover == Some(Hit::Source) && f.it.tip > 0.0 && !m.app.is_empty()) {
+        tooltip(cv, tr, &crate::i18n::tr("Tocando no {}").replace("{}", &m.app), b, th, f.it.tip, s);
+    }
+}
+
+/// Dica do botão da letra, com o atalho quando ele funciona.
+fn lyrics_tip(cfg: &Config) -> String {
+    let what = crate::i18n::tr(if cfg.lyrics.show { "Esconder a letra" } else { "Mostrar a letra na tela" });
+    #[cfg(windows)]
+    if let Some(k) = crate::lyrics_overlay::working_hotkey(cfg.lyrics.hotkey) {
+        return format!("{what} ({k})");
+    }
+    what.to_string()
 }
 
 /// Setinha do mixer (para baixo; vira para cima conforme `open` vai a 1).
@@ -2513,6 +2548,12 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
             art_shadow(cv, art, art_r, img, th, s);
             cv.draw_image_cover(art, img, art_r, 1.0);
             cv.stroke_round(art, art_r, s, [1.0; 3], 0.10);
+            // Selo do app no canto da capa, como no card.
+            if cfg.show_source {
+                let b = (18.0 * s * k).round();
+                let (cx, cy) = (art.right() - b * 0.22, art.bottom() - b * 0.22);
+                card_badge(cv, RectF::new(cx - b / 2.0, cy - b / 2.0, b, b), media, th, s);
+            }
         }
         None => draw_art(cv, tr, art, media, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
     }
@@ -2546,10 +2587,6 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
     cv.set_clip(clip.intersect(badge));
     text(cv, tr, label, Font::Label, badge.x + 25.5 * s, badge.y, lw + 4.0 * s, lh, on, ba * grow);
     cv.set_clip(clip);
-    if cfg.show_source {
-        let avail = RectF::new(tx0 + full_w + 10.0 * s, badge.y, (right - tx0 - full_w - 10.0 * s).max(0.0), lh);
-        app_chip(cv, tr, avail, media, th, s, false, true, ta);
-    }
 
     let title = if media.title.is_empty() { media.app.clone() } else { media.title.clone() };
     text(cv, tr, &title, Font::CardTitle, tx, top + 20.0 * s, tw, 22.0 * s, th.fg, ta);
