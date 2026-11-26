@@ -371,10 +371,18 @@ fn install(dir: &Path, autostart: bool, desktop: bool) -> Result<(), String> {
 /// Arquivo com o manifesto do host da extensão (na pasta do programa).
 const HOST_MANIFEST: &str = "browser-host.json";
 
+/// O registro da extensão já aponta para o manifesto desta pasta, em todos
+/// os navegadores?
+pub(crate) fn browser_host_ok(dir: &Path) -> bool {
+    let manifest = dir.join(HOST_MANIFEST);
+    let m = manifest.display().to_string();
+    manifest.exists() && crate::webext::registry_keys().iter().all(|k| reg_get_sz(k, "").as_deref() == Some(m.as_str()))
+}
+
 /// Registra o Taskbeat como host de Native Messaging (a extensão do
 /// navegador abre o `Taskbeat.exe` para falar com o app): o manifesto na
 /// pasta e a chave de cada navegador apontando para ele.
-fn register_browser_host(dir: &Path, exe: &Path) -> Result<(), String> {
+pub(crate) fn register_browser_host(dir: &Path, exe: &Path) -> Result<(), String> {
     let manifest = dir.join(HOST_MANIFEST);
     write_retry(&manifest, crate::webext::host_manifest(exe).as_bytes()).map_err(|e| e.to_string())?;
     let m = manifest.display().to_string();

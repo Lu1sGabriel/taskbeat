@@ -225,6 +225,18 @@ pub fn after_start() {
         let _ = crate::licenses::write_to(&dir);
         log(&format!("\"Apps instalados\" e licenças acertados para {me}"));
     }
+    // A extensão do navegador: quem chegou por uma atualização automática de
+    // uma versão sem ela não passou pelo instalador (registro e pasta). A
+    // pasta é posta em dia a cada versão (só os arquivos que mudaram).
+    if !setup::browser_host_ok(&dir) {
+        match setup::register_browser_host(&dir, &dir.join("Taskbeat.exe")) {
+            Ok(()) => log("extensão do navegador registrada"),
+            Err(e) => log(&format!("extensão do navegador: registro falhou ({e})")),
+        }
+    }
+    if let Err(e) = crate::webext::write_extension(&dir.join("extension")) {
+        log(&format!("extensão do navegador: pasta não gravada ({e})"));
+    }
     // Instaladores de versões que já não são novas.
     if let Some(cache) = cache_dir() {
         let stale = std::fs::read_dir(&cache).ok().into_iter().flatten().filter_map(|e| e.ok()).any(|e| {

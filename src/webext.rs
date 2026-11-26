@@ -98,16 +98,6 @@ pub fn extension_folder() -> Option<std::path::PathBuf> {
     [installed_extension_dir(), local].into_iter().flatten().find(|d| write_extension(d).is_ok())
 }
 
-/// O atualizador troca só o executável: a pasta da extensão que já existe é
-/// posta em dia com a do executável novo (o usuário recarrega no navegador).
-pub fn refresh_extension_folder() {
-    if let Some(d) = installed_extension_dir().filter(|d| d.join("manifest.json").exists())
-        && let Err(e) = write_extension(&d)
-    {
-        log::warn(&format!("extensão do navegador: pasta não atualizada ({e})"));
-    }
-}
-
 /// "Instalar extensão": a página da loja quando ela estiver publicada; até
 /// lá, a pasta da extensão (no Explorador) e o passo a passo para carregá-la.
 pub fn open_install_page() {
@@ -502,7 +492,6 @@ const READY_EVENT: &str = r"Local\Taskbeat.Extension.Ready";
 pub fn spawn(shared: Arc<Shared>) {
     let _ = std::thread::Builder::new().name("browser-extension".into()).spawn(move || {
         crate::system::background_thread();
-        refresh_extension_folder();
         if let Err(e) = serve(&shared) {
             log::warn(&format!("extensão do navegador: pipe indisponível ({e})"));
         }
