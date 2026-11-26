@@ -3,3 +3,4 @@
 # Gerada por tools/new-update-key.ps1. A chave privada fica só com o mantenedor,
 # fora do repositório. Sem chave aqui, o app procura versões novas mas não
 # avisa nem instala nenhuma (nada pode ser conferido).
+dff3681f6d60245a3a6937264bf79a7d49285eca68822c7575b757809408d67c6293b9f6aac673676b5041d82b354935767fb0c92408647ce9d5f88b65f377ab
