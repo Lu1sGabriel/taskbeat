@@ -357,8 +357,15 @@ impl Shared {
 
     /// Aplica sem gravar no disco (enquanto o usuário arrasta um slider).
     pub fn preview_config(&self, f: impl FnOnce(&mut Config)) {
-        f(&mut self.config.lock().unwrap());
+        let lyrics = {
+            let mut cfg = self.config.lock().unwrap();
+            f(&mut cfg);
+            cfg.lyrics.clone()
+        };
         self.config_version.fetch_add(1, Ordering::Relaxed);
+        #[cfg(windows)]
+        crate::lyrics_overlay::config_changed(&lyrics);
+        let _ = lyrics;
     }
 
     pub fn save_config(&self) {
@@ -373,5 +380,8 @@ impl Shared {
         };
         snapshot.save();
         self.config_version.fetch_add(1, Ordering::Relaxed);
+        // Sobreposição de letra: sobe, avisa ou para a thread dela.
+        #[cfg(windows)]
+        crate::lyrics_overlay::config_changed(&snapshot.lyrics);
     }
 }

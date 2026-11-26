@@ -127,6 +127,8 @@ pub fn spawn(shared: Arc<Shared>) {
                     changed
                 };
                 shared.media_version.fetch_add(1, Ordering::Relaxed);
+                // A sobreposição de letra relê a posição (corrige a linha atual).
+                crate::lyrics_overlay::media_changed();
                 if changed {
                     let hwnd = shared.tray_hwnd.load(Ordering::Relaxed);
                     if hwnd != 0 {
@@ -491,15 +493,30 @@ fn timeline(s: &Session, playing: bool) -> (f64, f64) {
     (if dur > 0.0 { p.clamp(0.0, dur) } else { p.max(0.0) }, dur)
 }
 
+/// Capa da sessão atual em até `max` px (a tela cheia da letra quer mais
+/// que os 384 do card), com o título a que ela pertence. Bloqueia: chame
+/// numa thread à parte.
+pub fn current_cover(max: u32) -> Option<(String, Image)> {
+    let manager = Manager::RequestAsync().ok()?.join().ok()?;
+    let session = manager.GetCurrentSession().ok()?;
+    let props = session.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
+    let title = props.Title().map(|t| t.to_string()).unwrap_or_default();
+    Some((title, load_thumbnail_max(&props, max)?))
+}
+
 /// Decodifica a miniatura (capa) num quadrado de até ART_SIZE com recorte central.
 fn load_thumbnail(props: &Props) -> Option<Image> {
+    load_thumbnail_max(props, ART_SIZE)
+}
+
+fn load_thumbnail_max(props: &Props, max: u32) -> Option<Image> {
     let stream = props.Thumbnail().ok()?.OpenReadAsync().ok()?.join().ok()?;
     let dec = BitmapDecoder::CreateAsync(&stream).ok()?.join().ok()?;
     let (w, h) = (dec.PixelWidth().ok()?, dec.PixelHeight().ok()?);
     if w == 0 || h == 0 {
         return None;
     }
-    let side = ART_SIZE.min(w.min(h)).max(64);
+    let side = max.min(w.min(h)).max(64);
     let k = side as f64 / w.min(h) as f64;
     let sw = ((w as f64 * k).round() as u32).max(side);
     let sh = ((h as f64 * k).round() as u32).max(side);

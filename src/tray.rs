@@ -33,6 +33,9 @@ const ID_VIZ: usize = 103;
 const ID_POPUP: usize = 104;
 const ID_CAPS: usize = 105;
 const ID_AUTOSTART: usize = 106;
+/// Sobreposição de letra: mostrar e travar/destravar.
+const ID_LYRICS: usize = 107;
+const ID_LYRICS_LOCK: usize = 108;
 const ID_EXIT: usize = 199;
 
 fn shared() -> &'static Arc<Shared> {
@@ -215,6 +218,11 @@ fn menu_entries() -> Vec<Entry> {
     v.push(Entry::toggle(ID_VIZ as u32, "\u{E9E9}", tr("Barras de áudio dinâmicas"), cfg.show_visualizer, true));
     v.push(Entry::toggle(ID_POPUP as u32, "\u{E893}", tr("Cartão \"A seguir\""), cfg.next_track_popup, true));
     v.push(Entry::toggle(ID_CAPS as u32, "\u{E765}", tr("Aviso de Caps Lock"), cfg.caps_lock_osd, true));
+    v.push(Entry::toggle(ID_LYRICS as u32, "\u{E7F0}", tr("Letra na tela"), cfg.lyrics.show, true));
+    if cfg.lyrics.show {
+        let (icon, label) = if cfg.lyrics.locked { ("\u{E785}", "Destravar a letra") } else { ("\u{E72E}", "Travar a letra") };
+        v.push(Entry::action(ID_LYRICS_LOCK as u32, icon, tr(label)));
+    }
     v.push(Entry::Separator);
     v.push(Entry::toggle(ID_AUTOSTART as u32, "\u{E7E8}", tr("Iniciar com o Windows"), system::autostart_enabled(), true));
     v.push(Entry::Separator);
@@ -267,6 +275,8 @@ fn handle_command(hwnd: HWND, cmd: usize) {
         ID_POPUP => s.update_config(|c| c.next_track_popup = !c.next_track_popup),
         ID_CAPS => s.update_config(|c| c.caps_lock_osd = !c.caps_lock_osd),
         ID_AUTOSTART => system::set_autostart(!system::autostart_enabled()),
+        ID_LYRICS => s.update_config(|c| c.lyrics.show = !c.lyrics.show),
+        ID_LYRICS_LOCK => s.update_config(|c| c.lyrics.locked = !c.lyrics.locked),
         ID_EXIT => {
             settings::close();
             s.running.store(false, Ordering::Relaxed);
