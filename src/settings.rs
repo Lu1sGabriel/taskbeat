@@ -143,6 +143,10 @@ enum Key {
     Autostart,
     Language,
     Fullscreen,
+    UpdateCheck,
+    UpdateAuto,
+    UpdateBeta,
+    UpdateNow,
     Reset,
     Licenses,
     About,
@@ -369,6 +373,12 @@ const PAGES: &[Page] = &[
             Row { icon: "\u{F2B7}", title: "Idioma", desc: "Automático segue o idioma do Windows (outros idiomas usam inglês)", key: Key::Language, kind: Kind::Choice(LANGS) },
             Row { icon: "\u{E740}", title: "Ocultar em tela cheia", desc: "Some durante jogos, vídeos e apresentações", key: Key::Fullscreen, kind: Kind::Toggle },
             Row { icon: "\u{E72C}", title: "Restaurar padrões", desc: "Volta todas as opções para os valores originais", key: Key::Reset, kind: Kind::Button("Restaurar") },
+            Section("Atualizações"),
+            Row { icon: "\u{E895}", title: "Procurar atualizações", desc: "Ao abrir e uma vez por dia, nas releases do Taskbeat no GitHub", key: Key::UpdateCheck, kind: Kind::Toggle },
+            Row { icon: "\u{E896}", title: "Instalar sozinho, sem perguntar", desc: "Baixa, confere a assinatura, instala e reabre o Taskbeat; desligado, pergunta antes", key: Key::UpdateAuto, kind: Kind::Toggle },
+            Row { icon: "\u{EBE8}", title: "Receber versões de teste", desc: "Também avisa dos betas, que podem ter defeitos", key: Key::UpdateBeta, kind: Kind::Toggle },
+            Row { icon: "\u{E72C}", title: "Procurar agora", desc: "O resultado aparece num aviso perto do relógio", key: Key::UpdateNow, kind: Kind::Button("Procurar") },
+            Row { icon: "\u{E72E}", title: "Privacidade", desc: "A consulta mostra o seu IP ao GitHub, como abrir qualquer site; nada mais é enviado", key: Key::About, kind: Kind::Info },
             Section("Sobre"),
             Row { icon: "\u{E8A5}", title: "Licenças", desc: "Licença MIT e bibliotecas de código aberto usadas", key: Key::Licenses, kind: Kind::Button("Ver licenças") },
             Row { icon: "\u{E946}", title: "Taskbeat", desc: "Feito em Rust · WASAPI loopback · System Media Transport Controls", key: Key::About, kind: Kind::Info },
@@ -490,7 +500,10 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::Autostart => AUTOSTART.with(|a| a.get()) as i32,
         Key::Fullscreen => c.hide_on_fullscreen as i32,
         Key::Language => idx(LANG_V, c.language),
-        Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => 0,
+        Key::UpdateCheck => c.update_check as i32,
+        Key::UpdateAuto => c.update_auto as i32,
+        Key::UpdateBeta => c.update_beta as i32,
+        Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::UpdateNow => 0,
     }
 }
 
@@ -583,7 +596,10 @@ fn set(c: &mut Config, key: Key, v: i32) {
             c.language = pick(LANG_V, i);
             crate::i18n::apply(c.language);
         }
-        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos => {}
+        Key::UpdateCheck => c.update_check = v != 0,
+        Key::UpdateAuto => c.update_auto = v != 0,
+        Key::UpdateBeta => c.update_beta = v != 0,
+        Key::Autostart | Key::Reset | Key::About | Key::OsdTest | Key::Licenses | Key::LauncherApps | Key::ResetPos | Key::UpdateNow => {}
     }
 }
 
@@ -604,6 +620,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     const OSD: &str = "Ligue o aviso de Caps Lock ou de Num Lock para usar esta opção";
     const BLUR: &str = "O desfoque só vale para o material Acrílico";
     const VIZ: &str = "Ligue \"Mostrar barras dinâmicas\" para usar esta opção";
+    const UPDATES: &str = "Ligue \"Procurar atualizações\" para usar esta opção";
     let osd_on = c.caps_lock_osd || c.num_lock_osd;
     match key {
         AlwaysShow | ShowArtist | SecondLine | Indicator | TaskbarProgress | TrackAnim | TaskbarControls | TaskbarShuffle | TaskbarPlay | WidgetControls | WidgetControlsRgb | WidgetSides | WidgetSidesAlpha | WidgetDivider | CoverShape | CoverSize | TextSize | Marquee | TitleWidth | WidgetPill | WidgetShape | WidgetTint | WidgetOpacity | WidgetIntensity | WidgetGlow | WidgetBorder
@@ -623,6 +640,7 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdShape | OsdSize | OsdTheme | OsdDuration | OsdSwitch | OsdMaterial | OsdOpacity | OsdBlur | OsdIcon | OsdAnim if !osd_on => Some(OSD),
         OsdBlur if c.osd_material != crate::config::OsdMaterial::Acrylic => Some(BLUR),
         Style | Palette | Bars | Width | Sens | OnlyMedia | Peaks if !c.show_visualizer => Some(VIZ),
+        UpdateAuto if !c.update_check => Some(UPDATES),
         _ => None,
     }
 }
@@ -2493,6 +2511,10 @@ fn activate(u: &mut Ui, hit: Hit) -> Action {
                 }
                 Kind::Button(_) if key == Key::OsdTest => {
                     u.shared.osd_test.store(true, Ordering::Relaxed);
+                    Action::Redraw
+                }
+                Kind::Button(_) if key == Key::UpdateNow => {
+                    crate::update::check_now();
                     Action::Redraw
                 }
                 _ => Action::None,
