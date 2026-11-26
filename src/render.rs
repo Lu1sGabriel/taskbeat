@@ -580,17 +580,46 @@ pub(crate) fn rrect_sd(qx: f32, qy: f32, r: f32) -> f32 {
     (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.0) - r
 }
 
+/// Pontilhado ordenado 8×8 (Bayer), em frações de 0 a 1: somado antes de
+/// truncar, o arredondamento muda de pixel para pixel e um degradê grande e
+/// escuro vira uma mistura fina dos dois níveis vizinhos, sem faixas. É o
+/// mesmo pontilhado do fundo da tela cheia da letra (`lyrics_bg`).
+const DITHER: [f32; 64] = {
+    const M: [u8; 64] = [
+        0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55,
+        23, 61, 29, 53, 21,
+    ];
+    let mut out = [0f32; 64];
+    let mut i = 0;
+    while i < 64 {
+        out[i] = (M[i] as f32 + 0.5) / 64.0;
+        i += 1;
+    }
+    out
+};
+
 pub struct Canvas<'a> {
     pub w: usize,
     pub h: usize,
     px: &'a mut [u32],
     /// Recorte ativo: x0, y0, x1, y1 (exclusivo).
     clip: (usize, usize, usize, usize),
+    /// Arredonda as misturas com o pontilhado (`set_dither`).
+    dither: bool,
 }
 
 impl<'a> Canvas<'a> {
     pub fn new(w: usize, h: usize, px: &'a mut [u32]) -> Self {
-        Self { w, h, px, clip: (0, 0, w, h) }
+        Self { w, h, px, clip: (0, 0, w, h), dither: false }
+    }
+
+    /// Liga o pontilhado no arredondamento das misturas em ponto flutuante
+    /// (`blend`, `fill_rrect_ca`, imagens ampliadas): para degradês e fundos
+    /// desfocados grandes, onde 8 bits por canal mostram faixas. Desligado
+    /// (o padrão), o resultado é o mesmo de sempre. Devolve o estado anterior.
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn set_dither(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.dither, on)
     }
 
     pub fn set_clip(&mut self, r: RectF) {
@@ -654,7 +683,10 @@ impl<'a> Canvas<'a> {
         let i = y * self.w + x;
         let d = unpack(self.px[i]);
         let k = 1.0 - s[3] / 255.0;
-        let o = [s[0] + d[0] * k, s[1] + d[1] * k, s[2] + d[2] * k, s[3] + d[3] * k];
+        // Com o pontilhado, o limiar do truncamento varia por pixel (a média
+        // fica exata); sem ele, `t` é 0 e nada muda.
+        let t = if self.dither { DITHER[(y & 7) * 8 + (x & 7)] } else { 0.0 };
+        let o = [s[0] + d[0] * k + t, s[1] + d[1] * k + t, s[2] + d[2] * k + t, s[3] + d[3] * k + t];
         self.px[i] = ((o[3].min(255.0) as u32) << 24) | ((o[0].min(255.0) as u32) << 16) | ((o[1].min(255.0) as u32) << 8) | (o[2].min(255.0) as u32);
     }
 

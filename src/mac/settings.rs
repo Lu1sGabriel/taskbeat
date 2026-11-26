@@ -712,11 +712,14 @@ fn osd_preview(tr: &mut TextRenderer, cfg: &Config, colors: &crate::render::Colo
     {
         let mut cv = Canvas::new(pw, ph, &mut bg);
         let (fw, fh) = (pw as f32, ph as f32);
+        // Papel de parede: degradê grande, com pontilhado (sem faixas).
+        cv.set_dither(true);
         cv.fill_rrect_ca(0.0, 0.0, fw, fh, 0.0, |x, y| {
             let (u, v) = (x / fw, y / fh);
             let base = lerp3([0.16, 0.36, 0.78], [0.62, 0.30, 0.62], (u * 0.6 + v * 0.4).clamp(0.0, 1.0));
             (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.4) * 1.4).clamp(0.0, 1.0) * 0.6), 1.0)
         });
+        cv.set_dither(false);
         // "Janelas" coloridas para o acrílico ter o que desfocar.
         for (u, v, w, h, c) in [(0.10, 0.18, 0.26, 0.60, [0.98, 0.45, 0.55]), (0.42, 0.10, 0.18, 0.50, [1.0, 0.78, 0.35]), (0.66, 0.40, 0.24, 0.48, [0.30, 0.80, 0.95])] {
             cv.fill_round(RectF::new(fw * u, fh * v, fw * w, fh * h), 14.0 * sc, c, 0.75);

@@ -32,8 +32,12 @@ use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Lado máximo da capa decodificada (nítida no card em telas Retina; capas
-/// menores ficam no tamanho original).
+/// Lado máximo da capa guardada. O macOS não deixa pedir um tamanho: a capa
+/// vem como o player a publicou (Spotify: 640 px). A maior na tela é a do card
+/// aberto, 72 pt (144 px em Retina): 384 é 2,7× isso. Guardar maior (768,
+/// reduzida por média de área) foi medido no CI e não melhorou o card (ficou
+/// um pouco pior que a redução do CoreGraphics), com 4× a memória: ver
+/// `gfx::tests::cover_shots`. Capas menores ficam no tamanho original.
 const ART_SIZE: usize = 384;
 /// A faixa anterior precisa estar a menos disso do fim para a troca contar como automática.
 const NEAR_END: f64 = 10.0;
