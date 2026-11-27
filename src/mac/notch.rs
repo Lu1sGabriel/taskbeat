@@ -102,8 +102,9 @@ struct Notch {
     origin: CGPoint,
     screen_frame: NSRect,
     layout: NLayout,
-    /// Atalhos dos apps de música à mostra no card (`launchers::shown`).
+    /// Atalhos dos apps de música à mostra no card e o ícone da ilha fechada (`launchers::pick`).
     apps: Arc<Vec<Launcher>>,
+    wing: Option<Launcher>,
     buf: Vec<u32>,
     cfg: Config,
     cfg_version: u64,
@@ -220,8 +221,10 @@ pub fn start(mtm: MainThreadMarker) {
     let Some((screen, nw, nh)) = pick_screen(mtm) else { return };
     let s = screen.backingScaleFactor() as f32;
     let geom = Geom { notch_w: nw as f32 * s, notch_h: nh as f32 * s };
-    let apps = Arc::new(super::launchers::shown(&sh.launchers.lock().unwrap(), &cfg));
-    let layout = card_layout(s, geom, &cfg, apps.len());
+    let media = sh.media.lock().unwrap().clone();
+    let (apps, wing) = super::launchers::pick(&sh.launchers.lock().unwrap(), &cfg, &media.aumid);
+    let apps = Arc::new(apps);
+    let layout = card_layout(s, geom, &cfg, apps.len(), wing.is_some());
 
     let rect = NSRect::new(CGPoint::new(0.0, 0.0), CGSize::new((layout.w / s) as f64, (layout.h / s) as f64));
     let window = NSPanel::initWithContentRect_styleMask_backing_defer(
@@ -283,6 +286,7 @@ pub fn start(mtm: MainThreadMarker) {
         buf: vec![0; (layout.w.ceil() * layout.h.ceil()) as usize],
         layout,
         apps,
+        wing,
         analyzer: Analyzer::new(cfg.bars, rate),
         cfg,
         cfg_version: sh.config_version.load(Ordering::Relaxed),
@@ -348,9 +352,11 @@ fn behavior(cfg: &Config) -> NSWindowCollectionBehavior {
     b
 }
 
-/// Layout do card com os extras do Mac: botão da letra e atalhos dos apps.
-fn card_layout(s: f32, geom: Geom, cfg: &Config, apps: usize) -> NLayout {
+/// Layout com os extras do Mac: botão da letra e atalhos dos apps no card, e
+/// o ícone do app na ilha fechada (`wing`).
+fn card_layout(s: f32, geom: Geom, cfg: &Config, apps: usize, wing: bool) -> NLayout {
     let l = NLayout::build(s, geom, cfg, true);
+    let l = if wing { l.with_wing_app(cfg.notch_wing) } else { l };
     let l = if cfg.lyrics.card_button { l.with_lyrics_button() } else { l };
     l.with_launchers(apps)
 }
@@ -465,9 +471,7 @@ impl Notch {
     }
 
     fn relayout(&mut self) {
-        let has_seek = true;
-        let _ = has_seek;
-        self.layout = card_layout(self.s, self.geom, &self.cfg, self.apps.len());
+        self.layout = card_layout(self.s, self.geom, &self.cfg, self.apps.len(), self.wing.is_some());
         self.buf = vec![0; (self.layout.w.ceil() * self.layout.h.ceil()) as usize];
         self.last_sig = None;
     }
@@ -497,19 +501,29 @@ impl Notch {
         if !same && self.media.present() && m.present() && self.cfg.track_anim {
             self.change = Some((self.media.clone(), now));
         }
+        let player_changed = m.aumid != self.media.aumid;
         self.media = m;
+        // Outro player: o ícone da ilha (e o "Só um" do card) segue o que está tocando.
+        if player_changed && self.pull_launchers() {
+            self.relayout();
+            self.reposition();
+        }
         self.update_visibility();
     }
 
-    /// Relê os atalhos à mostra; `true` se mudaram (o card muda de altura).
+    /// Relê os atalhos do card e o ícone da ilha; `true` se o layout muda
+    /// (quantos atalhos, ou o ícone apareceu/sumiu).
     fn pull_launchers(&mut self) -> bool {
         let found = shared().launchers.lock().unwrap().clone();
-        let apps = super::launchers::shown(&found, &self.cfg);
-        let same = apps.len() == self.apps.len() && apps.iter().zip(self.apps.iter()).all(|(a, b)| a.id == b.id);
-        if !same {
+        let (apps, wing) = super::launchers::pick(&found, &self.cfg, &self.media.aumid);
+        let ids = |v: &[Launcher]| v.iter().map(|l| l.id.clone()).collect::<Vec<_>>();
+        let layout = apps.len() != self.apps.len() || wing.is_some() != self.wing.is_some();
+        if ids(&apps) != ids(&self.apps) || wing.as_ref().map(|l| &l.id) != self.wing.as_ref().map(|l| &l.id) {
             self.apps = Arc::new(apps);
+            self.wing = wing;
+            self.last_sig = None;
         }
-        !same
+        layout
     }
 
     fn pull_config(&mut self) {
@@ -761,6 +775,7 @@ impl Notch {
             hint,
             change,
             launchers: &self.apps,
+            wing_app: self.wing.as_ref(),
         };
         {
             let mut cv = Canvas::new(sw, sh_, &mut self.buf);
@@ -793,8 +808,16 @@ impl Notch {
         shape.inset(-4.0 * self.s)
     }
 
-    /// Fechada ou no "A seguir", qualquer ponto da ilha abre o card.
+    /// Fechada ou no "A seguir", qualquer ponto da ilha abre o card (menos o
+    /// ícone do app, com a ilha fechada de todo: ele abre o app).
     fn hit(&self, x: f32, y: f32, open: bool) -> Option<Hit> {
+        let now = Instant::now();
+        let closed = self.open.value(now) < 0.05 && self.peek.value(now) < 0.05;
+        if !open && closed {
+            if let Some(h @ Hit::Launch(_)) = self.layout.hit(x, y, false) {
+                return Some(h);
+            }
+        }
         if !open && self.hot_rect().contains(x, y) {
             return Some(Hit::Info);
         }
@@ -808,9 +831,15 @@ impl Notch {
             self.window.setIgnoresMouseEvents(!inside);
         }
         let now = Instant::now();
+        let open = self.open_target && self.open.value(now) > 0.85;
+        let hover = if inside { self.hit(x, y, open) } else { None };
+        // O ícone do app na ilha fechada é um botão: parar nele não abre o card.
+        let on_app = |h: Option<Hit>| !self.open_target && matches!(h, Some(Hit::Launch(_)));
+        let (over_app, was_app) = (on_app(hover), on_app(self.it.hover));
+        let hover_open = !self.open_target && self.cfg.notch_hover;
         if inside && !self.inside {
             self.leave_since = None;
-            if !self.open_target && self.cfg.notch_hover {
+            if hover_open && !over_app {
                 self.hover_since = Some(now);
             }
         } else if !inside && self.inside {
@@ -818,10 +847,14 @@ impl Notch {
             if self.open_target {
                 self.leave_since = Some(now);
             }
+        } else if inside && hover_open {
+            if over_app {
+                self.hover_since = None;
+            } else if was_app {
+                self.hover_since = Some(now);
+            }
         }
         self.inside = inside;
-        let open = self.open_target && self.open.value(now) > 0.85;
-        let hover = if inside { self.hit(x, y, open) } else { None };
         if self.it.hover != hover {
             self.it.hover = hover;
         }
@@ -924,7 +957,9 @@ impl Notch {
             }
             Some(Hit::VolBtn) => self.volume.toggle_mute(),
             Some(Hit::Launch(i)) => {
-                if let Some(app) = self.apps.get(i as usize) {
+                // Card aberto: o atalho da linha; ilha fechada: o ícone dela.
+                let app = if self.open_target { self.apps.get(i as usize).cloned() } else { self.wing.clone() };
+                if let Some(app) = app {
                     super::launchers::open(&app.id);
                     self.set_open(false);
                 }

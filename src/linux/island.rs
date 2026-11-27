@@ -612,6 +612,7 @@ impl Island {
                     hint,
                     change,
                     launchers: &[],
+                    wing_app: None,
                 };
                 nd::draw(&mut cv, &mut self.tr, l, &f);
             }

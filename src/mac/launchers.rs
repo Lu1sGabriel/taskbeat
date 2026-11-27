@@ -8,6 +8,7 @@
 //! `open -b <id>` (traz para a frente se já estiver aberto).
 
 use super::system::log;
+use crate::config::{Config, NotchLaunchers, NotchWing};
 use crate::shared::{Launcher, Shared};
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,13 +50,23 @@ pub fn scan() -> Vec<Launcher> {
     out
 }
 
-/// Os atalhos à mostra no card (no máximo `MAX`).
-pub fn shown(found: &[Launcher], cfg: &crate::config::Config) -> Vec<Launcher> {
-    if !cfg.card_launchers {
-        return Vec::new();
-    }
-    let hidden = &cfg.launcher_hidden;
-    found.iter().filter(|l| !hidden.contains(&l.id)).take(MAX).cloned().collect()
+/// O app "principal": o que está tocando agora (`playing`: identificador do
+/// pacote do player), se for um dos achados; senão o primeiro da lista.
+pub fn main_app(found: &[Launcher], cfg: &Config, playing: &str) -> Option<Launcher> {
+    let visible = || found.iter().filter(|l| !cfg.launcher_hidden.contains(&l.id));
+    visible().find(|l| !playing.is_empty() && l.id == playing).or_else(|| visible().next()).cloned()
+}
+
+/// O que aparece: (atalhos do card aberto, ícone da ilha fechada).
+pub fn pick(found: &[Launcher], cfg: &Config, playing: &str) -> (Vec<Launcher>, Option<Launcher>) {
+    let main = main_app(found, cfg, playing);
+    let card = match cfg.notch_launchers {
+        NotchLaunchers::All => found.iter().filter(|l| !cfg.launcher_hidden.contains(&l.id)).take(MAX).cloned().collect(),
+        NotchLaunchers::One => main.iter().cloned().collect(),
+        NotchLaunchers::Off => Vec::new(),
+    };
+    let wing = if cfg.notch_wing == NotchWing::Bars { None } else { main };
+    (card, wing)
 }
 
 /// Abre (ou traz para a frente) o app.
