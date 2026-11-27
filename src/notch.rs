@@ -13,7 +13,7 @@
 // No Windows o módulo só é usado pelas capturas e pelos GIFs.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-use crate::config::{AccentSource, Config, NotchBg, ShuffleRepeat};
+use crate::config::{AccentSource, Config, NotchBg, NotchWing, ShuffleRepeat};
 use crate::render::*;
 use crate::shared::{Launcher, MediaInfo};
 use crate::text::*;
@@ -55,6 +55,8 @@ pub struct NLayout {
     pub c_art: RectF,
     pub c_right: RectF,
     pub c_title: Option<RectF>,
+    /// Ícone do app de música na ponta direita (`with_wing_app`); clique abre o app.
+    pub c_app: Option<RectF>,
     // ---- aberta
     pub art: RectF,
     pub title: RectF,
@@ -158,6 +160,28 @@ impl NLayout {
         l
     }
 
+    /// Põe o ícone do app de música na ilha fechada, na ponta direita (espelha
+    /// a capa na esquerda). "Barras e app": a ilha cresce igual dos dois lados
+    /// (continua centrada no notch) e as barras ficam por dentro; "Só o app":
+    /// o ícone fica no lugar das barras.
+    pub fn with_wing_app(mut self, mode: NotchWing) -> Self {
+        let s = self.s;
+        let a = self.c_art.w;
+        match mode {
+            NotchWing::Bars => return self,
+            NotchWing::App => self.c_right = RectF::default(),
+            NotchWing::BarsAndApp => {
+                let extra = (a + 6.0 * s).round();
+                self.closed.x -= extra;
+                self.closed.w += 2.0 * extra;
+                self.c_art.x -= extra;
+            }
+        }
+        let inset = self.c_art.x - self.closed.x;
+        self.c_app = Some(RectF::new(self.closed.right() - inset - a, self.c_art.y, a, a));
+        self
+    }
+
     /// Acrescenta o botão da letra na linha dos controles, à direita.
     pub fn with_lyrics_button(mut self) -> Self {
         let k = 32.0 * self.s;
@@ -187,6 +211,10 @@ impl NLayout {
     /// O que está sob o mouse. Com a ilha fechada, tudo nela é `Info` (abre).
     pub fn hit(&self, x: f32, y: f32, open: bool) -> Option<Hit> {
         if !open {
+            // O ícone do app abre o app; o resto da ilha abre o card.
+            if self.c_app.is_some_and(|r| r.inset(-3.0 * self.s).contains(x, y)) {
+                return Some(Hit::Launch(0));
+            }
             return self.closed.inset(-2.0 * self.s).contains(x, y).then_some(Hit::Info);
         }
         if let Some(i) = self.launch.iter().position(|r| r.contains(x, y)) {
@@ -274,6 +302,8 @@ pub struct NotchFrame<'a> {
     pub change: Option<(&'a MediaInfo, f32)>,
     /// Apps de música da linha de atalhos (um por `NLayout::launch`).
     pub launchers: &'a [Launcher],
+    /// App do ícone da ilha fechada (`NLayout::c_app`).
+    pub wing_app: Option<&'a Launcher>,
 }
 
 pub fn draw(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame) {
@@ -358,7 +388,17 @@ pub fn draw(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame)
 
     // ---- fechada
     if closed_a > 0.0 {
-        right_wing(cv, l.c_right, f, closed_a, s);
+        if l.c_right.w > 0.0 {
+            right_wing(cv, l.c_right, f, closed_a, s);
+        }
+        if let (Some(r), Some(app)) = (l.c_app, f.wing_app) {
+            // Mouse em cima: um círculo claro atrás (é um botão, não abre o card).
+            if f.it.hover == Some(Hit::Launch(0)) {
+                let k = r.w / 2.0 + 3.0 * s;
+                cv.fill_circle(r.cx(), r.cy(), k, th.fg, if f.it.pressed == Some(Hit::Launch(0)) { 0.12 } else { 0.18 } * closed_a);
+            }
+            ui::launcher_icon(cv, tr, r, app, th, closed_a);
+        }
         if let Some(r) = l.c_title {
             let title = title_of(m);
             ui::text_center(cv, tr, &title, Font::TitleSm, r.inset(6.0 * s), th.fg, 0.92 * closed_a);
@@ -652,6 +692,7 @@ pub fn preview_sized(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, color
         hint: None,
         change: None,
         launchers: &[],
+        wing_app: None,
     };
     let (sw, sh) = (l.w.ceil() as usize, l.h.ceil() as usize);
     let mut layer = vec![0u32; sw * sh];
@@ -737,6 +778,7 @@ mod tests {
             hint: None,
             change: None,
             launchers: &[],
+            wing_app: None,
         };
         let (w, h) = (l.w.ceil() as usize, l.h.ceil() as usize);
         let mut px = vec![0u32; w * h];
@@ -866,11 +908,79 @@ mod tests {
             hint: None,
             change: None,
             launchers: &apps,
+            wing_app: None,
         };
         let (w, h) = (l.w.ceil() as usize, l.h.ceil() as usize);
         let mut px = vec![0xff20_2020u32; w * h];
         draw(&mut Canvas::new(w, h, &mut px), &mut tr, &l, &f);
         crate::png::save(&out("notch-open-atalhos.png"), w, h, &px);
+    }
+
+    /// Ícone de mentira para as capturas: círculo verde (como o do Spotify).
+    fn fake_icon() -> std::sync::Arc<crate::render::Image> {
+        let n = 64;
+        let mut px = vec![0u32; n * n];
+        Canvas::new(n, n, &mut px).fill_circle(32.0, 32.0, 31.0, [0.12, 0.84, 0.38], 1.0);
+        std::sync::Arc::new(crate::render::Image::new(n, n, px))
+    }
+
+    /// Ilha fechada com o ícone do app ao lado do notch, nas três opções, com
+    /// e sem notch, e o card com "Só um" atalho.
+    /// `cargo test notch_lateral -- --ignored`
+    #[test]
+    #[ignore]
+    fn notch_lateral() {
+        let mut tr = TextRenderer::new();
+        tr.set_scale(S);
+        let app = Launcher { name: "Spotify".into(), id: "com.spotify.client".into(), icon: Some(fake_icon()) };
+        let media = ui::sample_media();
+        let colors = Colors { palette: crate::config::Palette::Album, accent: [0.0, 0.48, 1.0], accent_light: [0.25, 0.6, 1.0], light_taskbar: false, album: media.art.as_ref().map(|a| a.vibrant) };
+        let viz_v: Vec<f32> = (0..6).map(|i| 0.35 + 0.6 * ((i as f32 * 1.7 + 3.9).sin() * 0.5 + 0.5)).collect();
+        let notch = Geom { notch_w: 196.0 * S, notch_h: 32.0 * S };
+        let flat = Geom { notch_w: 0.0, notch_h: 24.0 * S };
+        let scenes = [
+            ("notch-lateral-barras-app.png", notch, NotchWing::BarsAndApp, None, 0.0),
+            ("notch-lateral-so-app.png", notch, NotchWing::App, None, 0.0),
+            ("notch-lateral-so-barras.png", notch, NotchWing::Bars, None, 0.0),
+            ("notch-lateral-mouse.png", notch, NotchWing::BarsAndApp, Some(Hit::Launch(0)), 0.0),
+            ("notch-lateral-sem-notch.png", flat, NotchWing::BarsAndApp, None, 0.0),
+            ("notch-lateral-card-um.png", notch, NotchWing::BarsAndApp, None, 1.0),
+        ];
+        for (name, g, wing, hover, open) in scenes {
+            let cfg = Config { notch_wing: wing, ..Config::default().with_mac_defaults() };
+            let l = NLayout::build(S, g, &cfg, true).with_wing_app(wing).with_launchers(1);
+            let c = l.closed;
+            if wing != NotchWing::Bars {
+                let a = l.c_app.expect("ícone na ilha");
+                assert!(a.x >= l.notch.right() && a.right() <= c.right(), "{name}: ícone fora da asa direita");
+                assert!((a.x - l.notch.right()) > 0.0 && (l.c_art.x - c.x - (c.right() - a.right())).abs() < 1.0, "{name}: ícone não espelha a capa");
+                assert_eq!(l.hit(a.cx(), a.cy(), false), Some(Hit::Launch(0)), "{name}: clique no ícone");
+            }
+            assert!((c.cx() - l.notch.cx()).abs() < 1.0, "{name}: ilha fora do centro do notch");
+            assert!(c.w + 40.0 * S <= l.open.w, "{name}: ilha fechada mais larga que o card");
+            let f = NotchFrame {
+                cfg: &cfg,
+                colors: &colors,
+                media: &media,
+                theme: theme(&cfg, &colors, &media),
+                it: Interact { hover, ..Default::default() },
+                pb: Playback { playing: true, pos: media.pos, volume: 0.62, ..Default::default() },
+                time: 1.3,
+                viz: Some((&viz_v, &viz_v)),
+                open,
+                peek: 0.0,
+                peek_t: 0.0,
+                peek_total: 5.0,
+                hint: None,
+                change: None,
+                launchers: std::slice::from_ref(&app),
+                wing_app: (wing != NotchWing::Bars).then_some(&app),
+            };
+            let (w, h) = (l.w.ceil() as usize, if open > 0.0 { l.h.ceil() as usize } else { (l.band + 12.0 * S) as usize });
+            let mut px = vec![0xff8a_8f99u32; w * h];
+            draw(&mut Canvas::new(w, h, &mut px), &mut tr, &l, &f);
+            crate::png::save(&out(name), w, h, &px);
+        }
     }
 
     #[test]

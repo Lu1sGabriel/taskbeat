@@ -679,6 +679,7 @@ fn mac_gif(name: &str, has_notch: bool) {
             hint: None,
             change,
             launchers: &[],
+            wing_app: None,
         };
         let mut island = vec![0u32; sw * sh];
         nd::draw(&mut Canvas::new(sw, sh, &mut island), &mut tr, &l, &fr);

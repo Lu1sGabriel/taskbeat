@@ -36,6 +36,8 @@ enum Key {
     TrackAnim,
     IconAnim,
     NotchBg,
+    NotchWing,
+    NotchLaunchers,
     Accent,
     PlayShape,
     CardSeek,
@@ -111,6 +113,8 @@ struct Page {
 use Item::{Row, Section};
 
 const NOTCH_BGS: &[&str] = &["Preto", "Cor do álbum", "Capa desfocada"];
+const NOTCH_WINGS: &[&str] = &["Barras e app", "Só as barras", "Só o app"];
+const NOTCH_LAUNCHERS: &[&str] = &["Todos", "Só um", "Nenhum"];
 const ACCENTS: &[&str] = &["Cor da capa", "Cor do sistema"];
 const PLAY_SHAPES: &[&str] = &["Círculo", "Arredondado", "Quadrado"];
 const SHUFFLE_MODES: &[&str] = &["Sempre", "Quando o player permite"];
@@ -128,6 +132,8 @@ const OSD_ANIMS: &[&str] = &["Deslizar", "Zoom", "Esmaecer"];
 const BAR_SHAPES: &[&str] = &["Arredondadas", "Retas"];
 
 const BG_V: &[NotchBg] = &[NotchBg::Black, NotchBg::Album, NotchBg::Artwork];
+const WING_V: &[NotchWing] = &[NotchWing::BarsAndApp, NotchWing::Bars, NotchWing::App];
+const LAUNCHERS_V: &[NotchLaunchers] = &[NotchLaunchers::All, NotchLaunchers::One, NotchLaunchers::Off];
 const ACCENT_V: &[AccentSource] = &[AccentSource::Album, AccentSource::Windows];
 const PLAY_V: &[Shape] = &[Shape::Circle, Shape::Rounded, Shape::Square];
 const SHUFFLE_V: &[ShuffleRepeat] = &[ShuffleRepeat::Always, ShuffleRepeat::WhenSupported];
@@ -158,6 +164,7 @@ const PAGES: &[Page] = &[
             Row { title: "Sempre visível", desc: "Fica no notch mesmo sem nada tocando", key: Key::AlwaysShow, kind: Kind::Toggle },
             Row { title: "Abrir ao passar o mouse", desc: "Desligado: o card abre só com um clique", key: Key::NotchHover, kind: Kind::Toggle },
             Row { title: "Indicador \"tocando agora\"", desc: "Mini equalizador quando não há barras de áudio", key: Key::Indicator, kind: Kind::Toggle },
+            Row { title: "Ao lado do notch", desc: "Barras de áudio, o ícone do app de música (clique abre o app) ou os dois", key: Key::NotchWing, kind: Kind::Segmented(NOTCH_WINGS) },
             Row { title: "Animar troca de música", desc: "O título novo desliza e a capa nova aparece suavemente", key: Key::TrackAnim, kind: Kind::Toggle },
         ],
     },
@@ -173,6 +180,8 @@ const PAGES: &[Page] = &[
             Row { title: "Barra de progresso", desc: "Tempo decorrido e restante; arraste para pular", key: Key::CardSeek, kind: Kind::Toggle },
             Row { title: "Volume", desc: "Slider de volume e botão de mudo; role sobre o card para ajustar", key: Key::ShowVolume, kind: Kind::Toggle },
             Row { title: "Aleatório e repetir", desc: "Apagados quando o player não deixa mudar pelo macOS", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
+            Section("Atalhos"),
+            Row { title: "Apps de música", desc: "Ícones embaixo do card para abrir o app; \"Só um\" mostra o que está tocando", key: Key::NotchLaunchers, kind: Kind::Segmented(NOTCH_LAUNCHERS) },
         ],
     },
     Page {
@@ -278,6 +287,8 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::TrackAnim => c.track_anim as i32,
         Key::IconAnim => c.icon_anim as i32,
         Key::NotchBg => idx(BG_V, c.notch_bg),
+        Key::NotchWing => idx(WING_V, c.notch_wing),
+        Key::NotchLaunchers => idx(LAUNCHERS_V, c.notch_launchers),
         Key::Accent => idx(ACCENT_V, c.accent_source),
         Key::PlayShape => idx(PLAY_V, c.play_shape),
         Key::CardSeek => c.card_seek as i32,
@@ -324,6 +335,8 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::TrackAnim => c.track_anim = v != 0,
         Key::IconAnim => c.icon_anim = v != 0,
         Key::NotchBg => c.notch_bg = pick(BG_V, v),
+        Key::NotchWing => c.notch_wing = pick(WING_V, v),
+        Key::NotchLaunchers => c.notch_launchers = pick(LAUNCHERS_V, v),
         Key::Accent => c.accent_source = pick(ACCENT_V, v),
         Key::PlayShape => c.play_shape = pick(PLAY_V, v),
         Key::CardSeek => c.card_seek = v != 0,
@@ -367,7 +380,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
 fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     use Key::*;
     match key {
-        AlwaysShow | NotchHover | Indicator | TrackAnim if !c.show_media => Some("Ligue \"Mostrar música no notch\" para usar esta opção"),
+        AlwaysShow | NotchHover | Indicator | TrackAnim | NotchWing if !c.show_media => Some("Ligue \"Mostrar música no notch\" para usar esta opção"),
         PopupSecs if !c.next_track_popup => Some("Ligue \"Mostrar A seguir\" para usar esta opção"),
         Style | Palette | Bars | Sens | Peaks | OnlyMedia | BarShape if !c.show_visualizer => Some("Ligue \"Mostrar barras dinâmicas\" para usar esta opção"),
         BarShape if c.style == crate::config::Style::Wave => Some("As pontas não valem para o estilo \"Onda\""),

@@ -397,6 +397,27 @@ pub enum Language {
     De,
 }
 
+/// O que fica à direita do notch com a ilha fechada (Mac).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotchWing {
+    /// Barras de áudio (ou o indicador) e o ícone do app de música na ponta.
+    BarsAndApp,
+    Bars,
+    /// Só o ícone do app (clique abre o app).
+    App,
+}
+
+/// Atalhos dos apps de música embaixo do card aberto (Mac).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotchLaunchers {
+    All,
+    /// Só o app que está tocando (ou o primeiro).
+    One,
+    Off,
+}
+
 /// Fundo do notch aberto (Mac). O topo fica sempre preto, emendado no notch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -599,6 +620,10 @@ pub struct Config {
     pub notch_hover: bool,
     /// Fundo do notch aberto.
     pub notch_bg: NotchBg,
+    /// À direita do notch fechado: barras e/ou o ícone do app de música.
+    pub notch_wing: NotchWing,
+    /// Atalhos dos apps de música no card aberto: todos, só um ou nenhum.
+    pub notch_launchers: NotchLaunchers,
     /// Ícone do Taskbeat na barra de menus (o menu também abre com o botão
     /// direito na ilha).
     pub menu_bar_icon: bool,
@@ -765,6 +790,8 @@ impl Config {
 
             notch_hover: true,
             notch_bg: NotchBg::Album,
+            notch_wing: NotchWing::BarsAndApp,
+            notch_launchers: NotchLaunchers::All,
             menu_bar_icon: true,
             login_default_applied: false,
 
