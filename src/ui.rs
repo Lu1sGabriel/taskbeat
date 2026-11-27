@@ -2754,7 +2754,7 @@ pub fn launch_drop_slot(slots: &[RectF], x: f32) -> usize {
 }
 
 /// Ícone de um app de música (ou a inicial dele num círculo).
-fn launcher_icon(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, app: &crate::shared::Launcher, th: &Theme, a: f32) {
+pub(crate) fn launcher_icon(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, app: &crate::shared::Launcher, th: &Theme, a: f32) {
     let ir = RectF::new(r.x.round(), r.y.round(), r.w.round(), r.h.round());
     match &app.icon {
         Some(img) => cv.draw_image(ir, img, 0.0, a),

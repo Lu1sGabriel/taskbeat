@@ -16,7 +16,8 @@ use crate::config::Config;
 use crate::dsp::{Analyzer, FFT_SIZE};
 use crate::notch::{self as nd, Geom, NLayout, NotchFrame};
 use crate::render::{Canvas, Colors, RectF};
-use crate::shared::{MediaCmd, MediaInfo};
+use crate::shared::{Launcher, MediaCmd, MediaInfo};
+use std::sync::Arc;
 use crate::text::TextRenderer;
 use crate::ui::{Hit, IconAnims, Interact, Playback};
 use block2::RcBlock;
@@ -101,6 +102,8 @@ struct Notch {
     origin: CGPoint,
     screen_frame: NSRect,
     layout: NLayout,
+    /// Atalhos dos apps de música à mostra no card (`launchers::shown`).
+    apps: Arc<Vec<Launcher>>,
     buf: Vec<u32>,
     cfg: Config,
     cfg_version: u64,
@@ -217,7 +220,8 @@ pub fn start(mtm: MainThreadMarker) {
     let Some((screen, nw, nh)) = pick_screen(mtm) else { return };
     let s = screen.backingScaleFactor() as f32;
     let geom = Geom { notch_w: nw as f32 * s, notch_h: nh as f32 * s };
-    let layout = NLayout::build(s, geom, &cfg, true);
+    let apps = Arc::new(super::launchers::shown(&sh.launchers.lock().unwrap(), &cfg));
+    let layout = card_layout(s, geom, &cfg, apps.len());
 
     let rect = NSRect::new(CGPoint::new(0.0, 0.0), CGSize::new((layout.w / s) as f64, (layout.h / s) as f64));
     let window = NSPanel::initWithContentRect_styleMask_backing_defer(
@@ -278,6 +282,7 @@ pub fn start(mtm: MainThreadMarker) {
         screen_frame: rect,
         buf: vec![0; (layout.w.ceil() * layout.h.ceil()) as usize],
         layout,
+        apps,
         analyzer: Analyzer::new(cfg.bars, rate),
         cfg,
         cfg_version: sh.config_version.load(Ordering::Relaxed),
@@ -343,7 +348,26 @@ fn behavior(cfg: &Config) -> NSWindowCollectionBehavior {
     b
 }
 
+/// Layout do card com os extras do Mac: botão da letra e atalhos dos apps.
+fn card_layout(s: f32, geom: Geom, cfg: &Config, apps: usize) -> NLayout {
+    let l = NLayout::build(s, geom, cfg, true);
+    let l = if cfg.lyrics.card_button { l.with_lyrics_button() } else { l };
+    l.with_launchers(apps)
+}
+
 // ---------------------------------------------------------------- avisos de fora
+
+/// A lista de apps de música instalados mudou (thread dos atalhos).
+pub fn launchers_changed() {
+    with(|n| {
+        if n.pull_launchers() {
+            n.relayout();
+            n.reposition();
+        }
+        n.render(true);
+        n.schedule();
+    });
+}
 
 pub fn media_changed() {
     with(|n| {
@@ -442,7 +466,8 @@ impl Notch {
 
     fn relayout(&mut self) {
         let has_seek = true;
-        self.layout = NLayout::build(self.s, self.geom, &self.cfg, has_seek);
+        let _ = has_seek;
+        self.layout = card_layout(self.s, self.geom, &self.cfg, self.apps.len());
         self.buf = vec![0; (self.layout.w.ceil() * self.layout.h.ceil()) as usize];
         self.last_sig = None;
     }
@@ -476,6 +501,17 @@ impl Notch {
         self.update_visibility();
     }
 
+    /// Relê os atalhos à mostra; `true` se mudaram (o card muda de altura).
+    fn pull_launchers(&mut self) -> bool {
+        let found = shared().launchers.lock().unwrap().clone();
+        let apps = super::launchers::shown(&found, &self.cfg);
+        let same = apps.len() == self.apps.len() && apps.iter().zip(self.apps.iter()).all(|(a, b)| a.id == b.id);
+        if !same {
+            self.apps = Arc::new(apps);
+        }
+        !same
+    }
+
     fn pull_config(&mut self) {
         let sh = shared();
         let v = sh.config_version.load(Ordering::Relaxed);
@@ -488,6 +524,7 @@ impl Notch {
         self.window.setCollectionBehavior(behavior(&self.cfg));
         let rate = sh.sample_rate.load(Ordering::Relaxed);
         self.analyzer.configure(self.cfg.bars, rate);
+        self.pull_launchers();
         self.relayout();
         self.reposition();
         self.update_visibility();
@@ -723,6 +760,7 @@ impl Notch {
             peek_total: self.cfg.popup_secs.max(2) as f32,
             hint,
             change,
+            launchers: &self.apps,
         };
         {
             let mut cv = Canvas::new(sw, sh_, &mut self.buf);
@@ -885,6 +923,17 @@ impl Notch {
                 }
             }
             Some(Hit::VolBtn) => self.volume.toggle_mute(),
+            Some(Hit::Launch(i)) => {
+                if let Some(app) = self.apps.get(i as usize) {
+                    super::launchers::open(&app.id);
+                    self.set_open(false);
+                }
+            }
+            Some(Hit::Lyrics) => {
+                sh.update_config(|c| c.lyrics.show = !c.lyrics.show);
+                // Fora deste quadro (a ilha está emprestada agora): a letra e a ilha reagem.
+                dispatch2::DispatchQueue::main().exec_async(super::config_changed);
+            }
             _ => {}
         }
     }

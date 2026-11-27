@@ -615,7 +615,7 @@ impl State {
 }
 
 /// Nome e ícone do app a partir do identificador do pacote.
-fn app_info(bundle: &str) -> (String, Option<Arc<Image>>) {
+pub(super) fn app_info(bundle: &str) -> (String, Option<Arc<Image>>) {
     use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{NSFileManager, NSString};
     let ws = NSWorkspace::sharedWorkspace();
