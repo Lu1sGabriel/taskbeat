@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "taskbeat"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "block2",
  "dbus",
