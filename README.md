@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-Setup-1.3.0.exe"><b>⬇ Baixar para Windows 10/11</b></a>
+  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-Setup-1.4.0.exe"><b>⬇ Baixar para Windows 10/11</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-1.3.0.dmg"><b>⬇ Baixar para macOS 12+</b></a>
+  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-1.4.0.dmg"><b>⬇ Baixar para macOS 12+</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.3.0">Novidades da 1.3.0</a>
+  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.4.0">Novidades da 1.4.0</a>
 </p>
 
 <p align="center">
@@ -107,7 +107,7 @@ card. Sem notch, fica no meio da barra de menus.
 
 ### Windows 10 ou 11
 
-1. Baixe o **[Taskbeat-Setup-1.3.0.exe](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-Setup-1.3.0.exe)**.
+1. Baixe o **[Taskbeat-Setup-1.4.0.exe](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-Setup-1.4.0.exe)**.
 2. Abra o arquivo. Como o app ainda não tem assinatura digital, o Windows pode
    mostrar **"O Windows protegeu o computador"**: clique em **Mais informações** →
    **Executar assim mesmo**.
@@ -129,7 +129,7 @@ própria página do YouTube Music.
 
 ### macOS 12 ou mais novo
 
-1. Baixe o **[Taskbeat-1.3.0.dmg](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-1.3.0.dmg)**,
+1. Baixe o **[Taskbeat-1.4.0.dmg](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-1.4.0.dmg)**,
    abra e arraste o **Taskbeat** para **Aplicativos**.
 2. Na primeira vez o macOS bloqueia (o app ainda não é notarizado pela Apple).
    Clique em **Concluído**, abra **Ajustes do Sistema → Privacidade e Segurança**
