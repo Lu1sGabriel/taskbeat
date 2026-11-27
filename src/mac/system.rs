@@ -134,4 +134,40 @@ pub mod log {
     pub fn warn(msg: &str) {
         write("warn", msg);
     }
+
+    /// `~/Library/Logs/Taskbeat/crash.log`: sempre gravado (só falhas, nunca o
+    /// que está tocando), para o usuário mandar quando o app fecha sozinho.
+    pub fn crash_log() -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        Some(std::path::PathBuf::from(home).join("Library/Logs/Taskbeat/crash.log"))
+    }
+
+    /// Falha grave: vai para o registro de falhas (e para o de diagnóstico, se ligado).
+    pub fn crash(msg: &str) {
+        write("crash", msg);
+        let Some(p) = crash_log() else { return };
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        // Não deixa crescer sem limite.
+        if std::fs::metadata(&p).is_ok_and(|m| m.len() > 256 * 1024) {
+            let _ = std::fs::remove_file(&p);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+            let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let os = std::process::Command::new("/usr/bin/sw_vers").arg("-productVersion").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+            let _ = writeln!(f, "{t} Taskbeat {} macOS {os} {}: {msg}", env!("CARGO_PKG_VERSION"), std::env::consts::ARCH);
+        }
+    }
+
+    /// Pânicos do Rust vão para o registro de falhas (com a pilha).
+    pub fn install_panic_hook() {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current().name().unwrap_or("?").to_string();
+            let bt = std::backtrace::Backtrace::force_capture();
+            crash(&format!("pânico na thread \"{thread}\": {info}\n{bt}"));
+            default(info);
+        }));
+    }
 }

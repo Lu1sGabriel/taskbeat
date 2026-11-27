@@ -49,6 +49,7 @@ pub(crate) fn target() -> Retained<Target> {
 }
 
 pub fn main() {
+    system::log::install_panic_hook();
     let mtm = MainThreadMarker::new().expect("Taskbeat precisa rodar na thread principal");
     // Uma instância só (o Finder já reaproveita a aberta; isto cobre `open -n`).
     let others = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(BUNDLE_ID));
@@ -95,6 +96,7 @@ pub fn main() {
 pub(crate) fn quit(mtm: MainThreadMarker) {
     shared().running.store(false, Ordering::Relaxed);
     media::shutdown();
+    audio::clean_exit();
     NSApplication::sharedApplication(mtm).terminate(None);
 }
 
@@ -139,6 +141,7 @@ define_class!(
         fn will_terminate(&self, _n: &NSNotification) {
             shared().running.store(false, Ordering::Relaxed);
             media::shutdown();
+            audio::clean_exit();
         }
     }
 );

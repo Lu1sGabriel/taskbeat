@@ -138,10 +138,47 @@ struct Notch {
 
 thread_local! {
     static N: RefCell<Option<Notch>> = const { RefCell::new(None) };
+    static PANICS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+/// Pânicos seguidos tolerados antes de parar a ilha (o resto do app segue).
+const MAX_PANICS: u32 = 5;
+
+/// Roda `f` com a ilha. Tudo aqui vem do AppKit (vblank, mouse, avisos): um
+/// pânico que chegasse ao Objective-C fecharia o app. Ele é pego, registrado
+/// (`crash.log`, pelo gancho de pânico) e o quadro é descartado; se repetir,
+/// a ilha para e o app continua na barra de menus.
 fn with<R>(f: impl FnOnce(&mut Notch) -> R) -> Option<R> {
-    N.with(|n| n.try_borrow_mut().ok().and_then(|mut g| g.as_mut().map(f)))
+    if PANICS.with(|p| p.get()) >= MAX_PANICS {
+        return None;
+    }
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| N.with(|n| n.try_borrow_mut().ok().and_then(|mut g| g.as_mut().map(f)))));
+    match r {
+        Ok(v) => {
+            PANICS.with(|p| p.set(0));
+            v
+        }
+        Err(_) => {
+            let k = PANICS.with(|p| {
+                p.set(p.get() + 1);
+                p.get()
+            });
+            if k >= MAX_PANICS {
+                system::log::crash("ilha do notch parada depois de falhas seguidas");
+                N.with(|n| {
+                    if let Ok(mut g) = n.try_borrow_mut() {
+                        if let Some(n) = g.as_mut() {
+                            if let Some(t) = n.ticker.as_mut() {
+                                t.set_rate(0);
+                            }
+                            n.window.orderOut(None);
+                        }
+                    }
+                });
+            }
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------- tela e notch
