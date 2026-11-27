@@ -11,6 +11,8 @@
 pub mod audio;
 mod compat;
 mod gfx;
+mod launchers;
+mod lyrics;
 pub mod media;
 mod notch;
 mod osd;
@@ -49,6 +51,7 @@ pub(crate) fn target() -> Retained<Target> {
 }
 
 pub fn main() {
+    system::log::install_panic_hook();
     let mtm = MainThreadMarker::new().expect("Taskbeat precisa rodar na thread principal");
     // Uma instância só (o Finder já reaproveita a aberta; isto cobre `open -n`).
     let others = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(BUNDLE_ID));
@@ -81,6 +84,9 @@ pub fn main() {
     media::spawn(shared.clone(), || {
         dispatch2::DispatchQueue::main().exec_async(notch::media_changed);
     });
+    launchers::spawn(shared.clone(), || {
+        dispatch2::DispatchQueue::main().exec_async(notch::launchers_changed);
+    });
     let audio = audio::spawn(shared.clone());
     crate::update::spawn(shared.clone());
 
@@ -95,6 +101,7 @@ pub fn main() {
 pub(crate) fn quit(mtm: MainThreadMarker) {
     shared().running.store(false, Ordering::Relaxed);
     media::shutdown();
+    audio::clean_exit();
     NSApplication::sharedApplication(mtm).terminate(None);
 }
 
@@ -102,6 +109,9 @@ pub(crate) fn quit(mtm: MainThreadMarker) {
 pub(crate) fn config_changed() {
     notch::config_changed();
     statusbar::config_changed();
+    if let Some(mtm) = MainThreadMarker::new() {
+        lyrics::sync(mtm);
+    }
 }
 
 define_class!(
@@ -118,6 +128,7 @@ define_class!(
             notch::start(mtm);
             osd::start(mtm);
             statusbar::install(mtm);
+            lyrics::sync(mtm);
             if std::env::var_os("TV_DEMO_SETTINGS").is_some() {
                 settings::open(mtm);
             }
@@ -139,6 +150,7 @@ define_class!(
         fn will_terminate(&self, _n: &NSNotification) {
             shared().running.store(false, Ordering::Relaxed);
             media::shutdown();
+            audio::clean_exit();
         }
     }
 );
@@ -169,6 +181,18 @@ define_class!(
         #[unsafe(method(frame:))]
         fn frame(&self, _link: &AnyObject) {
             notch::frame();
+        }
+
+        /// Temporizador lento da letra na tela (10 Hz).
+        #[unsafe(method(lyricsTick:))]
+        fn lyrics_tick(&self, _timer: &AnyObject) {
+            lyrics::tick();
+        }
+
+        /// Quadro do vblank da letra na tela (animações).
+        #[unsafe(method(lyricsFrame:))]
+        fn lyrics_frame(&self, _link: &AnyObject) {
+            lyrics::frame();
         }
 
         /// Quadro do vblank da tela de configurações (prévia).

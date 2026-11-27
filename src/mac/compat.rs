@@ -74,6 +74,18 @@ impl Ticker {
     }
 }
 
+impl Drop for Ticker {
+    /// Tira o vblank/temporizador do run loop (senão ficam lá, parados, para sempre).
+    fn drop(&mut self) {
+        if let Some(link) = self.link.take() {
+            link.invalidate();
+        }
+        if let Some(t) = self.timer.take() {
+            t.invalidate();
+        }
+    }
+}
+
 /// Traz o app para a frente (o `activate` sem argumento é do macOS 14+).
 pub fn activate(mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);

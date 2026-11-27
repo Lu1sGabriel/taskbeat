@@ -48,11 +48,11 @@ mod audio;
 mod cover;
 #[cfg(windows)]
 mod launchers;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod lyrics_bg;
 #[cfg(windows)]
 mod lyrics_overlay;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod lyrics_view;
 #[cfg(windows)]
 mod media;

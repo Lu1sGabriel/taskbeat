@@ -21,7 +21,7 @@ use objc2_foundation::{NSRect, NSString};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum Font {
     Title,
     Subtitle,
@@ -33,6 +33,7 @@ pub enum Font {
     Big,
     /// Tela de configurações.
     Heading,
+    #[default]
     Body,
     BodyStrong,
     Caption,
@@ -57,6 +58,18 @@ pub enum Font {
     SubtitleLg,
     /// Legenda em semibold (selos, cabeçalho do menu).
     CaptionStrong,
+    /// Sobreposição de letra: linha atual (`Lyric*`) e as outras (`LyricDim*`).
+    LyricSm,
+    LyricMd,
+    LyricLg,
+    LyricXl,
+    LyricDimSm,
+    LyricDimMd,
+    LyricDimLg,
+    LyricDimXl,
+    /// Título e artista da letra em tela cheia.
+    TitleXl,
+    SubtitleXl,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -116,6 +129,17 @@ fn spec(f: Font) -> (f32, i32, Face) {
         Font::SubtitleSm => (10.5, 400, Face::Text),
         Font::SubtitleLg => (12.5, 400, Face::Text),
         Font::CaptionStrong => (11.5, 600, Face::Text),
+        // Mesmos tamanhos do Windows.
+        Font::LyricSm => (19.0, 600, Face::Text),
+        Font::LyricMd => (23.0, 600, Face::Text),
+        Font::LyricLg => (29.0, 600, Face::Text),
+        Font::LyricXl => (44.0, 700, Face::Text),
+        Font::LyricDimSm => (14.5, 600, Face::Text),
+        Font::LyricDimMd => (17.0, 600, Face::Text),
+        Font::LyricDimLg => (21.0, 600, Face::Text),
+        Font::LyricDimXl => (32.0, 600, Face::Text),
+        Font::TitleXl => (34.0, 600, Face::Text),
+        Font::SubtitleXl => (19.0, 400, Face::Text),
     }
 }
 
@@ -200,6 +224,87 @@ impl TextRenderer {
         let m = Rc::new(m);
         self.cache.insert(key, (m.clone(), self.tick));
         m
+    }
+
+    /// Máscara do texto quebrado em até `max_lines` linhas na largura `w`
+    /// (a última com "…" se não couber). A altura é a das linhas usadas.
+    pub fn mask_wrapped(&mut self, text: &str, font: Font, w: i32, max_lines: i32, align: Align) -> Rc<Mask> {
+        self.tick += 1;
+        // Altura negativa na chave: "quebrado em N linhas" (como no Windows).
+        let key: Key = (text.to_string(), font, w, -max_lines.max(1), align);
+        if let Some((m, used)) = self.cache.get_mut(&key) {
+            *used = self.tick;
+            return m.clone();
+        }
+        if self.cache.len() >= self.capacity {
+            let mut ticks: Vec<u64> = self.cache.values().map(|(_, t)| *t).collect();
+            ticks.sort_unstable();
+            let cut = ticks[ticks.len() / 2];
+            self.cache.retain(|_, (_, t)| *t > cut);
+        }
+        let w = w.max(1) as usize;
+        let mut m = self.rasterize_wrapped(text, font, w, max_lines.max(1) as usize, align).unwrap_or_else(|| {
+            let h = (spec(font).0 * self.scale.max(1.0) * 1.3).ceil() as usize;
+            Mask { w, h: h.max(1), cov: vec![0; w * h.max(1)] }
+        });
+        m.crop_right();
+        let m = Rc::new(m);
+        self.cache.insert(key, (m.clone(), self.tick));
+        m
+    }
+
+    fn rasterize_wrapped(&mut self, text: &str, font: Font, w: usize, max_lines: usize, align: Align) -> Option<Mask> {
+        use objc2_core_foundation::CFRange;
+        use objc2_core_text::CTTypesetter;
+        let nsfont = self.font(font);
+        let ct: &CTFont = unsafe { &*(Retained::as_ptr(&nsfont) as *const CTFont) };
+        let attrs = unsafe {
+            CFDictionary::<CFString, CFType>::from_slices(&[kCTFontAttributeName, kCTForegroundColorFromContextAttributeName], &[ct.as_ref(), CFBoolean::new(true).as_ref()])
+        };
+        let attributed = |s: &str| unsafe { CFAttributedString::new(None, Some(&CFString::from_str(s)), Some(attrs.as_ref())) };
+        let full = attributed(text)?;
+        let len = full.length();
+        let ts = unsafe { CTTypesetter::with_attributed_string(&full) };
+        let dots = attributed("…")?;
+        let ellipsis = unsafe { CTLine::with_attributed_string(&dots) };
+        // Linhas: cada uma até onde o CoreText sugere quebrar.
+        let mut lines: Vec<CFRetained<CTLine>> = Vec::new();
+        let mut start = 0;
+        while start < len && lines.len() < max_lines {
+            let last = lines.len() + 1 == max_lines;
+            let n = unsafe { ts.suggest_line_break(start, w as f64) }.max(1);
+            let line = if last && start + n < len {
+                // Última linha permitida e ainda sobra texto: o resto, com "…".
+                let rest = unsafe { ts.line(CFRange { location: start, length: len - start }) };
+                unsafe { rest.truncated_line(w as f64, CTLineTruncationType::End, Some(&ellipsis)) }.unwrap_or(rest)
+            } else {
+                unsafe { ts.line(CFRange { location: start, length: n }) }
+            };
+            lines.push(line);
+            start += n;
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        let (ascent, descent, leading) = unsafe { (ct.ascent(), ct.descent(), ct.leading()) };
+        let lh = (ascent + descent + leading).ceil();
+        let h = (lh * lines.len() as f64).ceil().max(1.0) as usize;
+        alpha_bitmap(w, h, |ctx| unsafe {
+            CGContext::set_text_matrix(Some(ctx), CGAffineTransformIdentity);
+            for (i, line) in lines.iter().enumerate() {
+                let width = line.typographic_bounds(std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+                // Espaço do fim da linha quebrada não conta para centralizar.
+                let width = width - line.trailing_whitespace_width();
+                let x = match align {
+                    Align::Left => 0.0,
+                    Align::Center => ((w as f64 - width) / 2.0).max(0.0),
+                };
+                // Origem embaixo: a primeira linha fica no alto do bitmap.
+                let baseline = (h as f64 - lh * (i as f64 + 1.0) + descent + leading / 2.0).round();
+                CGContext::set_text_position(Some(ctx), x, baseline);
+                line.draw(ctx);
+            }
+        })
     }
 
     fn rasterize_text(&mut self, text: &str, font: Font, w: usize, h: usize, align: Align) -> Option<Mask> {

@@ -611,6 +611,7 @@ impl Island {
                     peek_total: self.cfg.popup_secs.max(2) as f32,
                     hint,
                     change,
+                    launchers: &[],
                 };
                 nd::draw(&mut cv, &mut self.tr, l, &f);
             }

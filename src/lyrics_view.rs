@@ -1373,38 +1373,12 @@ mod tests {
         Colors { palette: crate::config::Palette::Album, accent: [0.93, 0.32, 0.62], accent_light: [0.98, 0.62, 0.80], light_taskbar: false, album: None }
     }
 
+    /// Grava a captura em `TASKBEAT_SHOTS_DIR` (sem a variável, não grava).
+    /// PNG em Rust puro (`crate::png`): os testes compilam no Windows e no Mac.
     fn save(name: &str, w: usize, h: usize, px: &[u32]) {
-        use windows::Win32::Foundation::GENERIC_WRITE;
-        use windows::Win32::Graphics::Imaging::*;
-        use windows::Win32::System::Com::StructuredStorage::IPropertyBag2;
-        use windows::Win32::System::Com::*;
         let Some(dir) = std::env::var_os("TASKBEAT_SHOTS_DIR") else { return };
         let _ = std::fs::create_dir_all(&dir);
-        let mut buf = Vec::with_capacity(w * h * 4);
-        for &p in px {
-            let a = (p >> 24) & 0xff;
-            let un = |c: u32| if a == 0 { 0 } else { ((c * 255 + a / 2) / a).min(255) as u8 };
-            buf.extend_from_slice(&[un(p & 0xff), un((p >> 8) & 0xff), un((p >> 16) & 0xff), a as u8]);
-        }
-        let path = std::path::Path::new(&dir).join(name);
-        unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let f: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).unwrap();
-            let stream = f.CreateStream().unwrap();
-            stream.InitializeFromFilename(&windows::core::HSTRING::from(path.as_os_str()), GENERIC_WRITE.0).unwrap();
-            let enc = f.CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null()).unwrap();
-            enc.Initialize(&stream, WICBitmapEncoderNoCache).unwrap();
-            let mut frame = None;
-            enc.CreateNewFrame(&mut frame, std::ptr::null_mut()).unwrap();
-            let frame = frame.unwrap();
-            frame.Initialize(None::<&IPropertyBag2>).unwrap();
-            frame.SetSize(w as u32, h as u32).unwrap();
-            let mut fmt = GUID_WICPixelFormat32bppBGRA;
-            frame.SetPixelFormat(&mut fmt).unwrap();
-            frame.WritePixels(h as u32, (w * 4) as u32, &buf).unwrap();
-            frame.Commit().unwrap();
-            enc.Commit().unwrap();
-        }
+        crate::png::save(&std::path::Path::new(&dir).join(name), w, h, px);
     }
 
     /// Desenha cada layout (e a tela cheia) com a música e a letra de exemplo:

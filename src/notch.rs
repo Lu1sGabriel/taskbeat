@@ -15,7 +15,7 @@
 
 use crate::config::{AccentSource, Config, NotchBg, ShuffleRepeat};
 use crate::render::*;
-use crate::shared::MediaInfo;
+use crate::shared::{Launcher, MediaInfo};
 use crate::text::*;
 use crate::ui::{self, Hit, Interact, Playback, Theme};
 
@@ -25,6 +25,11 @@ const OPEN_W: f32 = 460.0;
 const PEEK_W: f32 = 392.0;
 /// Largura do título no meio da ilha em telas sem notch.
 const CENTER_W: f32 = 190.0;
+/// Botão da letra (SF Symbol no Mac; glifo do Segoe nas capturas do Windows).
+const G_LYRICS: &str = if cfg!(target_os = "macos") { "quote.bubble" } else { "\u{E7F0}" };
+/// Linha de atalhos dos apps de música: lado de cada ícone e espaço entre eles (pontos).
+const LAUNCH_SLOT: f32 = 32.0;
+const LAUNCH_GAP: f32 = 4.0;
 
 /// Notch da tela, em pixels físicos. Largura 0 = tela sem notch.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +69,12 @@ pub struct NLayout {
     pub repeat: RectF,
     pub vol_btn: Option<RectF>,
     pub vol: Option<RectF>,
+    /// Botão que mostra/esconde a letra na tela (Mac).
+    pub lyrics: Option<RectF>,
+    /// Atalhos dos apps de música (embaixo do card) e onde vai o nome do que
+    /// está sob o mouse.
+    pub launch: Vec<RectF>,
+    pub launch_label: RectF,
     // ---- "A seguir"
     pub p_art: RectF,
     pub p_text: RectF,
@@ -147,10 +158,39 @@ impl NLayout {
         l
     }
 
+    /// Acrescenta o botão da letra na linha dos controles, à direita.
+    pub fn with_lyrics_button(mut self) -> Self {
+        let k = 32.0 * self.s;
+        let pad = 20.0 * self.s;
+        self.lyrics = Some(RectF::new((self.open.right() - pad - k + 4.0 * self.s).round(), (self.play.cy() - k / 2.0).round(), k, k));
+        self
+    }
+
+    /// Acrescenta a linha de atalhos para `n` apps de música embaixo do card.
+    pub fn with_launchers(mut self, n: usize) -> Self {
+        if n == 0 {
+            return self;
+        }
+        let s = self.s;
+        let (size, gap) = (LAUNCH_SLOT * s, LAUNCH_GAP * s);
+        let y = self.open.bottom() - 4.0 * s;
+        let x0 = self.open.x + 14.0 * s;
+        self.launch = (0..n).map(|i| RectF::new((x0 + i as f32 * (size + gap)).round(), y.round(), size, size)).collect();
+        let lx = x0 + n as f32 * (size + gap) + 6.0 * s;
+        self.launch_label = RectF::new(lx, y, (self.open.right() - 20.0 * s - lx).max(0.0), size);
+        let extra = (size + 8.0 * s).round();
+        self.open.h += extra;
+        self.h += extra;
+        self
+    }
+
     /// O que está sob o mouse. Com a ilha fechada, tudo nela é `Info` (abre).
     pub fn hit(&self, x: f32, y: f32, open: bool) -> Option<Hit> {
         if !open {
             return self.closed.inset(-2.0 * self.s).contains(x, y).then_some(Hit::Info);
+        }
+        if let Some(i) = self.launch.iter().position(|r| r.contains(x, y)) {
+            return Some(Hit::Launch(i as u8));
         }
         let all = [
             (Some(self.shuffle), Hit::Shuffle),
@@ -161,6 +201,7 @@ impl NLayout {
             (self.seek, Hit::Seek),
             (self.vol_btn, Hit::VolBtn),
             (self.vol, Hit::Vol),
+            (self.lyrics, Hit::Lyrics),
         ];
         if let Some(h) = all.iter().find(|(r, _)| r.is_some_and(|r| r.contains(x, y))).map(|(_, h)| *h) {
             return Some(h);
@@ -231,6 +272,8 @@ pub struct NotchFrame<'a> {
     pub hint: Option<(&'a str, f32)>,
     /// Troca de música: (música anterior, progresso 0..1).
     pub change: Option<(&'a MediaInfo, f32)>,
+    /// Apps de música da linha de atalhos (um por `NLayout::launch`).
+    pub launchers: &'a [Launcher],
 }
 
 pub fn draw(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame) {
@@ -483,6 +526,38 @@ fn draw_open(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame
         slider(cv, x0, x1, r.cy(), if f.pb.muted { 0.0 } else { v }, th, hot, s, a);
     }
 
+    // Letra na tela: o botão fica na cor de destaque com ela à mostra.
+    if let Some(b) = l.lyrics {
+        let b = b.offset(0.0, dy);
+        let on = cfg.lyrics.show;
+        if f.it.hover == Some(Hit::Lyrics) {
+            cv.fill_circle(b.cx(), b.cy(), b.w / 2.0 - 2.0 * s, th.fg, if f.it.pressed == Some(Hit::Lyrics) { 0.08 } else { 0.12 } * a);
+        }
+        ui::glyph(cv, tr, b, G_LYRICS, Font::IconSmall, if on { th.accent } else { th.fg }, if on { a } else { 0.8 * a });
+    }
+
+    // Atalhos dos apps de música, com o nome do que está sob o mouse.
+    let n = l.launch.len().min(f.launchers.len());
+    if n > 0 {
+        let y = (l.launch[0].y - 3.0 * s + dy).round();
+        cv.fill_rrect(l.open.x + 20.0 * s, y, l.open.right() - 20.0 * s, y + 1.0 * s, 0.5 * s, 0.10 * a, th.fg);
+        let mut label = None;
+        for (i, app) in f.launchers.iter().take(n).enumerate() {
+            let r = l.launch[i].offset(0.0, dy);
+            let h = Hit::Launch(i as u8);
+            if f.it.hover == Some(h) {
+                label = Some(app.name.as_str());
+                cv.fill_round(r.inset(2.0 * s), 8.0 * s, th.fg, if f.it.pressed == Some(h) { 0.08 } else { 0.12 } * a);
+            }
+            let k = if f.it.pressed == Some(h) && f.it.hover == Some(h) { 18.0 * s } else { 20.0 * s };
+            ui::launcher_icon(cv, tr, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), app, th, a);
+        }
+        if let Some(name) = label {
+            let r = l.launch_label.offset(0.0, dy);
+            ui::text(cv, tr, name, Font::Small, r.x, r.y, r.w, r.h, th.fg, 0.85 * a);
+        }
+    }
+
     // Aviso rápido (ex.: aleatório num player que não deixa).
     if let Some((msg, ha)) = f.hint {
         let ha = ha * a;
@@ -576,6 +651,7 @@ pub fn preview_sized(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, color
         peek_total: 5.0,
         hint: None,
         change: None,
+        launchers: &[],
     };
     let (sw, sh) = (l.w.ceil() as usize, l.h.ceil() as usize);
     let mut layer = vec![0u32; sw * sh];
@@ -660,6 +736,7 @@ mod tests {
             peek_total: 5.0,
             hint: None,
             change: None,
+            launchers: &[],
         };
         let (w, h) = (l.w.ceil() as usize, l.h.ceil() as usize);
         let mut px = vec![0u32; w * h];
@@ -756,6 +833,44 @@ mod tests {
             let cfg = Config { notch_bg: bg, ..Config::default().with_mac_defaults() };
             println!("card aberto inteiro ({bg:?}): {:.2} ms por quadro", ms(30, || drop(open_island_with(&mut tr, &cfg))));
         }
+    }
+
+    /// Card aberto com o botão da letra e a linha de atalhos (o mouse no segundo).
+    /// `cargo test notch_atalhos -- --ignored`
+    #[test]
+    #[ignore]
+    fn notch_atalhos() {
+        let mut tr = TextRenderer::new();
+        tr.set_scale(S);
+        let cfg = Config { lyrics: crate::lyrics::config::LyricsConfig { show: true, ..Default::default() }, ..Config::default().with_mac_defaults() };
+        let g = Geom { notch_w: 196.0 * S, notch_h: 32.0 * S };
+        let apps: Vec<Launcher> = ["Spotify", "Música", "Deezer", "TIDAL"].iter().map(|n| Launcher { name: n.to_string(), id: n.to_string(), icon: None }).collect();
+        let l = NLayout::build(S, g, &cfg, true).with_lyrics_button().with_launchers(apps.len());
+        assert!(l.lyrics.is_some_and(|b| b.x >= l.repeat.right()), "botão da letra por cima do repetir");
+        assert!(l.launch.iter().all(|r| r.bottom() <= l.open.bottom()), "atalhos fora do card");
+        let media = ui::sample_media();
+        let colors = Colors { palette: crate::config::Palette::Album, accent: [0.0, 0.48, 1.0], accent_light: [0.25, 0.6, 1.0], light_taskbar: false, album: media.art.as_ref().map(|a| a.vibrant) };
+        let f = NotchFrame {
+            cfg: &cfg,
+            colors: &colors,
+            media: &media,
+            theme: theme(&cfg, &colors, &media),
+            it: Interact { hover: Some(Hit::Launch(1)), ..Default::default() },
+            pb: Playback { playing: true, pos: media.pos, volume: 0.62, ..Default::default() },
+            time: 1.3,
+            viz: None,
+            open: 1.0,
+            peek: 0.0,
+            peek_t: 0.0,
+            peek_total: 5.0,
+            hint: None,
+            change: None,
+            launchers: &apps,
+        };
+        let (w, h) = (l.w.ceil() as usize, l.h.ceil() as usize);
+        let mut px = vec![0xff20_2020u32; w * h];
+        draw(&mut Canvas::new(w, h, &mut px), &mut tr, &l, &f);
+        crate::png::save(&out("notch-open-atalhos.png"), w, h, &px);
     }
 
     #[test]
