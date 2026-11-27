@@ -209,7 +209,7 @@ pub fn theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
         (AccentSource::Album, Some(a)) => readable(a.vibrant, true),
         _ => colors.accent_light,
     };
-    Theme { fg: [1.0; 3], accent, on_accent: on_color(accent), dark: true }
+    Theme { fg: [1.0; 3], accent, on_accent: on_color(accent), dark: true, style: crate::look::Style::of(cfg) }
 }
 
 pub struct NotchFrame<'a> {
@@ -261,6 +261,10 @@ pub fn draw(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame)
     if p > 0.01 {
         let (y0, y1) = (band, shape.bottom());
         let ramp = move |y: f32| ((y - y0) / (y1 - y0).max(1.0)).clamp(0.0, 1.0);
+        // Degradê escuro de quase 400 px em Retina (e a capa desfocada bem
+        // ampliada): com 8 bits por canal viravam faixas. O pontilhado no
+        // arredondamento as desfaz; texto, ícones e capa ficam exatos.
+        let dither = cv.set_dither(true);
         match (cfg.notch_bg, &m.art) {
             (NotchBg::Album, _) => {
                 let base = m.art.as_ref().map(|a| a.vibrant).unwrap_or(th.accent);
@@ -277,6 +281,7 @@ pub fn draw(cv: &mut Canvas, tr: &mut TextRenderer, l: &NLayout, f: &NotchFrame)
             }
             _ => {}
         }
+        cv.set_dither(dither);
         // Contorno sutil só embaixo e dos lados (separa do papel de parede escuro).
         let clip = cv.clip_rect();
         cv.set_clip(clip.intersect(RectF::new(shape.x - 2.0, band, shape.w + 4.0, shape.h)));
@@ -363,7 +368,7 @@ fn right_wing(cv: &mut Canvas, r: RectF, f: &NotchFrame, alpha: f32, s: f32) {
             let mut px = vec![0u32; (r.w.ceil() * r.h.ceil()) as usize];
             {
                 let mut layer = Canvas::new(r.w.ceil() as usize, r.h.ceil() as usize, &mut px);
-                crate::render::draw(&mut layer, RectF::new(0.0, 0.0, r.w, r.h), &Frame { style: f.cfg.style, values, peaks, show_peaks: f.cfg.show_peaks, colors: f.colors, scale: s });
+                crate::render::draw(&mut layer, RectF::new(0.0, 0.0, r.w, r.h), &Frame { style: f.cfg.style, values, peaks, show_peaks: f.cfg.show_peaks, colors: f.colors, scale: s, square: f.cfg.bar_shape == crate::config::BarShape::Square });
             }
             cv.composite(r.x.round() as i32, r.y.round() as i32, &px, r.w.ceil() as usize, r.h.ceil() as usize, alpha);
         }
@@ -581,12 +586,15 @@ pub fn preview_sized(tr: &mut TextRenderer, s: f32, g: Geom, cfg: &Config, color
     {
         let mut cv = Canvas::new(iw, ih, &mut px);
         let (fw, fh) = (iw as f32, ih as f32);
+        // Papel de parede: degradê grande, com pontilhado (sem faixas).
+        cv.set_dither(true);
         cv.fill_rrect_ca(0.0, 0.0, fw, fh, 0.0, |x, y| {
             let u = x / fw;
             let v = y / fh;
             let base = lerp3([0.16, 0.36, 0.78], [0.62, 0.30, 0.62], (u * 0.6 + v * 0.4).clamp(0.0, 1.0));
             (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.5) * 1.6).clamp(0.0, 1.0) * 0.6), 1.0)
         });
+        cv.set_dither(false);
         // Barra de menus (translúcida) com itens genéricos dos dois lados.
         let bar = l.band;
         cv.fill_rrect(0.0, 0.0, fw, bar, 0.0, 0.28, [0.0; 3]);
@@ -623,6 +631,131 @@ mod tests {
         let c = Colors { palette: crate::config::Palette::Album, accent: [0.0, 0.48, 1.0], accent_light: [0.25, 0.6, 1.0], light_taskbar: false, album: None };
         let (w, h, px) = preview(&mut tr, S, g, cfg, &c, media, open, peek, 1.3);
         crate::png::save(&out(name), w, h, &px);
+    }
+
+    /// Card aberto desenhado em 2x, sem a tela de mentira em volta.
+    fn open_island(cfg: &Config) -> (NLayout, Vec<u32>) {
+        let mut tr = TextRenderer::new();
+        tr.set_scale(S);
+        open_island_with(&mut tr, cfg)
+    }
+
+    fn open_island_with(tr: &mut TextRenderer, cfg: &Config) -> (NLayout, Vec<u32>) {
+        let g = Geom { notch_w: 196.0 * S, notch_h: 32.0 * S };
+        let l = NLayout::build(S, g, cfg, true);
+        let media = ui::sample_media();
+        let colors = Colors { palette: crate::config::Palette::Album, accent: [0.0, 0.48, 1.0], accent_light: [0.25, 0.6, 1.0], light_taskbar: false, album: media.art.as_ref().map(|a| a.vibrant) };
+        let f = NotchFrame {
+            cfg,
+            colors: &colors,
+            media: &media,
+            theme: theme(cfg, &colors, &media),
+            it: Interact::default(),
+            pb: Playback { playing: true, pos: media.pos, volume: 0.62, ..Default::default() },
+            time: 1.3,
+            viz: None,
+            open: 1.0,
+            peek: 0.0,
+            peek_t: 0.0,
+            peek_total: 5.0,
+            hint: None,
+            change: None,
+        };
+        let (w, h) = (l.w.ceil() as usize, l.h.ceil() as usize);
+        let mut px = vec![0u32; w * h];
+        draw(&mut Canvas::new(w, h, &mut px), tr, &l, &f);
+        (l, px)
+    }
+
+    /// Faixas no fundo do card, numa tira vazia na borda direita: (mediana e
+    /// máximo, entre as colunas, da maior sequência vertical de pixels iguais;
+    /// linhas da tira com um valor só). Um degradê em 8 bits sem pontilhado
+    /// anda em degraus: cada nível vira uma faixa lisa de vários pixels de
+    /// altura, e cada linha é uma cor só.
+    fn band_stats(l: &NLayout, px: &[u32]) -> (usize, usize, f32) {
+        let w = l.w.ceil() as usize;
+        let (x0, x1) = ((l.open.right() - 18.0 * S) as usize, (l.open.right() - 6.0 * S) as usize);
+        let (y0, y1) = ((l.band + 4.0 * S) as usize, (l.open.bottom() - 26.0 * S) as usize);
+        let rgb = |x: usize, y: usize| px[y * w + x] & 0x00ff_ffff;
+        let mut runs: Vec<usize> = (x0..x1)
+            .map(|x| {
+                let (mut run, mut best) = (1, 1);
+                for y in y0 + 1..y1 {
+                    run = if rgb(x, y) == rgb(x, y - 1) { run + 1 } else { 1 };
+                    best = best.max(run);
+                }
+                best
+            })
+            .collect();
+        runs.sort_unstable();
+        let flat_rows = (y0..y1).filter(|&y| (x0..x1).all(|x| rgb(x, y) == rgb(x0, y))).count();
+        (runs[runs.len() / 2], runs[runs.len() - 1], flat_rows as f32 / (y1 - y0) as f32)
+    }
+
+    #[test]
+    fn fundo_sem_faixas() {
+        let base = Config::default().with_mac_defaults();
+        for bg in [NotchBg::Album, NotchBg::Artwork] {
+            let cfg = Config { notch_bg: bg, show_visualizer: false, ..base.clone() };
+            let (l, px) = open_island(&cfg);
+            let (median, max, flat) = band_stats(&l, &px);
+            eprintln!("{bg:?}: sequência vertical igual: mediana {median}, máx. {max}; linhas lisas {:.0}%", flat * 100.0);
+            // Sem o pontilhado: 100% (álbum) e 82% (capa) das linhas lisas,
+            // sequência de até 24 px; com ele, 3% e 1%, até 7 px.
+            assert!(flat < 0.25, "{bg:?}: {:.0}% das linhas são de uma cor só (faixas)", flat * 100.0);
+            assert!(max <= 12, "{bg:?}: faixa de {max} px");
+        }
+    }
+
+    /// Custos do visual do Mac em 2x (rode em release):
+    /// `cargo test --release custo_visual_mac -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn custo_visual_mac() {
+        use std::time::Instant;
+        fn ms(n: usize, mut f: impl FnMut()) -> f64 {
+            f();
+            let t = Instant::now();
+            for _ in 0..n {
+                f();
+            }
+            t.elapsed().as_secs_f64() * 1000.0 / n as f64
+        }
+        // Pontilhado: o degradê do fundo do card aberto (920×364 px) e a capa
+        // desfocada ampliada nele, com e sem.
+        let (w, h) = (920usize, 364usize);
+        let mut px = vec![0xff00_0000u32; w * h];
+        let art = ui::sample_media().art.unwrap();
+        let blur = ui::blurred(&art);
+        // Alterna desligado/ligado várias vezes e fica com o menor tempo de
+        // cada (a máquina tem outros processos).
+        let mut best = [[f64::MAX; 2]; 2];
+        for _ in 0..8 {
+            for on in [false, true] {
+                let grad = ms(10, || {
+                    let mut cv = Canvas::new(w, h, &mut px);
+                    cv.set_dither(on);
+                    cv.fill_rrect_ca(0.0, 0.0, w as f32, h as f32, 44.0, |_, y| ([0.4, 0.2, 0.5], 0.85 * (y / h as f32).powf(0.8)));
+                });
+                let img = ms(10, || {
+                    let mut cv = Canvas::new(w, h, &mut px);
+                    cv.set_dither(on);
+                    cv.draw_image_cover(RectF::new(0.0, 0.0, w as f32, h as f32), &blur, 44.0, 0.9);
+                });
+                let b = &mut best[on as usize];
+                (b[0], b[1]) = (b[0].min(grad), b[1].min(img));
+            }
+        }
+        for on in [false, true] {
+            let [grad, img] = best[on as usize];
+            println!("pontilhado {}: degradê {grad:.2} ms, capa desfocada ampliada {img:.2} ms", if on { "ligado   " } else { "desligado" });
+        }
+        let mut tr = TextRenderer::new();
+        tr.set_scale(S);
+        for bg in [NotchBg::Album, NotchBg::Artwork] {
+            let cfg = Config { notch_bg: bg, ..Config::default().with_mac_defaults() };
+            println!("card aberto inteiro ({bg:?}): {:.2} ms por quadro", ms(30, || drop(open_island_with(&mut tr, &cfg))));
+        }
     }
 
     #[test]

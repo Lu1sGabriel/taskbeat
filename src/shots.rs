@@ -185,7 +185,7 @@ fn shots() {
         let l = CLayout::build(S, &cfg, true);
         let (w, h) = (l.w, l.h);
         let bg = render(w, h, |cv| busy_wallpaper(cv, RectF::new(0.0, 0.0, w, h), 14.0 * S));
-        let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::GLASS_BLUR * S);
+        let backdrop = acrylic_backdrop(&bg.2, bg.0, bg.1, l.card, ui::glass_blur_px(&cfg, S));
         let card = render(w, h, |cv| {
             let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: Some(&backdrop), hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
             ui::draw_card(cv, &mut tr, &l, &f);
@@ -741,4 +741,336 @@ fn card_launchers() {
         }
     });
     save_png("widget-launchers.png", img.0, img.1, &img.2);
+}
+
+/// O widget em barras finas (Windows 10 com botões pequenos: 30 px; padrão do
+/// Windows 10: 40 px; Windows 11: 48 px), com título longo, aleatório e
+/// repetir, para conferir que tudo cabe na pílula. Grava `widget-thin-bars.png`.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test thin_bars -- --ignored`
+#[test]
+#[ignore]
+fn thin_bars() {
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let mut media = ui::sample_media();
+    media.title = "JOTAPE responde ORIGINAL — ao vivo no estúdio".into();
+    media.artist = "Charles Santos".into();
+    let pb = playback(&media);
+    let cfgs = [
+        Config { taskbar_shuffle_repeat: true, ..Config::default() },
+        Config { taskbar_shuffle_repeat: true, widget_shape: WidgetShape::Pill, widget_tint: WidgetTint::Gradient, ..Config::default() },
+    ];
+    let mut rows = Vec::new();
+    for bar in [30, 40, 48] {
+        let wh = crate::taskbar::widget_height(bar, 1.0) as f32 * S;
+        for cfg in &cfgs {
+            let c = colors(cfg, &media);
+            let l = WLayout::build(S, wh, cfg, true, false);
+            let layer = render(l.width, wh, |cv| {
+                let f = WidgetFrame { cfg, media: &media, theme: ui::widget_theme(cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
+                ui::draw_widget(cv, &mut tr, &l, &f);
+            });
+            rows.push((bar as f32 * S, layer));
+        }
+    }
+    let iw = rows.iter().map(|r| r.1.0).max().unwrap() as f32 + 24.0 * S;
+    let ih: f32 = rows.iter().map(|r| r.0 + 8.0 * S).sum::<f32>() + 8.0 * S;
+    let img = render(iw, ih, |cv| {
+        let mut y = 8.0 * S;
+        for (bh, layer) in rows {
+            cv.fill_rrect(0.0, y, iw, y + bh, 0.0, 1.0, [0.13, 0.13, 0.14]);
+            let lh = layer.1 as f32;
+            blit(cv, 12.0 * S, y + ((bh - lh) / 2.0).round(), layer);
+            y += bh + 8.0 * S;
+        }
+    });
+    save_png("widget-thin-bars.png", img.0, img.1, &img.2);
+}
+
+/// Card e widget para as imagens da Chrome Web Store (aleatório ligado e
+/// repetir "tudo", como a extensão mostra). Fundo transparente; a montagem
+/// fica em `extension/store/images` (ver `extension/store/PUBLICAR.md`).
+/// `$env:TASKBEAT_SHOTS_DIR="…"; cargo test --release store_parts -- --ignored`
+#[test]
+#[ignore]
+fn store_parts() {
+    let cfg = Config { taskbar_shuffle_repeat: true, ..Config::default() };
+    let media = MediaInfo { shuffle: true, repeat: 2, ..ui::sample_media() };
+    let pb = Playback { shuffle: true, repeat: 2, ..playback(&media) };
+    let mut tr = TextRenderer::new();
+    tr.set_scale(S);
+    let c = colors(&cfg, &media);
+    let cl = CLayout::build(S, &cfg, true);
+    let card = render(cl.w, cl.h, |cv| {
+        let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: S, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
+        ui::draw_card(cv, &mut tr, &cl, &f);
+    });
+    save_png("store-card.png", card.0, card.1, &card.2);
+    let wh = 40.0 * S;
+    let wl = WLayout::build(S, wh, &cfg, true, false);
+    let widget = render(wl.width, wh, |cv| {
+        let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact::default(), pb, time: 1.0, viz: None, flyout_open: false, s: S, change: None, launchers: &[] };
+        ui::draw_widget(cv, &mut tr, &wl, &f);
+    });
+    save_png("store-widget.png", widget.0, widget.1, &widget.2);
+}
+
+/// Verificação ao vivo da animação de abrir e fechar do card, no app que está
+/// rodando: clica no widget por mensagem (o mouse não mexe), grava a tela em
+/// volta dele enquanto o card abre, fica aberto e fecha, e monta um GIF (na
+/// velocidade real e 3x mais lento) e alguns quadros soltos. Não faz nada com
+/// uma janela em tela cheia (jogo, vídeo) em primeiro plano.
+///
+/// ```powershell
+/// $env:TASKBEAT_SHOTS_DIR="..."; $env:TASKBEAT_LIVE_NAME="slide"; cargo test --release live_card -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn live_card() {
+    use std::time::{Duration, Instant};
+    use windows::Win32::Foundation::{LPARAM, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{BitBlt, GdiFlush, GetDC, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC, SRCCOPY};
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    use windows::core::{PCWSTR, w};
+    let name = std::env::var("TASKBEAT_LIVE_NAME").unwrap_or_else(|_| "card".into());
+    unsafe {
+        // Jogo ou vídeo em tela cheia em primeiro plano: não abre o card.
+        let fg = GetForegroundWindow();
+        let mut fr = RECT::default();
+        let _ = GetWindowRect(fg, &mut fr);
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let _ = GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mut mi);
+        let m = mi.rcMonitor;
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(fg, &mut class);
+        let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
+        let shell = matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd");
+        let full = fr.left <= m.left && fr.top <= m.top && fr.right >= m.right && fr.bottom >= m.bottom;
+        assert!(!full || shell, "janela em tela cheia em primeiro plano ({class}): não abre o card");
+
+        let widget = FindWindowW(w!("TaskbeatWidget"), PCWSTR::null()).expect("o Taskbeat não está rodando");
+        let mut wr = RECT::default();
+        let _ = GetWindowRect(widget, &mut wr);
+        let sc = GetDpiForWindow(widget) as f32 / 96.0;
+        let bar_below = wr.top > (m.top + m.bottom) / 2;
+        // Área: o card inteiro (acima do widget, ou abaixo com a barra no topo) e a barra.
+        let k = |v: f32| (v * sc).round() as i32;
+        let mut x0 = wr.left - k(60.0);
+        let x1 = (x0 + k(500.0)).min(m.right);
+        x0 = x0.min(x1 - k(500.0)).max(m.left);
+        let (y0, y1) = if bar_below { ((wr.top - k(330.0)).max(m.top), (wr.bottom + k(4.0)).min(m.bottom)) } else { ((wr.top - k(4.0)).max(m.top), (wr.bottom + k(330.0)).min(m.bottom)) };
+        let (cw, ch) = (x1 - x0, y1 - y0);
+        println!("widget {:?} escala {sc} área {cw}x{ch} em ({x0}, {y0})", (wr.left, wr.top, wr.right, wr.bottom));
+
+        // Clique no meio da capa do widget (canto esquerdo), por mensagem.
+        let h = wr.bottom - wr.top;
+        let lp = LPARAM(((h / 2) << 16 | (h / 2)) as isize);
+        let click = || {
+            let _ = PostMessageW(Some(widget), WM_LBUTTONDOWN, WPARAM(1), lp);
+            let _ = PostMessageW(Some(widget), WM_LBUTTONUP, WPARAM(0), lp);
+        };
+        let surf = crate::overlay::Surface::new(cw, ch).unwrap();
+        let screen = GetDC(None);
+        let mut frames: Vec<(f32, Vec<u32>)> = Vec::new();
+        let t0 = Instant::now();
+        let (t_open, t_close, t_end) = (0.15, 1.3, 2.0);
+        let (mut opened, mut closed) = (false, false);
+        let mut next = 0.0f32;
+        while t0.elapsed().as_secs_f32() < t_end {
+            let t = t0.elapsed().as_secs_f32();
+            if !opened && t >= t_open {
+                click();
+                opened = true;
+            }
+            if !closed && t >= t_close {
+                click();
+                closed = true;
+            }
+            if t >= next {
+                let _ = BitBlt(surf.dc, 0, 0, cw, ch, Some(screen), x0, y0, SRCCOPY);
+                let _ = GdiFlush();
+                frames.push((t, surf.pixels().iter().map(|p| p | 0xFF00_0000).collect()));
+                next = t + 0.008;
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        ReleaseDC(None, screen);
+        println!("{} quadros gravados em {:.2} s", frames.len(), t0.elapsed().as_secs_f32());
+
+        // Quadros a cada 20 ms (o mais perto de cada instante).
+        let at = |t: f32| &frames.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).unwrap().1;
+        let picked: Vec<&Vec<u32>> = (0..(t_end / 0.02) as usize).map(|i| at(i as f32 * 0.02)).collect();
+        let dir = std::env::var_os("TASKBEAT_SHOTS_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("taskbeat-live"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let samples: Vec<&[u32]> = picked.iter().step_by(6).map(|v| v.as_slice()).collect();
+        for (suffix, delay) in [("", 2u16), ("-lento", 6)] {
+            let mut gif = crate::demo_gif::Gif::new(cw as usize, ch as usize, &samples);
+            for f in &picked {
+                gif.frame(f, delay);
+            }
+            let path = dir.join(format!("ao-vivo-{name}{suffix}.gif"));
+            std::fs::write(&path, gif.finish()).unwrap();
+            println!("{}", path.display());
+        }
+        for dt in [0.03f32, 0.08, 0.14, 0.22, 0.4] {
+            crate::png::save(&dir.join(format!("ao-vivo-{name}-abrindo-{:03}ms.png", (dt * 1000.0) as u32)), cw as usize, ch as usize, at(t_open + dt));
+        }
+        for dt in [0.03f32, 0.08, 0.14, 0.3] {
+            crate::png::save(&dir.join(format!("ao-vivo-{name}-fechando-{:03}ms.png", (dt * 1000.0) as u32)), cw as usize, ch as usize, at(t_close + dt));
+        }
+    }
+}
+
+/// Verificação ao vivo do bloco "Animação" nas configurações abertas: vai
+/// para a aba do card, rola até o fim, põe o mouse (por mensagem) sobre a
+/// miniatura e grava um GIF dela tocando. As contas de posição seguem o
+/// layout de `settings.rs` (linhas de 66 px no fim da página).
+#[test]
+#[ignore]
+fn live_settings() {
+    use std::time::{Duration, Instant};
+    use windows::Win32::Foundation::{LPARAM, POINT, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{BitBlt, ClientToScreen, GdiFlush, GetDC, ReleaseDC, SRCCOPY};
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    use windows::core::{PCWSTR, w};
+    unsafe {
+        let win = FindWindowW(w!("TaskbeatSettings"), PCWSTR::null()).expect("abra as configurações antes");
+        let s = GetDpiForWindow(win) as f32 / 96.0;
+        let mut cr = RECT::default();
+        let _ = GetClientRect(win, &mut cr);
+        let (w, h) = (cr.right as f32, cr.bottom as f32);
+        let lp = |x: f32, y: f32| LPARAM((((y as i32) << 16) | (x as i32 & 0xffff)) as isize);
+        // Aba "Card expandido" (segunda do menu lateral).
+        let nav = lp(100.0 * s, (92.0 + 42.0 + 19.0) * s);
+        let _ = PostMessageW(Some(win), WM_MOUSEMOVE, WPARAM(0), nav);
+        let _ = PostMessageW(Some(win), WM_LBUTTONDOWN, WPARAM(1), nav);
+        let _ = PostMessageW(Some(win), WM_LBUTTONUP, WPARAM(0), nav);
+        std::thread::sleep(Duration::from_millis(700));
+        // Rola até o fim (a roda chega em coordenadas de tela).
+        let mut c = POINT { x: (w * 0.6) as i32, y: (h * 0.7) as i32 };
+        let _ = ClientToScreen(win, &mut c);
+        for _ in 0..40 {
+            let _ = PostMessageW(Some(win), WM_MOUSEWHEEL, WPARAM(((-120i32 as u32 as usize) & 0xffff) << 16), LPARAM((((c.y) << 16) | (c.x & 0xffff)) as isize));
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        std::thread::sleep(Duration::from_millis(900));
+        // Miniatura: à esquerda da lista, na penúltima linha.
+        let tile = (w - 426.0 * s + 56.0 * s, h - 131.0 * s);
+        let _ = PostMessageW(Some(win), WM_MOUSEMOVE, WPARAM(0), lp(tile.0, tile.1));
+        // Grava a área das duas linhas do bloco.
+        let (x0, y0) = ((268.0 * s) as i32, (h - 215.0 * s) as i32);
+        let (cw, ch) = (w as i32 - x0, h as i32 - y0);
+        let mut o = POINT { x: x0, y: y0 };
+        let _ = ClientToScreen(win, &mut o);
+        let surf = crate::overlay::Surface::new(cw, ch).unwrap();
+        let screen = GetDC(None);
+        let t0 = Instant::now();
+        let mut frames = Vec::new();
+        while t0.elapsed().as_secs_f32() < 2.6 {
+            let _ = PostMessageW(Some(win), WM_MOUSEMOVE, WPARAM(0), lp(tile.0, tile.1));
+            let _ = BitBlt(surf.dc, 0, 0, cw, ch, Some(screen), o.x, o.y, SRCCOPY);
+            let _ = GdiFlush();
+            frames.push(surf.pixels().iter().map(|p| p | 0xFF00_0000).collect::<Vec<u32>>());
+            std::thread::sleep(Duration::from_millis(18));
+        }
+        ReleaseDC(None, screen);
+        let dir = std::env::var_os("TASKBEAT_SHOTS_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("taskbeat-live"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let samples: Vec<&[u32]> = frames.iter().step_by(8).map(|v| v.as_slice()).collect();
+        let mut gif = crate::demo_gif::Gif::new(cw as usize, ch as usize, &samples);
+        for f in &frames {
+            gif.frame(f, 2);
+        }
+        let path = dir.join("ao-vivo-configuracoes.gif");
+        std::fs::write(&path, gif.finish()).unwrap();
+        crate::png::save(&dir.join("ao-vivo-configuracoes.png"), cw as usize, ch as usize, &frames[frames.len() / 2]);
+        println!("{} ({} quadros)", path.display(), frames.len());
+    }
+}
+
+/// As peças do app nos três visuais (colunas Palco, Estúdio, Ilha; cantos
+/// "Menos"): widget na barra, card, "A seguir", aviso de teclas e letra.
+/// `$env:TASKBEAT_SHOTS_DIR="..."; cargo test looks_sheet -- --ignored`
+#[test]
+#[ignore]
+fn looks_sheet() {
+    use crate::lyrics::config::{Background, Layout, LyricsConfig};
+    const SC: f32 = 1.5;
+    let media = ui::sample_media();
+    let pb = playback(&media);
+    let mut tr = TextRenderer::new();
+    tr.set_scale(SC);
+    let looks = [Look::Palco, Look::Estudio, Look::Ilha];
+    let col_w = 560.0 * SC;
+    let row_h = [70.0 * SC, 270.0 * SC, 120.0 * SC, 120.0 * SC, 330.0 * SC];
+    let (iw, ih) = (col_w * 3.0, 44.0 * SC + row_h.iter().sum::<f32>());
+    let mut layers: Vec<(f32, f32, (usize, usize, Vec<u32>))> = Vec::new();
+    let lrc = "[00:02.00]As luzes da cidade acendem devagar\n[00:04.40]E o rádio toca a nossa canção\n[00:06.80]Corre comigo até o sol nascer\n[00:09.20]Ninguém vai dormir esta noite";
+    let lines = crate::lyrics::with_gaps(&crate::lyrics::parse_lrc(lrc));
+    let lyr = crate::lyrics::Lyrics::Synced(crate::lyrics::parse_lrc(lrc));
+    for (k, look) in looks.into_iter().enumerate() {
+        let cfg = Config { look, corners: Corners::Small, ..Config::default() };
+        let c = colors(&cfg, &media);
+        let x0 = k as f32 * col_w + 20.0 * SC;
+        let mut y = 44.0 * SC;
+        // Widget na barra.
+        let wl = WLayout::build(SC, 40.0 * SC, &cfg, true, false);
+        let widget = render(wl.width, 40.0 * SC, |cv| {
+            let f = WidgetFrame { cfg: &cfg, media: &media, theme: ui::widget_theme(&cfg, &c, &media), colors: &c, it: Interact { hover: Some(ui::Hit::Next), ..Default::default() }, pb, time: 1.0, viz: None, flyout_open: false, s: SC, change: None, launchers: &[] };
+            ui::draw_widget(cv, &mut tr, &wl, &f);
+        });
+        layers.push((x0, y + 15.0 * SC, widget));
+        y += row_h[0];
+        // Card.
+        let cl = CLayout::build(SC, &cfg, true);
+        let card = render(cl.w, cl.h, |cv| {
+            let f = CardFrame { cfg: &cfg, colors: &c, media: &media, theme: ui::card_theme(&cfg, &c, &media), it: Interact::default(), pb, s: SC, backdrop: None, hint: None, launchers: &[], viz: Some(VIZ), mixer: None };
+            ui::draw_card(cv, &mut tr, &cl, &f);
+        });
+        layers.push((x0 - ui::SHADOW_MARGIN * SC, y - 10.0 * SC, card));
+        y += row_h[1];
+        // Aviso de teclas (sólido, para ver o acabamento).
+        let ocfg = Config { osd_material: OsdMaterial::Solid, osd_theme: ThemeMode::Dark, ..cfg.clone() };
+        let (ow, oh) = ui::osd_size(SC, &ocfg);
+        let osd = render(ow, oh, |cv| {
+            let oc = colors(&ocfg, &MediaInfo::default());
+            let th = ui::osd_theme(&ocfg, &oc);
+            ui::draw_osd(cv, &mut tr, &ocfg, &oc, &th, SC, "Caps Lock", false, true, 1.0, None);
+        });
+        layers.push((x0 - ui::SHADOW_MARGIN * SC, y - 14.0 * SC, osd));
+        y += row_h[2];
+        // "A seguir".
+        let (uw, uh) = ui::upnext_size(SC);
+        let up = render(uw, uh, |cv| {
+            let th = ui::card_theme(&cfg, &c, &media);
+            ui::draw_upnext(cv, &mut tr, &cfg, &c, &media, &th, SC, 2.5, cfg.popup_secs as f32 + 0.5, None);
+        });
+        layers.push((x0 - 20.0 * SC, y - 18.0 * SC, up));
+        y += row_h[3];
+        // Letra (compacta).
+        let lc = LyricsConfig { layout: Layout::Compact, background: Background::Artwork, ..Default::default() };
+        let cc = crate::lyrics_view::card_config(&cfg, &lc);
+        let frame = crate::lyrics_view::LyricFrame { lyrics: &lyr, lines: &lines, focus: 2.0, scroll: 0.0 };
+        let g = crate::lyrics_view::geometry(&lc, &cc, SC, (0.0, 0.0), None);
+        let lyr_img = render(g.w, g.h, |cv| {
+            let v = crate::lyrics_view::View { card_cfg: &cc, lc: &lc, colors: &c, media: &media, pb, it: Interact::default(), hover: None, tools: 1.0, bg_time: None, hires: None, change: None, mixer: None, lyr_alpha: 1.0, tip: None, toast: None, frame, s: SC };
+            crate::lyrics_view::draw(cv, &mut tr, &g, &v);
+        });
+        layers.push((x0 - ui::SHADOW_MARGIN * SC, y - 10.0 * SC, lyr_img));
+    }
+    let img = render(iw, ih, |cv| {
+        busy_wallpaper(cv, RectF::new(0.0, 0.0, iw, ih), 0.0);
+        for (k, name) in ["Palco", "Estúdio", "Ilha"].iter().enumerate() {
+            ui::text(cv, &mut tr, name, Font::Display, k as f32 * col_w + 24.0 * SC, 10.0 * SC, 300.0 * SC, 28.0 * SC, [1.0; 3], 1.0);
+        }
+        // Barra de tarefas atrás dos widgets.
+        cv.fill_rrect(0.0, 44.0 * SC + 11.0 * SC, iw, 44.0 * SC + 11.0 * SC + 48.0 * SC, 0.0, 0.96, [0.11, 0.11, 0.12]);
+        for (x, y, l) in layers {
+            blit(cv, x, y, l);
+        }
+    });
+    save_png("visuais.png", img.0, img.1, &img.2);
 }

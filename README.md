@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-Setup-1.3.0.exe"><b>⬇ Baixar para Windows 10/11</b></a>
+  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-Setup-1.4.0.exe"><b>⬇ Baixar para Windows 10/11</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-1.3.0.dmg"><b>⬇ Baixar para macOS 12+</b></a>
+  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-1.4.0.dmg"><b>⬇ Baixar para macOS 12+</b></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.3.0">Novidades da 1.3.0</a>
+  <a href="https://github.com/Lu1sGabriel/taskbeat/releases/tag/v1.4.0">Novidades da 1.4.0</a>
 </p>
 
 <p align="center">
@@ -39,10 +39,20 @@ parado, praticamente não gasta CPU.
   bolinha mostra quando estão ligados) e mini barras que dançam com o som.
 - **Mixer de volume** (Windows): o volume de cada app, como no Mixer do Windows, e
   a troca da saída de áudio (fone, caixa de som…) com um clique.
+- **Letra na tela** (Windows): a letra sincronizada e o player numa janela sempre
+  por cima, como as sobreposições do Discord e da Steam. Arraste para um canto (ela
+  gruda nos lugares prontos), trave, mude o tamanho com Ctrl+roda, abra em tela
+  cheia com o fundo da capa em movimento. Liga e desliga pelo botão de legenda no
+  card, pelo menu da bandeja, no topo da página Letras das configurações ou com
+  Win+Alt+L.
 - **"A seguir"**: um cartão com a próxima música quando o player troca sozinho.
 - **Aviso de Caps Lock e Num Lock** bonito, no lugar do nada.
 - **YouTube Music no navegador**: aleatório e repetir funcionam, mesmo o
-  navegador não contando isso ao Windows.
+  navegador não contando isso ao Windows; com a [extensão](extension/README.md)
+  opcional (que já vem com o app e chega em breve à Chrome Web Store), eles e a
+  capa em alta resolução vêm da própria página.
+- **Visual do app**: Palco, Estúdio ou Ilha, com o nível de arredondamento dos
+  cantos, valendo para o widget, o card, o aviso, a letra e as configurações.
 - **Atalhos** para abrir seus apps de música.
 - **Do seu jeito**: cores, formatos, tamanhos e posição, com prévia ao vivo.
 - **Em português, inglês, espanhol e alemão.**
@@ -97,16 +107,29 @@ card. Sem notch, fica no meio da barra de menus.
 
 ### Windows 10 ou 11
 
-1. Baixe o **[Taskbeat-Setup-1.3.0.exe](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-Setup-1.3.0.exe)**.
+1. Baixe o **[Taskbeat-Setup-1.4.0.exe](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-Setup-1.4.0.exe)**.
 2. Abra o arquivo. Como o app ainda não tem assinatura digital, o Windows pode
    mostrar **"O Windows protegeu o computador"**: clique em **Mais informações** →
    **Executar assim mesmo**.
 3. Clique em **Instalar** (ou **Atualizar**, se já tiver uma versão). Não precisa
    de administrador.
 
+**Opcional, YouTube Music no navegador:** a [extensão do Taskbeat](extension/README.md)
+(Chrome, Brave, Edge) lê o aleatório, o repetir e a capa em alta resolução da
+própria página do YouTube Music.
+
+> **A extensão chega em breve à Chrome Web Store.** Até lá, ela já vem com o
+> Taskbeat: o instalador grava a pasta `extension` junto do app
+> (`%LOCALAPPDATA%\Programs\Taskbeat\extension`, na pasta padrão), e o botão
+> **Configurações › Apps de música › Extensão do navegador › Instalar extensão**
+> abre essa pasta e o passo a passo. No navegador: `brave://extensions` (ou
+> `chrome://extensions`, `edge://extensions`) → **Modo do desenvolvedor** →
+> **Carregar sem compactação** → escolha a pasta. A mesma pasta também sai em
+> `.zip` em cada release.
+
 ### macOS 12 ou mais novo
 
-1. Baixe o **[Taskbeat-1.3.0.dmg](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.3.0/Taskbeat-1.3.0.dmg)**,
+1. Baixe o **[Taskbeat-1.4.0.dmg](https://github.com/Lu1sGabriel/taskbeat/releases/download/v1.4.0/Taskbeat-1.4.0.dmg)**,
    abra e arraste o **Taskbeat** para **Aplicativos**.
 2. Na primeira vez o macOS bloqueia (o app ainda não é notarizado pela Apple).
    Clique em **Concluído**, abra **Ajustes do Sistema → Privacidade e Segurança**
@@ -115,8 +138,43 @@ card. Sem notch, fica no meio da barra de menus.
 3. O macOS pede para gravar o áudio do sistema (para as barras) e, com o Spotify,
    para automatizá-lo (aleatório e repetir). Nada é gravado nem guardado.
 
+### Linux (em teste)
+
+Ainda sem versão publicada: o `.deb` (Ubuntu, Debian, Mint, Pop!_OS) e o AppImage
+(qualquer distro) saem do `build-linux.sh`. O widget é a mesma ilha do Mac, no
+topo da tela:
+
+- **KDE Plasma 6, Sway, Hyprland, COSMIC, niri**: fica sobre as janelas
+  (layer-shell do Wayland), nítido em qualquer escala.
+- **GNOME** (Ubuntu, Fedora), **XFCE, Cinnamon, MATE**: janela X11 (no GNOME,
+  pelo XWayland), logo abaixo da barra de cima.
+- Ícone na bandeja com o menu onde houver bandeja (no Ubuntu ela vem ligada; no
+  Fedora com GNOME, abrir o app de novo abre as configurações).
+
+Funciona com qualquer player que publique no **MPRIS** (Spotify, VLC, Rhythmbox,
+Elisa, os navegadores…). Aleatório e repetir aparecem nos players que os
+publicam. As configurações, por enquanto, ficam em `~/.config/taskbeat/config.toml`
+(o menu **Configurações…** abre o arquivo, e o app relê ao salvar).
+
 Para remover: no Windows, **Configurações → Apps → Taskbeat → Desinstalar**; no
-Mac, arraste o app para o Lixo.
+Mac, arraste o app para o Lixo; no Linux, `sudo apt remove taskbeat` (ou apague o
+AppImage).
+
+### Atualizações
+
+Ao abrir e uma vez por dia, o Taskbeat procura uma versão nova nas releases do
+GitHub. No Windows, um aviso perto do relógio oferece **Atualizar agora**,
+**Depois** ou **Pular esta versão**; atualizar troca o app e o reabre em um
+segundo, sem perder as configurações. Em **Configurações → Geral →
+Atualizações** dá para desligar a procura, instalar sozinho sem perguntar ou
+receber as versões de teste. No Mac, por enquanto, o aviso abre a página da
+versão nova.
+
+O app só instala uma versão **assinada pela chave do projeto** (ECDSA P-256,
+conferida pela criptografia do próprio Windows). A chave privada não fica no
+GitHub: mesmo com a conta invadida, ninguém consegue empurrar um executável
+falso. A consulta mostra o seu IP ao GitHub, como abrir qualquer site; nada
+mais é enviado.
 
 ## Por que Rust
 
@@ -142,6 +200,14 @@ Sem entrar em detalhes, o Taskbeat conversa direto com o sistema:
   aparece em **janelas em camadas** transparentes, coladas na barra de tarefas.
 - **Mac**: a música vem do **Tocando Agora** (MediaRemote), as barras do
   **Core Audio**, e a ilha e as configurações são janelas do **AppKit**.
+- **Linux**: a música vem do **MPRIS** (D-Bus), as barras e o volume do
+  **PulseAudio/PipeWire** (só o som do player, quando dá para achar), o texto do
+  **FreeType + HarfBuzz**, e a ilha é uma superfície **Wayland (layer-shell)** ou
+  uma janela **X11**.
+- **Letras**: vêm do [LRCLIB](https://lrclib.net), um banco de letras aberto e
+  gratuito. Só o título, o artista, o álbum e a duração da música saem do PC (dá
+  para desligar a busca), e a letra fica guardada no disco. Letras próprias
+  (`Artista - Música.lrc`) numa pasta valem mais que a busca.
 - **Só trabalha quando precisa**: não redesenha o que não mudou, segue o ritmo do
   monitor nas animações e só capta o som quando as barras estão à vista.
 
@@ -155,24 +221,33 @@ Medido num Windows com i5-10400F:
 
 ## Próximos passos
 
-- **Linux**: o widget no painel do GNOME e do KDE, com a música pelo MPRIS e o
-  som pelo PipeWire.
+- **Linux**: tela de configurações própria, com prévia ao vivo; uma extensão do
+  GNOME e um widget do Plasma para morar dentro do painel.
 - **Assinatura de código**: o pedido na SignPath Foundation está em análise; com
   ela, o aviso do Windows na instalação some.
 - **Mixer de volume no Mac**, se o macOS deixar controlar o volume por app.
 - **Mais players do navegador** com aleatório e repetir (como já funciona com o
   YouTube Music).
-- **Letra da música** no card.
+- **Letra no Mac e no Linux**: a busca, a leitura do LRC e a sincronia já são do
+  código comum; falta a janela de cada sistema.
 
 ## Para desenvolvedores
 
 ```powershell
 cargo build --release      # Windows: target\release\taskbeat.exe
-.\build-installer.ps1      # Windows: dist\Taskbeat-Setup-<versão>.exe
+.\build-installer.ps1      # Windows: dist\Taskbeat-Setup-<versão>.exe, o .sig e o .zip da extensão
 ```
+
+Cada release do Windows publica o `.exe` **e** o `.sig`. O `build-installer.ps1`
+assina com a chave privada de `%USERPROFILE%\.taskbeat-keys` (gerada uma vez
+com `.\tools\new-update-key.ps1`, que grava a chave pública em
+`assets\update-public-key.txt`); sem `.sig` válido, o app não instala a versão
+sozinho. `.\tools\update-e2e.ps1` testa a atualização de ponta a ponta com uma
+release falsa em `127.0.0.1`.
 
 ```bash
 ./build-macos.sh           # Mac: dist/Taskbeat.app e dist/Taskbeat-<versão>.dmg
+./build-linux.sh           # Linux: dist/taskbeat_<versão>_amd64.deb e dist/Taskbeat-<versão>-x86_64.AppImage
 ```
 
 ## Licença

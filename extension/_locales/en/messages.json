@@ -1,0 +1,10 @@
+{
+  "name": {
+    "message": "Taskbeat",
+    "description": "Nome da extensão"
+  },
+  "description": {
+    "message": "Shows and controls YouTube Music shuffle and repeat in Taskbeat, the music widget for the Windows taskbar.",
+    "description": "Descrição curta (até 132 caracteres)"
+  }
+}

@@ -1,0 +1,56 @@
+name: Windows
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    defaults:
+      run:
+        # bash para cada comando que falhar parar o passo (o pwsh do Actions
+        # só olha o código de saída do último).
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: |
+          rustup update stable
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Testes
+        run: cargo test --release
+
+      - name: Capturas e GIFs desenhados pelo código (DirectWrite)
+        env:
+          TASKBEAT_SHOTS_DIR: ${{ github.workspace }}/shots
+          TASKBEAT_LANG: pt
+        run: |
+          cargo test --release shots::shots -- --ignored --exact
+          cargo test --release shots::readme_mixer -- --ignored --exact
+          cargo test --release shots::widget_tints -- --ignored --exact
+          cargo test --release demo_gif::demo_gif -- --ignored --exact
+          cargo test --release lyrics_view::tests::lyrics_view_shots -- --ignored --exact
+
+      - name: Instalador e extensão (sem assinatura)
+        shell: pwsh
+        run: ./build-installer.ps1 -NoSign
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Taskbeat-Windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-shots
+          path: shots/

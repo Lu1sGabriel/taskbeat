@@ -9,7 +9,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-PLATFORMS = {"Windows": "x86_64-pc-windows-msvc", "Mac": "aarch64-apple-darwin"}
+PLATFORMS = {"Windows": "x86_64-pc-windows-msvc", "Mac": "aarch64-apple-darwin", "Linux": "x86_64-unknown-linux-gnu"}
 
 
 def walk(platform):
@@ -87,9 +87,14 @@ out.append("|---|---|---|---|---|---|")
 for p in rows:
     kind = "app" if p["id"] in in_app else "build"
     repo = p.get("repository") or ""
-    systems = " e ".join(where.get(p["id"], []))
+    ws = where.get(p["id"], [])
+    systems = ", ".join(ws[:-1]) + " e " + ws[-1] if len(ws) > 1 else "".join(ws)
     out.append(f"| {p['name']} | {p['version']} | {p.get('license') or '—'} | {kind} | {systems} | {repo} |")
 out.append("| mediaremote-adapter | 2ef957c | BSD-3-Clause | app (dentro do Taskbeat.app) | Mac | https://github.com/ungive/mediaremote-adapter |")
+out.append("")
+out.append("No Linux o app também usa bibliotecas do próprio sistema, que não vão no pacote (são")
+out.append("as que já vêm com o desktop, ligadas na hora de abrir): fontconfig (MIT), FreeType (FTL),")
+out.append("HarfBuzz (MIT), libdbus (AFL-2.1 ou GPL-2.0) e libpulse (LGPL-2.1).")
 
 out.append("\n## Avisos de copyright\n")
 for p in rows:
@@ -131,6 +136,15 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 """)
+out.append("## Extensão do navegador (pasta `extension/`)\n")
+out.append("O jeito de ler e comandar o YouTube Music pela página foi adaptado destes projetos, ambos sob a")
+out.append("licença MIT (texto abaixo). Nenhum arquivo deles foi copiado; o código da extensão é do Taskbeat.\n")
+out.append("- **WebNowPlaying Redux** (https://github.com/keifufu/WebNowPlaying-Redux): o atributo `repeat-mode`")
+out.append("  da barra do player (`ytmusic-player-bar`) e os cliques nos botões `.repeat`/`.shuffle`.")
+out.append("  Copyright 2024 keifufu.")
+out.append("- **YouTube Music Desktop App, de th-ch** (https://github.com/th-ch/youtube-music): o atributo")
+out.append("  `shuffle-on` da barra do player como o estado do aleatório.")
+out.append("  Copyright (c) th-ch <th-ch@users.noreply.github.com>.\n")
 out.append("## Texto da licença MIT\n")
 out.append("""```
 Permission is hereby granted, free of charge, to any person obtaining a copy of

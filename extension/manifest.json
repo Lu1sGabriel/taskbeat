@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_name__",
+  "short_name": "Taskbeat",
+  "description": "__MSG_description__",
+  "default_locale": "en",
+  "homepage_url": "https://github.com/Lu1sGabriel/taskbeat",
+  "version": "1.1.0",
+  "minimum_chrome_version": "110",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5sePAdF7G0Z/m2uFPUxCmkILXGq7eakjRJ59w8xyWIokcGPbhEYV+nJ6gTCBLkFjiEL4Rq46SEDGborfJEUpTF5cc1490Mi7wqOmMcqFmXWwVmu9AraskDiwBWVdoZU74X1Ef5Sbi8Abm2Iuigyq7ReEOzbB3P+KZMOD6NtxbXdK8in0lpNWRsyaAh6AxR4mRWijT3yr+eMtdwgd5JWAfiP7E+R8MsJ3Pw4bESDJqIt1WJ4/PVgK3HpjuRZHMxdzc0TqPNhClYplAs39rIvWZ1EzCF/yacjQ3GttHoipuXTpIYeXJyLUBMvWeaqqF+PeLfYdY6vLsX3dbJ1kqMyXiwIDAQAB",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "permissions": ["nativeMessaging", "scripting", "storage"],
+  "host_permissions": ["https://music.youtube.com/*"]
+}

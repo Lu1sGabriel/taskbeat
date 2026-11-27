@@ -37,8 +37,106 @@ pub fn from_apps_folder(aumid: &str) -> (Option<String>, Option<Image>) {
             CoTaskMemFree(Some(p.0 as _));
             s
         });
-        let icon = shell_item_icon(&item);
+        let icon = unplated_logo(aumid).or_else(|| shell_item_icon(&item));
         (name.filter(|n| !n.is_empty() && n != aumid), icon)
+    }
+}
+
+/// Logo "sem placa" de um app da Store (AUMID `Família!App`), lido dos
+/// arquivos do pacote. No Windows 10 o ícone que o shell entrega vem sobre a
+/// placa do bloco (o quadrado na cor do app, ex.: azul, atrás do ícone); o
+/// Windows 11 não desenha a placa e usa estes mesmos arquivos
+/// (`*.targetsize-N_altform-unplated.png`). Sem eles: `None` (fica o do shell).
+pub fn unplated_logo(aumid: &str) -> Option<Image> {
+    let (family, app) = aumid.split_once('!')?;
+    let dir = package_dir(family)?;
+    let manifest = std::fs::read_to_string(dir.join("AppxManifest.xml")).ok()?;
+    let logo = square_logo(&manifest, app)?;
+    decode_png(&unplated_file(&dir.join(logo))?)
+}
+
+/// Pasta de instalação do pacote da família `family` (a primeira versão instalada).
+fn package_dir(family: &str) -> Option<std::path::PathBuf> {
+    use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+    use windows::Win32::Storage::Packaging::Appx::{GetPackagePathByFullName, GetPackagesByPackageFamily};
+    unsafe {
+        let fam = HSTRING::from(family);
+        let (mut count, mut len) = (0u32, 0u32);
+        if GetPackagesByPackageFamily(&fam, &mut count, None, &mut len, None) != ERROR_INSUFFICIENT_BUFFER || count == 0 {
+            return None;
+        }
+        let mut names = vec![PWSTR::null(); count as usize];
+        let mut buf = vec![0u16; len as usize];
+        if GetPackagesByPackageFamily(&fam, &mut count, Some(names.as_mut_ptr()), &mut len, Some(PWSTR(buf.as_mut_ptr()))) != ERROR_SUCCESS {
+            return None;
+        }
+        let full = names.first()?.to_string().ok()?;
+        let mut plen = 0u32;
+        let _ = GetPackagePathByFullName(&HSTRING::from(&full), &mut plen, None);
+        let mut path = vec![0u16; plen.max(1) as usize];
+        if GetPackagePathByFullName(&HSTRING::from(&full), &mut plen, Some(PWSTR(path.as_mut_ptr()))) != ERROR_SUCCESS {
+            return None;
+        }
+        let end = path.iter().position(|&c| c == 0).unwrap_or(path.len());
+        Some(std::path::PathBuf::from(String::from_utf16_lossy(&path[..end])))
+    }
+}
+
+/// O `Square44x44Logo` (ícone da lista de apps) do aplicativo `app` no manifesto.
+fn square_logo(manifest: &str, app: &str) -> Option<String> {
+    let id = format!("Id=\"{app}\"");
+    manifest.split("<Application ").skip(1).find_map(|block| {
+        let block = block.split("</Application>").next().unwrap_or(block);
+        let head = block.split('>').next().unwrap_or(block);
+        if !head.contains(&id) {
+            return None;
+        }
+        let rest = &block[block.find("Square44x44Logo=\"")? + "Square44x44Logo=\"".len()..];
+        Some(rest[..rest.find('"')?].to_string())
+    })
+}
+
+/// Arquivo "sem placa" do logo `logo` (ex.: `Assets\AppList.png` tem
+/// `AppList.targetsize-48_altform-unplated.png` ao lado): o menor de pelo
+/// menos 48 px, senão o maior. Sem as versões de alto contraste nem a do tema claro.
+fn unplated_file(logo: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = logo.parent()?;
+    let stem = logo.file_stem()?.to_string_lossy().to_lowercase();
+    let mut best: Option<(u32, std::path::PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        if !name.starts_with(&format!("{stem}.")) || !name.ends_with(".png") || !name.contains("altform-unplated") || name.contains("contrast") {
+            continue;
+        }
+        let size = name.split("targetsize-").nth(1).and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()).unwrap_or(0);
+        let better = |b: u32| if size >= SIZE_PX as u32 { b < SIZE_PX as u32 || size < b } else { b < size };
+        if best.as_ref().is_none_or(|(b, _)| better(*b)) {
+            best = Some((size, e.path()));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// Lê um PNG (WIC) como imagem BGRA pré-multiplicada.
+fn decode_png(path: &std::path::Path) -> Option<Image> {
+    use windows::Win32::Foundation::GENERIC_READ;
+    use windows::Win32::Graphics::Imaging::*;
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+    unsafe {
+        let f: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+        let dec = f.CreateDecoderFromFilename(&HSTRING::from(path.as_os_str()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).ok()?;
+        let frame = dec.GetFrame(0).ok()?;
+        let conv = f.CreateFormatConverter().ok()?;
+        conv.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).ok()?;
+        let (mut w, mut h) = (0u32, 0u32);
+        conv.GetSize(&mut w, &mut h).ok()?;
+        if w == 0 || h == 0 || w > 512 || h > 512 {
+            return None;
+        }
+        let mut px = vec![0u32; (w * h) as usize];
+        let bytes = std::slice::from_raw_parts_mut(px.as_mut_ptr().cast::<u8>(), px.len() * 4);
+        conv.CopyPixels(std::ptr::null(), w * 4, bytes).ok()?;
+        Some(Image::new(w as usize, h as usize, px))
     }
 }
 
@@ -223,5 +321,27 @@ unsafe fn hicon_to_image(icon: HICON) -> Option<Image> {
             let _ = DeleteObject(info.hbmMask.into());
         }
         img
+    }
+}
+
+#[cfg(test)]
+mod logo_probe {
+    /// Logo sem placa de alguns apps da Store desta máquina, gravado em
+    /// `TASKBEAT_SHOTS_DIR` (só lê). `cargo test unplated_logos_here -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn unplated_logos_here() {
+        use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let dir = std::path::PathBuf::from(std::env::var_os("TASKBEAT_SHOTS_DIR").expect("TASKBEAT_SHOTS_DIR"));
+        for aumid in ["Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic", "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"] {
+            let img = super::unplated_logo(aumid);
+            println!("{aumid}: {:?}", img.as_ref().map(|i| (i.w, i.h)));
+            if let Some(i) = img {
+                crate::png::save(&dir.join(format!("{}.png", aumid.split('_').next().unwrap())), i.w, i.h, &i.px);
+            }
+        }
     }
 }

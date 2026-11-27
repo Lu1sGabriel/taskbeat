@@ -18,9 +18,15 @@
 //! Roda numa thread própria: o navegador pode levar alguns segundos para
 //! responder à primeira consulta (ele só monta a árvore de acessibilidade
 //! quando alguém pede).
+//!
+//! Com a extensão do Taskbeat instalada (`webext.rs`, pasta `extension/`), o
+//! estado e os comandos vêm dela, lidos da própria página, sem UI Automation
+//! nem cor de pixel. Tudo acima continua valendo sem ela (ou quando ela não
+//! conhece a música da sessão).
 
 use crate::audio::log;
 use crate::shared::{Shared, WebCmd, WebState};
+use crate::webext;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{RecvTimeoutError, channel};
@@ -40,6 +46,9 @@ const REPEAT_CLASS: &str = "repeat style-scope ytmusic-player-bar";
 const TITLE_CLASS: &str = "title style-scope ytmusic-player-bar";
 /// Sem botões numa janela: não procura de novo nela por este tempo.
 const MISS_TTL: Duration = Duration::from_secs(60);
+/// Com a extensão conectada, a música nova dela pode chegar um pouco depois
+/// da do Windows: espera isto antes de ler a página pela UI Automation.
+const EXT_WAIT: Duration = Duration::from_millis(1500);
 
 pub fn spawn(shared: Arc<Shared>) {
     let (tx, rx) = channel::<WebCmd>();
@@ -54,22 +63,110 @@ pub fn spawn(shared: Arc<Shared>) {
             return;
         };
         let mut w = Worker { uia, found: None, miss: None, assumed: None, shuffle_on: None, shuffle_read: None, shuffle_assumed: None };
+        let mut ext = ExtRoute::default();
         while shared.is_running() {
-            let cmd = match rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(c) => c,
-                Err(RecvTimeoutError::Timeout) => continue,
+            let wait = ext.waiting.as_ref().map_or(Duration::from_secs(1), |(_, _, at)| at.saturating_duration_since(Instant::now()));
+            let state = match rx.recv_timeout(wait) {
+                Ok(cmd) => ext.handle(&mut w, &shared, cmd),
+                Err(RecvTimeoutError::Timeout) => ext.expired(&mut w),
                 Err(RecvTimeoutError::Disconnected) => return,
             };
-            let state = w.run(&cmd);
+            let Some(state) = state else { continue };
             let mut cur = shared.web.lock().unwrap();
             if *cur != state {
                 *cur = state;
                 drop(cur);
                 // O overlay relê a música (e junta isto a ela).
                 shared.media_version.fetch_add(1, Ordering::Relaxed);
+                crate::lyrics_overlay::media_changed();
             }
         }
     });
+}
+
+/// Decide entre a extensão e a UI Automation para cada pedido.
+#[derive(Default)]
+struct ExtRoute {
+    /// Leitura pedida para uma música que a extensão ainda não mostrou:
+    /// (sessão, título, até quando esperar por ela).
+    waiting: Option<(String, String, Instant)>,
+    /// Sessão cujo estado publicado veio da extensão.
+    from_ext: Option<String>,
+}
+
+/// O estado da aba que a extensão contou, no formato de `WebState`.
+fn ext_state(aumid: &str, p: &webext::ExtPlayer) -> WebState {
+    WebState { aumid: aumid.into(), shuffle: p.shuffle.is_some(), shuffle_on: p.shuffle, repeat: p.repeat }
+}
+
+impl ExtRoute {
+    /// `None`: nada a publicar agora.
+    fn handle(&mut self, w: &mut Worker, shared: &Shared, cmd: WebCmd) -> Option<WebState> {
+        match cmd {
+            // A extensão mandou algo: vale para a música que toca agora.
+            WebCmd::Ext => {
+                let (aumid, title, needed) = {
+                    let m = shared.media.lock().unwrap();
+                    (m.aumid.clone(), m.title.clone(), m.present() && !(m.can_shuffle && m.can_repeat))
+                };
+                if !needed {
+                    return None;
+                }
+                if let Some(p) = webext::lookup(&aumid, &title) {
+                    return Some(self.use_ext(&aumid, &p));
+                }
+                // A extensão contava esta sessão e não conta mais (aba fechada,
+                // página mudou): volta à leitura pela UI Automation.
+                if self.from_ext.as_deref() == Some(aumid.as_str()) && self.waiting.is_none() {
+                    self.from_ext = None;
+                    log::info(&format!("extensão não conta mais \"{title}\" ({aumid}): lendo a página pela UI Automation"));
+                    return Some(w.run(&WebCmd::Probe { aumid, title }));
+                }
+                None
+            }
+            WebCmd::Probe { ref aumid, ref title } => {
+                if let Some(p) = webext::lookup(aumid, title) {
+                    return Some(self.use_ext(aumid, &p));
+                }
+                if webext::has_players(aumid) {
+                    self.waiting = Some((aumid.clone(), title.clone(), Instant::now() + EXT_WAIT));
+                    return None;
+                }
+                self.from_ext = None;
+                Some(w.run(&cmd))
+            }
+            WebCmd::Shuffle { ref aumid, ref title } | WebCmd::Repeat { ref aumid, ref title } => {
+                let name = if matches!(cmd, WebCmd::Shuffle { .. }) { "shuffle" } else { "repeat" };
+                // Pela extensão: o estado novo chega quando a página mudar.
+                if webext::lookup(aumid, title).is_some_and(|p| webext::command(&p, name)) {
+                    return None;
+                }
+                self.from_ext = None;
+                Some(w.run(&cmd))
+            }
+        }
+    }
+
+    /// Acabou a espera pela extensão: lê pela UI Automation.
+    fn expired(&mut self, w: &mut Worker) -> Option<WebState> {
+        let (aumid, title, at) = self.waiting.take()?;
+        if Instant::now() < at {
+            self.waiting = Some((aumid, title, at));
+            return None;
+        }
+        if let Some(p) = webext::lookup(&aumid, &title) {
+            return Some(self.use_ext(&aumid, &p));
+        }
+        log::info(&format!("extensão sem a música \"{title}\" ({aumid}): lendo a página pela UI Automation"));
+        self.from_ext = None;
+        Some(w.run(&WebCmd::Probe { aumid, title }))
+    }
+
+    fn use_ext(&mut self, aumid: &str, p: &webext::ExtPlayer) -> WebState {
+        self.waiting = None;
+        self.from_ext = Some(aumid.into());
+        ext_state(aumid, p)
+    }
 }
 
 /// Botões achados na página do player de uma sessão.
@@ -115,6 +212,8 @@ impl Worker {
     fn run(&mut self, cmd: &WebCmd) -> WebState {
         let (aumid, title) = match cmd {
             WebCmd::Probe { aumid, title } | WebCmd::Shuffle { aumid, title } | WebCmd::Repeat { aumid, title } => (aumid.as_str(), title.as_str()),
+            // Só a extensão usa (veja `ExtRoute`).
+            WebCmd::Ext => return WebState::default(),
         };
         let t0 = Instant::now();
         let Some(f) = self.find(aumid, title) else {
@@ -174,7 +273,7 @@ impl Worker {
                     log::info(&format!("repetir pela página do player ({aumid}): {ok}, \"{before}\" → \"{after}\" em {:?}", t0.elapsed()));
                 }
             }
-            WebCmd::Probe { .. } => seen = read(!fresh),
+            WebCmd::Probe { .. } | WebCmd::Ext => seen = read(!fresh),
         }
         if seen.is_some() {
             self.shuffle_read = Some(Instant::now());
@@ -456,7 +555,7 @@ fn button_pixels_full(hwnd: HWND, r: windows::Win32::Foundation::RECT) -> Option
 /// que caia em fronteira de palavra (um sufixo como " - YouTube Music" ou
 /// " (Official Video)"): "Intro" não bate com "Introduction", nem um título
 /// de uma ou duas letras com quase tudo.
-fn same_title(page: &str, session: &str) -> bool {
+pub(crate) fn same_title(page: &str, session: &str) -> bool {
     let (a, b) = (norm_title(page), norm_title(session));
     if a.is_empty() || b.is_empty() {
         return false;

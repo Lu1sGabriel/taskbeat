@@ -45,6 +45,7 @@ enum Key {
     PopupSecs,
     ShowViz,
     Style,
+    BarShape,
     Palette,
     Bars,
     Sens,
@@ -124,6 +125,7 @@ const OSD_SHAPES: &[&str] = &["Iguais ao card", "Pílula", "Retos"];
 const OSD_SIZES: &[&str] = &["Compacto", "Normal", "Grande"];
 const THEMES: &[&str] = &["Automático", "Escuro", "Claro"];
 const OSD_ANIMS: &[&str] = &["Deslizar", "Zoom", "Esmaecer"];
+const BAR_SHAPES: &[&str] = &["Arredondadas", "Retas"];
 
 const BG_V: &[NotchBg] = &[NotchBg::Black, NotchBg::Album, NotchBg::Artwork];
 const ACCENT_V: &[AccentSource] = &[AccentSource::Album, AccentSource::Windows];
@@ -140,12 +142,16 @@ const OSD_SHAPE_V: &[OsdShape] = &[OsdShape::Rounded, OsdShape::Pill, OsdShape::
 const OSD_SIZE_V: &[OsdSize] = &[OsdSize::Compact, OsdSize::Normal, OsdSize::Large];
 const THEME_V: &[ThemeMode] = &[ThemeMode::Auto, ThemeMode::Dark, ThemeMode::Light];
 const OSD_ANIM_V: &[OsdAnim] = &[OsdAnim::Slide, OsdAnim::Zoom, OsdAnim::Fade];
+const BAR_SHAPE_V: &[BarShape] = &[BarShape::Rounded, BarShape::Square];
 
+/// As mesmas abas do Windows, onde fazem sentido no Mac (sem barra de tarefas
+/// nem atalhos): a ilha, o card aberto, "A seguir", as barras, o aviso de
+/// Caps Lock, o que vale para todos e o resto.
 const PAGES: &[Page] = &[
     Page {
         name: "Notch",
         symbol: "rectangle.topthird.inset.filled",
-        preview: Preview::Open,
+        preview: Preview::Closed,
         items: &[
             Section("Ilha"),
             Row { title: "Mostrar música no notch", desc: "Capa e barras ao lado do notch; passe o mouse ou clique para abrir", key: Key::ShowMedia, kind: Kind::Toggle },
@@ -153,11 +159,17 @@ const PAGES: &[Page] = &[
             Row { title: "Abrir ao passar o mouse", desc: "Desligado: o card abre só com um clique", key: Key::NotchHover, kind: Kind::Toggle },
             Row { title: "Indicador \"tocando agora\"", desc: "Mini equalizador quando não há barras de áudio", key: Key::Indicator, kind: Kind::Toggle },
             Row { title: "Animar troca de música", desc: "O título novo desliza e a capa nova aparece suavemente", key: Key::TrackAnim, kind: Kind::Toggle },
-            Section("Card aberto"),
+        ],
+    },
+    Page {
+        name: "Card aberto",
+        symbol: "play.rectangle",
+        preview: Preview::Open,
+        items: &[
+            Section("Estilo"),
             Row { title: "Fundo", desc: "Preto como o notch, cor da capa ou capa desfocada", key: Key::NotchBg, kind: Kind::Segmented(NOTCH_BGS) },
-            Row { title: "Cor de destaque", desc: "Botão play e progresso na cor da capa ou na do sistema", key: Key::Accent, kind: Kind::Segmented(ACCENTS) },
             Row { title: "Botão play", desc: "Formato do botão principal", key: Key::PlayShape, kind: Kind::Segmented(PLAY_SHAPES) },
-            Row { title: "Animar ícones", desc: "Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar", key: Key::IconAnim, kind: Kind::Toggle },
+            Section("No card"),
             Row { title: "Barra de progresso", desc: "Tempo decorrido e restante; arraste para pular", key: Key::CardSeek, kind: Kind::Toggle },
             Row { title: "Volume", desc: "Slider de volume e botão de mudo; role sobre o card para ajustar", key: Key::ShowVolume, kind: Kind::Toggle },
             Row { title: "Aleatório e repetir", desc: "Apagados quando o player não deixa mudar pelo macOS", key: Key::CardShuffle, kind: Kind::Segmented(SHUFFLE_MODES) },
@@ -181,10 +193,12 @@ const PAGES: &[Page] = &[
             Section("Barras de áudio"),
             Row { title: "Mostrar barras dinâmicas", desc: "Ao lado do notch e no card; usam o som que o Mac está tocando", key: Key::ShowViz, kind: Kind::Toggle },
             Row { title: "Estilo", desc: "Formato das barras", key: Key::Style, kind: Kind::Segmented(VIZ_STYLES) },
+            Row { title: "Pontas das barras", desc: "Arredondadas ou retas", key: Key::BarShape, kind: Kind::Segmented(BAR_SHAPES) },
             Row { title: "Cores", desc: "Cor da capa, do sistema ou paletas", key: Key::Palette, kind: Kind::Choice(PALETTES) },
             Row { title: "Quantidade de barras", desc: "Mais barras = mais detalhe", key: Key::Bars, kind: Kind::Choice(BAR_NAMES) },
-            Row { title: "Sensibilidade", desc: "Ganho extra aplicado ao espectro", key: Key::Sens, kind: Kind::Slider { min: -12, max: 18, step: 1, unit: "dB" } },
             Row { title: "Picos", desc: "Marcadores que caem devagar", key: Key::Peaks, kind: Kind::Toggle },
+            Section("Avançado"),
+            Row { title: "Sensibilidade", desc: "Ganho extra aplicado ao espectro", key: Key::Sens, kind: Kind::Slider { min: -12, max: 18, step: 1, unit: "dB" } },
             Row { title: "Só quando um player estiver tocando", desc: "Ignora chamadas, avisos e sons do sistema", key: Key::OnlyMedia, kind: Kind::Toggle },
         ],
     },
@@ -197,23 +211,34 @@ const PAGES: &[Page] = &[
             Row { title: "Caps Lock", desc: "Mostra quando as maiúsculas forem ativadas ou desativadas", key: Key::CapsOsd, kind: Kind::Toggle },
             Row { title: "Avisar também ao desligar", desc: "Desligado: só aparece quando a tecla é ativada", key: Key::OsdShowOff, kind: Kind::Toggle },
             Row { title: "Testar", desc: "Mostra o aviso agora, na posição escolhida", key: Key::OsdTest, kind: Kind::Button("Mostrar agora") },
-            Section("Posição"),
-            Row { title: "Onde aparece", desc: "Predefinições rápidas; ajuste fino logo abaixo", key: Key::OsdPos, kind: Kind::Segmented(OSD_POSITIONS) },
-            Row { title: "Ajuste horizontal", desc: "Move o aviso para a esquerda ou para a direita", key: Key::OsdOffX, kind: Kind::Slider { min: -800, max: 800, step: 10, unit: "pt" } },
-            Row { title: "Ajuste vertical", desc: "Move o aviso para cima ou para baixo", key: Key::OsdOffY, kind: Kind::Slider { min: -600, max: 600, step: 10, unit: "pt" } },
-            Section("Fundo"),
+            Section("Aparência"),
             Row { title: "Material", desc: "Sólido, acrílico (desfoque do macOS) ou na cor de destaque", key: Key::OsdMaterial, kind: Kind::Segmented(OSD_MATERIALS) },
             Row { title: "Opacidade", desc: "Quanto o fundo cobre o que está atrás", key: Key::OsdOpacity, kind: Kind::Slider { min: 20, max: 100, step: 2, unit: "%" } },
-            Section("Aparência"),
             Row { title: "Ícone", desc: "Letra A, cadeado que abre e fecha, ou teclado", key: Key::OsdIcon, kind: Kind::Segmented(OSD_ICONS) },
             Row { title: "Cantos", desc: "Formato do aviso e do ícone", key: Key::OsdShape, kind: Kind::Segmented(OSD_SHAPES) },
             Row { title: "Tamanho", desc: "Tamanho do aviso e do texto", key: Key::OsdSize, kind: Kind::Segmented(OSD_SIZES) },
             Row { title: "Tema", desc: "Segue o macOS ou fixa claro/escuro", key: Key::OsdTheme, kind: Kind::Segmented(THEMES) },
             Row { title: "Interruptor", desc: "Chave animada no lado direito", key: Key::OsdSwitch, kind: Kind::Toggle },
+            Section("Na tela"),
+            Row { title: "Onde aparece", desc: "Predefinições rápidas; ajuste fino em \"Avançado\"", key: Key::OsdPos, kind: Kind::Segmented(OSD_POSITIONS) },
             Row { title: "Animação", desc: "Como o aviso entra e sai da tela", key: Key::OsdAnim, kind: Kind::Segmented(OSD_ANIMS) },
             Row { title: "Duração", desc: "Quanto tempo o aviso fica na tela", key: Key::OsdDuration, kind: Kind::Slider { min: 8, max: 50, step: 1, unit: "s" } },
             Section("Privacidade"),
             Row { title: "Privacidade", desc: "Só o estado do Caps Lock é observado; nada do que você digita é lido ou guardado", key: Key::OsdPrivacy, kind: Kind::Info },
+            Section("Avançado"),
+            Row { title: "Ajuste horizontal", desc: "Move o aviso para a esquerda ou para a direita", key: Key::OsdOffX, kind: Kind::Slider { min: -800, max: 800, step: 10, unit: "pt" } },
+            Row { title: "Ajuste vertical", desc: "Move o aviso para cima ou para baixo", key: Key::OsdOffY, kind: Kind::Slider { min: -600, max: 600, step: 10, unit: "pt" } },
+        ],
+    },
+    Page {
+        name: "Aparência",
+        symbol: "paintpalette",
+        preview: Preview::Open,
+        items: &[
+            Section("Cores"),
+            Row { title: "Cor de destaque", desc: "Botão play e progresso na cor da capa ou na do sistema", key: Key::Accent, kind: Kind::Segmented(ACCENTS) },
+            Section("Ícones"),
+            Row { title: "Animar ícones", desc: "Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar", key: Key::IconAnim, kind: Kind::Toggle },
         ],
     },
     Page {
@@ -262,6 +287,7 @@ fn get(c: &Config, key: Key) -> i32 {
         Key::PopupSecs => c.popup_secs,
         Key::ShowViz => c.show_visualizer as i32,
         Key::Style => idx(VIZ_V, c.style),
+        Key::BarShape => idx(BAR_SHAPE_V, c.bar_shape),
         Key::Palette => idx(PALETTE_V, c.palette),
         Key::Bars => BARS.iter().position(|b| *b >= c.bars).unwrap_or(BARS.len() - 1) as i32,
         Key::Sens => c.sensitivity_db.round() as i32,
@@ -307,6 +333,7 @@ fn set(c: &mut Config, key: Key, v: i32) {
         Key::PopupSecs => c.popup_secs = v,
         Key::ShowViz => c.show_visualizer = v != 0,
         Key::Style => c.style = pick(VIZ_V, v),
+        Key::BarShape => c.bar_shape = pick(BAR_SHAPE_V, v),
         Key::Palette => c.palette = pick(PALETTE_V, v),
         Key::Bars => c.bars = pick(BARS, v),
         Key::Sens => c.sensitivity_db = v as f32,
@@ -342,7 +369,8 @@ fn requirement(c: &Config, key: Key) -> Option<&'static str> {
     match key {
         AlwaysShow | NotchHover | Indicator | TrackAnim if !c.show_media => Some("Ligue \"Mostrar música no notch\" para usar esta opção"),
         PopupSecs if !c.next_track_popup => Some("Ligue \"Mostrar A seguir\" para usar esta opção"),
-        Style | Palette | Bars | Sens | Peaks | OnlyMedia if !c.show_visualizer => Some("Ligue \"Mostrar barras dinâmicas\" para usar esta opção"),
+        Style | Palette | Bars | Sens | Peaks | OnlyMedia | BarShape if !c.show_visualizer => Some("Ligue \"Mostrar barras dinâmicas\" para usar esta opção"),
+        BarShape if c.style == crate::config::Style::Wave => Some("As pontas não valem para o estilo \"Onda\""),
         OsdShowOff | OsdTest | OsdPos | OsdOffX | OsdOffY | OsdMaterial | OsdOpacity | OsdIcon | OsdShape | OsdSize | OsdTheme | OsdSwitch | OsdAnim | OsdDuration if !c.caps_lock_osd => Some("Ligue o aviso de Caps Lock para usar esta opção"),
         _ => None,
     }
@@ -684,11 +712,14 @@ fn osd_preview(tr: &mut TextRenderer, cfg: &Config, colors: &crate::render::Colo
     {
         let mut cv = Canvas::new(pw, ph, &mut bg);
         let (fw, fh) = (pw as f32, ph as f32);
+        // Papel de parede: degradê grande, com pontilhado (sem faixas).
+        cv.set_dither(true);
         cv.fill_rrect_ca(0.0, 0.0, fw, fh, 0.0, |x, y| {
             let (u, v) = (x / fw, y / fh);
             let base = lerp3([0.16, 0.36, 0.78], [0.62, 0.30, 0.62], (u * 0.6 + v * 0.4).clamp(0.0, 1.0));
             (lerp3(base, [0.95, 0.62, 0.38], ((v - 0.4) * 1.4).clamp(0.0, 1.0) * 0.6), 1.0)
         });
+        cv.set_dither(false);
         // "Janelas" coloridas para o acrílico ter o que desfocar.
         for (u, v, w, h, c) in [(0.10, 0.18, 0.26, 0.60, [0.98, 0.45, 0.55]), (0.42, 0.10, 0.18, 0.50, [1.0, 0.78, 0.35]), (0.66, 0.40, 0.24, 0.48, [0.30, 0.80, 0.95])] {
             cv.fill_round(RectF::new(fw * u, fh * v, fw * w, fh * h), 14.0 * sc, c, 0.75);

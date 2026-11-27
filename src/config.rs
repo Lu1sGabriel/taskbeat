@@ -74,14 +74,51 @@ pub enum ThemeMode {
 pub enum AccentSource {
     Windows,
     Album,
+    /// Uma cor escolhida (`accent_rgb`).
+    Custom,
 }
 
+/// Sombra do card expandido e do cartão "A seguir".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardShadow {
+    /// A de sempre: larga e escura.
+    Strong,
+    Soft,
+    None,
+}
+
+/// Pontas das barras de áudio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarShape {
+    Rounded,
+    Square,
+}
+
+/// Nível de cantos arredondados de tudo (opção "Cantos": Menos, Normal, Mais).
+/// "Normal" é o desenho de antes da opção.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Corners {
     Small,
+    #[default]
     Medium,
     Large,
+}
+
+/// Identidade visual do app inteiro (configurações, widget, card, "A seguir",
+/// aviso de teclas e letra): ver `look.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Look {
+    /// Escuro com a cor da música, seleção branca como o play do card (o visual de antes).
+    #[default]
+    Palco,
+    /// Grafite liso, linhas finas, destaque em degradê, controles de mesa de som.
+    Estudio,
+    /// Vidro fosco sobre a capa desfocada, ícones coloridos.
+    Ilha,
 }
 
 /// Onde o aviso de Caps/Num Lock aparece.
@@ -318,6 +355,37 @@ pub enum OsdAnim {
     Fade,
 }
 
+/// Animação de abrir e fechar do card expandido (e do "A seguir").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardAnim {
+    /// A de sempre (Fluent): sobe um pouco esmaecendo; fecha descendo um pouco.
+    Smooth,
+    /// Sai de trás da barra e volta para trás dela (recortado na borda).
+    Slide,
+    /// Entra subindo e sai subindo.
+    Rise,
+    /// Entra descendo e sai descendo.
+    Drop,
+    /// Cresce com um leve exagero e um brilho; fecha encolhendo.
+    Pop,
+    /// Cresce a partir do centro.
+    Zoom,
+    /// Só esmaece.
+    Fade,
+    /// Aparece e some na hora.
+    None,
+}
+
+/// Velocidade das animações de abrir e fechar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimSpeed {
+    Fast,
+    Normal,
+    Slow,
+}
+
 /// Idioma da interface. `Auto` segue o idioma de exibição do Windows (outros = inglês).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -424,6 +492,8 @@ pub struct Config {
     pub theme: ThemeMode,
     pub accent_source: AccentSource,
     pub corners: Corners,
+    /// Identidade visual (Palco, Estúdio ou Ilha).
+    pub look: Look,
     pub play_shape: Shape,
     /// Cor dos controles do card (padrão: branco, como no widget).
     pub card_controls: ControlColor,
@@ -433,8 +503,11 @@ pub struct Config {
     pub card_sides: SideColor,
     pub card_sides_alpha: i32,
     pub card_seek: bool,
-    /// Mostra de qual app vem a música (nome no card, ícone sobre a capa).
+    /// Mostra de qual app vem a música: selo com o ícone dele no canto da capa
+    /// (barra, card e "A seguir").
     pub show_source: bool,
+    /// Com o selo, o nome do app também no fim da linha do artista (card e "A seguir").
+    pub source_name: bool,
     /// Volume no card expandido (slider + mudo).
     pub show_volume: bool,
     /// Setinha embaixo do card que abre o mixer de volume (volume de cada
@@ -455,6 +528,21 @@ pub struct Config {
     pub launcher_hidden: Vec<String>,
     /// Mini barras de áudio no card, ao lado do título (com as barras ligadas).
     pub card_viz: bool,
+    /// Cor de destaque na opção "Personalizada" ("#RRGGBB").
+    pub accent_rgb: String,
+    /// Sombra do card e do "A seguir".
+    pub card_shadow: CardShadow,
+    /// Granulado fino no fundo do card e do "A seguir".
+    pub card_grain: bool,
+    /// Desfoque do fundo acrílico do card e do "A seguir" (%; 50 = o de sempre).
+    pub glass_blur: i32,
+    /// Quanto a película do acrílico do card cobre o desfoque (%).
+    pub glass_tint: i32,
+    /// Película escura sobre a capa desfocada do card (% da de sempre).
+    pub artwork_dim: i32,
+    /// Como o card (e o "A seguir") abre e fecha, e em que velocidade.
+    pub card_anim: CardAnim,
+    pub anim_speed: AnimSpeed,
 
     // ---- "A seguir"
     /// Cartão animado com a próxima música quando o player troca sozinho.
@@ -503,6 +591,8 @@ pub struct Config {
     /// Barras ouvem só o app que está tocando (e não chamadas, jogos, avisos).
     pub viz_player_only: bool,
     pub show_peaks: bool,
+    /// Pontas das barras (arredondadas ou retas).
+    pub bar_shape: BarShape,
 
     // ---- notch (Mac)
     /// Abre o card ao passar o mouse no notch (desligado: só com clique).
@@ -521,10 +611,21 @@ pub struct Config {
     pub hide_on_fullscreen: bool,
     pub language: Language,
 
+    // ---- atualizações (releases do GitHub)
+    /// Procura versão nova ao abrir e uma vez por dia.
+    pub update_check: bool,
+    /// Instala a versão nova sozinho e reinicia (desligado: pergunta antes).
+    pub update_auto: bool,
+    /// Também oferece as versões de teste (pre-release).
+    pub update_beta: bool,
+
     /// Versão do esquema (para migrar configs antigas para os novos padrões).
     /// Ausente no arquivo = 0 (config antiga).
     #[serde(default)]
     pub version: u32,
+
+    /// Sobreposição de letra (tabela `[lyrics]`; fica no fim, depois dos valores simples).
+    pub lyrics: crate::lyrics::config::LyricsConfig,
 }
 
 const CONFIG_VERSION: u32 = 5;
@@ -536,7 +637,8 @@ const CONFIG_VERSION: u32 = 5;
 impl Default for Config {
     fn default() -> Self {
         let c = Self::windows_defaults();
-        if cfg!(target_os = "macos") { c.with_mac_defaults() } else { c }
+        // No Linux o widget é a mesma ilha do Mac: os padrões dela.
+        if cfg!(any(target_os = "macos", target_os = "linux")) { c.with_mac_defaults() } else { c }
     }
 }
 
@@ -553,6 +655,10 @@ impl Config {
             show_visualizer: true,
             style: Style::Bars,
             bars: 6,
+            show_source: false,
+            // O Mac e o Linux ficam com o desenho de antes das opções de visual.
+            corners: Corners::Medium,
+            look: Look::Palco,
             ..self
         }
     }
@@ -596,14 +702,17 @@ impl Config {
             card_layout: CardLayout::Horizontal,
             theme: ThemeMode::Dark,
             accent_source: AccentSource::Album,
-            corners: Corners::Medium,
+            // 2026-11-26: cantos "Menos" e a identidade "Ilha" no Windows.
+            corners: Corners::Small,
+            look: Look::Ilha,
             play_shape: Shape::Rounded,
             card_controls: ControlColor::White,
             card_controls_rgb: "#5EB1FF".into(),
             card_sides: SideColor::SameAsMiddle,
             card_sides_alpha: 100,
             card_seek: true,
-            show_source: false,
+            show_source: true,
+            source_name: false,
             show_volume: true,
             card_mixer: true,
             card_shuffle_repeat: ShuffleRepeat::Always,
@@ -613,6 +722,15 @@ impl Config {
             launcher_order: Vec::new(),
             launcher_hidden: Vec::new(),
             card_viz: true,
+            // Opções de design de 2026-11-25: o padrão é o visual de antes delas.
+            accent_rgb: "#5EB1FF".into(),
+            card_shadow: CardShadow::Strong,
+            card_grain: true,
+            glass_blur: 50,
+            glass_tint: 70,
+            artwork_dim: 100,
+            card_anim: CardAnim::Slide,
+            anim_speed: AnimSpeed::Normal,
 
             next_track_popup: true,
             popup_secs: 5,
@@ -643,6 +761,7 @@ impl Config {
             only_when_media: false,
             viz_player_only: true,
             show_peaks: true,
+            bar_shape: BarShape::Rounded,
 
             notch_hover: true,
             notch_bg: NotchBg::Album,
@@ -651,7 +770,11 @@ impl Config {
 
             hide_on_fullscreen: true,
             language: Language::Auto,
+            update_check: true,
+            update_auto: false,
+            update_beta: false,
             version: CONFIG_VERSION,
+            lyrics: Default::default(),
         }
     }
 }
@@ -663,10 +786,20 @@ impl Config {
         Some(PathBuf::from(base).join("Taskbeat").join("config.toml"))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     pub fn path() -> Option<PathBuf> {
         let home = std::env::var_os("HOME")?;
         Some(PathBuf::from(home).join("Library").join("Application Support").join("Taskbeat").join("config.toml"))
+    }
+
+    /// Linux: `$XDG_CONFIG_HOME/taskbeat/config.toml` (normalmente `~/.config`).
+    #[cfg(target_os = "linux")]
+    pub fn path() -> Option<PathBuf> {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+        Some(base.join("taskbeat").join("config.toml"))
     }
 
     /// Pasta do nome antigo do app (lida uma vez para migrar as preferências).
@@ -749,7 +882,7 @@ impl Config {
     }
 
     fn sanitize(&mut self) {
-        for c in [&mut self.widget_controls_rgb, &mut self.card_controls_rgb] {
+        for c in [&mut self.widget_controls_rgb, &mut self.card_controls_rgb, &mut self.accent_rgb] {
             if parse_hex(c).is_none() {
                 *c = "#5EB1FF".into();
             }
@@ -770,6 +903,10 @@ impl Config {
         self.widget_intensity = self.widget_intensity.clamp(10, 100);
         self.widget_sides_alpha = self.widget_sides_alpha.clamp(20, 100);
         self.card_sides_alpha = self.card_sides_alpha.clamp(20, 100);
+        self.glass_blur = self.glass_blur.clamp(0, 100);
+        self.glass_tint = self.glass_tint.clamp(20, 100);
+        self.artwork_dim = self.artwork_dim.clamp(50, 150);
+        self.lyrics.sanitize();
     }
 }
 
@@ -803,6 +940,21 @@ mod tests {
         };
         let text = toml::to_string_pretty(&c2).unwrap();
         assert_eq!(toml::from_str::<Config>(&text).unwrap(), c2);
+    }
+
+    /// As opções de design de 2026-11-25 vêm com o visual de antes delas,
+    /// também para quem já tinha config (nada muda sem o usuário escolher).
+    #[test]
+    fn opcoes_de_design_vem_com_o_visual_de_antes() {
+        use super::{BarShape, CardShadow};
+        let c: Config = toml::from_str("card_style = \"glass\"\nversion = 5\n").unwrap();
+        assert_eq!((c.card_shadow, c.card_grain, c.glass_blur, c.glass_tint, c.artwork_dim, c.bar_shape), (CardShadow::Strong, true, 50, 70, 100, BarShape::Rounded));
+        assert_eq!(c.accent_rgb, "#5EB1FF");
+        // 50% de desfoque = os 30 px de sempre.
+        assert_eq!(crate::ui::glass_blur_px(&c, 1.0), 30.0);
+        let mut c = Config { glass_blur: 500, glass_tint: 1, artwork_dim: 999, accent_rgb: "zz".into(), ..c };
+        c.sanitize();
+        assert_eq!((c.glass_blur, c.glass_tint, c.artwork_dim, c.accent_rgb.as_str()), (100, 20, 150, "#5EB1FF"));
     }
 
     /// Os controles vêm brancos (também para quem já tinha config). Cores em
@@ -894,7 +1046,8 @@ version = 5
 "#;
 
     /// No Mac os padrões são os de f0746a0 em todo campo que já existia; no
-    /// Windows só mudam os oito que vieram da config do usuário.
+    /// Windows só mudam os oito que vieram da config do usuário e o selo do
+    /// app na capa (ligado desde 2026-11-26, a pedido dele).
     #[test]
     fn padroes_do_mac_sao_os_de_antes() {
         let old: toml::Table = toml::from_str(DEFAULTS_F0746A0).unwrap();
@@ -906,8 +1059,8 @@ version = 5
         let win = table(&Config::windows_defaults());
         let mut changed: Vec<&str> = old.iter().filter(|(k, v)| win.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect();
         changed.sort();
-        assert_eq!(changed, ["accent_source", "bars", "playing_indicator", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
-        let here = if cfg!(target_os = "macos") { mac } else { win };
+        assert_eq!(changed, ["accent_source", "bars", "corners", "playing_indicator", "show_source", "show_visualizer", "style", "taskbar_shuffle_repeat", "text_size", "widget_tint"]);
+        let here = if cfg!(any(target_os = "macos", target_os = "linux")) { mac } else { win };
         assert_eq!(table(&Config::default()), here);
     }
 

@@ -3,16 +3,20 @@ name = "taskbeat"
 description = "Widget de música para a barra de tarefas do Windows e o notch do Mac"
 license = "MIT"
 repository = "https://github.com/Lu1sGabriel/taskbeat"
-version = "1.3.0"
+version = "1.4.0"
 edition = "2024"
 
 [dependencies]
 realfft = "3.5"
 serde = { version = "1.0.229", features = ["derive"] }
+# JSON das letras (LRCLIB), da extensão do navegador e das releases do GitHub.
+serde_json = "1"
 toml = "1.2.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62"
+# Ponto de origem do texto quebrado em linhas (DirectWrite); já vem com o `windows`.
+windows-numerics = "0.3"
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_Media_Audio", "Win32_Media_KernelStreaming", "Win32_Media_Multimedia", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_HiDpi", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Devices_FunctionDiscovery", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Variant", "Win32_System_Com_StructuredStorage", "Media_Control", "Foundation", "UI", "UI_ViewManagement", "Win32_Security", "Graphics", "Graphics_Imaging", "Storage", "Storage_Streams", "Win32_Media_Audio_Endpoints", "Win32_System_Diagnostics", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_Input", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Controls", "Win32_System_Memory",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
@@ -25,10 +29,14 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"
     "Win32_System_Ole",
     "Win32_Storage_Packaging_Appx",
     "Win32_Storage_FileSystem",
-    "Win32_Storage_Xps"] }
+    "Win32_Storage_Xps",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Security_Authorization",
+    "Win32_Networking_WinHttp",
+    "Win32_Security_Cryptography"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-serde_json = "1"
 objc2 = "0.6.5"
 objc2-foundation = "0.3.2"
 objc2-app-kit = "0.3.2"
@@ -41,6 +49,29 @@ objc2-core-audio-types = "0.3.2"
 objc2-core-video = "0.3.2"
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
+
+# Linux: janela por Wayland (layer-shell) ou X11, os dois em Rust puro; D-Bus
+# (MPRIS e bandeja) e PulseAudio/PipeWire pelas bibliotecas do sistema;
+# decodificadores de imagem em Rust. Texto: fontconfig, FreeType e HarfBuzz
+# do sistema (`src/linux/ft.rs`).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+x11rb = { version = "0.13", features = ["shape", "randr"] }
+dbus = "0.9"
+dbus-crossroads = "0.5"
+libpulse-sys = "1.21"
+zune-jpeg = "0.4"
+zune-png = "0.4"
+zune-core = "0.4"
+image-webp = "0.2"
+
+[features]
+# Teste de ponta a ponta do atualizador: aceita um servidor local e uma chave
+# de teste (variáveis TASKBEAT_UPDATE_*). Nunca usar nas releases.
+e2e = []
 
 [profile.release]
 opt-level = 3

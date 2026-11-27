@@ -127,6 +127,8 @@ pub fn spawn(shared: Arc<Shared>) {
                     changed
                 };
                 shared.media_version.fetch_add(1, Ordering::Relaxed);
+                // A sobreposição de letra relê a posição (corrige a linha atual).
+                crate::lyrics_overlay::media_changed();
                 if changed {
                     let hwnd = shared.tray_hwnd.load(Ordering::Relaxed);
                     if hwnd != 0 {
@@ -278,6 +280,42 @@ fn image_sig(img: &Image) -> u64 {
     h.max(1)
 }
 
+/// Uma sessão de mídia candidata a aparecer no widget.
+#[derive(Clone, Copy)]
+struct Cand {
+    /// É a que está na tela agora.
+    shown: bool,
+    playing: bool,
+    /// É de um app de música (`launchers::is_music`).
+    music: bool,
+}
+
+/// Qual candidata mostrar (índice) e se ela está tocando:
+/// - quem toca ganha de quem está pausado;
+/// - entre as que tocam, um app de música ganha do resto (vídeo, live, aba do
+///   navegador), mesmo com outra já na tela: a música começou, o widget vai para ela;
+/// - fora isso, fica a que já está na tela enquanto ela toca ou parou há pouco
+///   (`sticky`: troca de faixa, carregando a próxima); pular para outra nesse
+///   instante fazia a troca parecer manual e o widget piscar;
+/// - sem nenhuma tocando, a que está na tela, ou a primeira (a do Windows).
+fn choose(c: &[Cand], sticky: bool) -> Option<(usize, bool)> {
+    let shown = c.iter().position(|s| s.shown);
+    let music_playing = c.iter().position(|s| s.playing && s.music);
+    if let Some(i) = shown {
+        let s = c[i];
+        if s.playing && (s.music || music_playing.is_none()) {
+            return Some((i, true));
+        }
+        if !s.playing && sticky && music_playing.is_none() {
+            return Some((i, false));
+        }
+    }
+    if let Some(i) = music_playing.or_else(|| c.iter().position(|s| s.playing)) {
+        return Some((i, true));
+    }
+    shown.or((!c.is_empty()).then_some(0)).map(|i| (i, false))
+}
+
 impl State {
     fn run_command(&mut self, cmd: MediaCmd) {
         let Some(s) = &self.session else { return };
@@ -301,9 +339,7 @@ impl State {
         }
     }
 
-    /// Qual sessão mostrar. Fica na que já está na tela enquanto ela toca ou
-    /// parou há pouco (troca de faixa, carregando a próxima): pular para outra
-    /// sessão nesse instante fazia a troca parecer manual e o widget piscar.
+    /// Qual sessão mostrar (regras em `choose`).
     fn pick_session(&self, m: &Manager, now: Instant) -> Option<(Session, bool)> {
         let mut sessions: Vec<Session> = Vec::new();
         if let Ok(cur) = m.GetCurrentSession() {
@@ -314,19 +350,18 @@ impl State {
         }
         let id = |s: &Session| s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
         let playing = |s: &Session| s.GetPlaybackInfo().and_then(|i| i.PlaybackStatus()) == Ok(Status::Playing);
-        let ours = (!self.shown.is_empty()).then(|| sessions.iter().find(|s| id(s) == self.shown).cloned()).flatten();
-        if let Some(s) = &ours {
-            if playing(s) {
-                return Some((s.clone(), true));
-            }
-            if self.shown_playing_at.is_some_and(|t| now.saturating_duration_since(t) < STICKY) {
-                return Some((s.clone(), false));
-            }
-        }
-        if let Some(s) = sessions.iter().find(|s| playing(s)) {
-            return Some((s.clone(), true));
-        }
-        ours.or_else(|| sessions.into_iter().next()).map(|s| (s, false))
+        let cands: Vec<Cand> = sessions
+            .iter()
+            .map(|s| {
+                let a = id(s);
+                // Nome do app (já conhecido) para os apps de música sem id fixo, como o Shazam.
+                let name = self.apps.get(&a).map(|(n, _)| n.as_str()).unwrap_or("");
+                Cand { shown: !self.shown.is_empty() && a == self.shown, playing: playing(s), music: crate::launchers::is_music(name, &a) }
+            })
+            .collect();
+        let sticky = self.shown_playing_at.is_some_and(|t| now.saturating_duration_since(t) < STICKY);
+        let (i, on) = choose(&cands, sticky)?;
+        sessions.into_iter().nth(i).map(|s| (s, on))
     }
 
     fn poll(&mut self, m: &Manager) -> MediaInfo {
@@ -491,15 +526,30 @@ fn timeline(s: &Session, playing: bool) -> (f64, f64) {
     (if dur > 0.0 { p.clamp(0.0, dur) } else { p.max(0.0) }, dur)
 }
 
+/// Capa da sessão atual em até `max` px (a tela cheia da letra quer mais
+/// que os 384 do card), com o título a que ela pertence. Bloqueia: chame
+/// numa thread à parte.
+pub fn current_cover(max: u32) -> Option<(String, Image)> {
+    let manager = Manager::RequestAsync().ok()?.join().ok()?;
+    let session = manager.GetCurrentSession().ok()?;
+    let props = session.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
+    let title = props.Title().map(|t| t.to_string()).unwrap_or_default();
+    Some((title, load_thumbnail_max(&props, max)?))
+}
+
 /// Decodifica a miniatura (capa) num quadrado de até ART_SIZE com recorte central.
 fn load_thumbnail(props: &Props) -> Option<Image> {
+    load_thumbnail_max(props, ART_SIZE)
+}
+
+fn load_thumbnail_max(props: &Props, max: u32) -> Option<Image> {
     let stream = props.Thumbnail().ok()?.OpenReadAsync().ok()?.join().ok()?;
     let dec = BitmapDecoder::CreateAsync(&stream).ok()?.join().ok()?;
     let (w, h) = (dec.PixelWidth().ok()?, dec.PixelHeight().ok()?);
     if w == 0 || h == 0 {
         return None;
     }
-    let side = ART_SIZE.min(w.min(h)).max(64);
+    let side = max.min(w.min(h)).max(64);
     let k = side as f64 / w.min(h) as f64;
     let sw = ((w as f64 * k).round() as u32).max(side);
     let sh = ((h as f64 * k).round() as u32).max(side);
@@ -588,6 +638,55 @@ fn friendly_or_raw(aumid: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A música tem a vez: uma live do YouTube tocando na tela e o YouTube
+    /// Music começa a tocar -> o widget vai para o YouTube Music; o contrário
+    /// não acontece. Pausado perde para quem toca; dois apps de música
+    /// tocando: fica o que já está na tela.
+    #[test]
+    fn prioridade_dos_apps_de_musica() {
+        use super::{Cand, choose};
+        let c = |shown, playing, music| Cand { shown, playing, music };
+        // Live (na tela, tocando) + YouTube Music tocando.
+        assert_eq!(choose(&[c(true, true, false), c(false, true, true)], false), Some((1, true)));
+        // YouTube Music na tela tocando + vídeo começa a tocar: fica a música.
+        assert_eq!(choose(&[c(false, true, false), c(true, true, true)], false), Some((1, true)));
+        // Música pausada na tela, vídeo tocando: vai para o vídeo (depois da troca de faixa).
+        assert_eq!(choose(&[c(true, false, true), c(false, true, false)], false), Some((1, true)));
+        // ... mas não no meio da troca de faixa da música (sticky).
+        assert_eq!(choose(&[c(true, false, true), c(false, true, false)], true), Some((0, false)));
+        // Vídeo na tela trocando de faixa e uma música tocando: vai para a música.
+        assert_eq!(choose(&[c(true, false, false), c(false, true, true)], true), Some((1, true)));
+        // Dois apps de música tocando: fica o que está na tela.
+        assert_eq!(choose(&[c(false, true, true), c(true, true, true)], false), Some((1, true)));
+        // Nada tocando: a que está na tela; sem ela, a primeira.
+        assert_eq!(choose(&[c(false, false, true), c(true, false, false)], false), Some((1, false)));
+        assert_eq!(choose(&[c(false, false, false), c(false, false, true)], false), Some((0, false)));
+        assert_eq!(choose(&[], false), None);
+    }
+
+    /// Tamanho da capa que o Windows entrega para a música tocando agora:
+    /// `cargo test capa_da_sessao_agora -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn capa_da_sessao_agora() {
+        unsafe {
+            let _ = super::CoInitializeEx(None, super::COINIT_MULTITHREADED);
+        }
+        let c = super::current_cover(4096);
+        println!("capa: {:?}", c.map(|(t, i)| (t, i.w, i.h)));
+    }
+
+    #[test]
+    fn apps_de_musica() {
+        use crate::launchers::is_music;
+        assert!(is_music("YouTube Music", "Brave._crx_cinhimbnkkghhklpknlkffjgod"));
+        assert!(is_music("Spotify", "Spotify.exe"));
+        assert!(is_music("Shazam", "Chrome._crx_abcdef"));
+        assert!(is_music("", "AppleInc.AppleMusicWin_nzyj5cx40ttqa!App"));
+        assert!(!is_music("Brave", "Brave"));
+        assert!(!is_music("VLC media player", "{6D809377-6AF0-444B-8957-A3773F02200E}\\VideoLAN\\VLC\\vlc.exe"));
+        assert!(!is_music("Media Player", "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"));
+    }
     use super::*;
 
     fn img(v: u32) -> Image {

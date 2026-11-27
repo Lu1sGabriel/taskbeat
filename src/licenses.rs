@@ -51,3 +51,13 @@ pub fn open() {
         let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(&path).spawn();
     }
 }
+
+/// Abre a licença e os avisos de terceiros no editor de texto padrão (xdg-open).
+#[cfg(target_os = "linux")]
+pub fn open() {
+    let path = std::env::temp_dir().join("Taskbeat - licencas.txt");
+    let text = format!("{LICENSE}\n\n{}\n\n{NOTICES}", "=".repeat(78));
+    if std::fs::write(&path, text).is_ok() {
+        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+    }
+}

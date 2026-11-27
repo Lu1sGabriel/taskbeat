@@ -1,0 +1,10 @@
+{
+  "name": {
+    "message": "Taskbeat",
+    "description": "Nome da extensão"
+  },
+  "description": {
+    "message": "Zeigt und steuert Zufall und Wiederholen von YouTube Music in Taskbeat, dem Musik-Widget für die Windows-Taskleiste.",
+    "description": "Descrição curta (até 132 caracteres)"
+  }
+}

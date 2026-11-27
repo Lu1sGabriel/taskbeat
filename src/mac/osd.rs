@@ -116,6 +116,9 @@ pub fn start(mtm: MainThreadMarker) {
     let s = NSScreen::mainScreen(mtm).map(|sc| sc.backingScaleFactor() as f32).unwrap_or(2.0);
     let mut tr = TextRenderer::new();
     tr.set_scale(s);
+    // A camada é nossa (não é a que o AppKit cria para a vista): a escala da
+    // tela não vem sozinha. Os pixels do quadro já estão nela.
+    image.setContentsScale(s as f64);
     let ticker = Ticker::new(&root, sel!(osdFrame:));
     let o = Osd {
         ticker,
@@ -201,6 +204,7 @@ impl Osd {
         if (s - self.s).abs() > 0.01 {
             self.s = s;
             self.tr.set_scale(s);
+            self.image.setContentsScale(s as f64);
         }
         // Já estava na tela: troca o estado sem entrar de novo.
         let shown = self.start.is_some_and(|t| t.elapsed().as_secs_f32() > 0.3);

@@ -1,0 +1,10 @@
+{
+  "name": {
+    "message": "Taskbeat",
+    "description": "Nome da extensão"
+  },
+  "description": {
+    "message": "Muestra y controla el aleatorio y la repetición de YouTube Music en Taskbeat, el widget de música de la barra de tareas de Windows.",
+    "description": "Descrição curta (até 132 caracteres)"
+  }
+}

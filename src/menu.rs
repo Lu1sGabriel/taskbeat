@@ -93,6 +93,8 @@ pub struct Options {
     pub accent: Rgb,
     /// Largura mínima em px lógicos.
     pub min_width: f32,
+    /// Visual e cantos do app (o menu segue o resto).
+    pub style: crate::look::Style,
 }
 
 // ---------------------------------------------------------------- layout
@@ -272,16 +274,23 @@ impl State {
         let fg: Rgb = if dark { [1.0; 3] } else { [0.0; 3] };
         let accent = self.opts.accent;
         let card = self.l.card;
-        let radius = 8.0 * s;
+        let st = self.opts.style;
+        let radius = st.scale(8.0 * s);
         cv.drop_shadow(card, radius, 16.0 * s, 5.0 * s, if dark { 0.45 } else { 0.20 });
         let base: Rgb = if dark { [0.17, 0.17, 0.18] } else { [0.975, 0.975, 0.98] };
         match &self.backdrop {
             Some(b) => ui::acrylic(cv, card, radius, b, base, if dark { 0.82 } else { 0.78 }),
             None => cv.fill_round(card, radius, base, 0.98),
         }
-        cv.stroke_round(card, radius, s, fg, if dark { 0.11 } else { 0.08 });
-        // Brilho fino no topo (elevação).
-        cv.fill_rrect_ca(card.x, card.y, card.right(), card.bottom(), radius, |_, y| ([1.0; 3], if y < card.y + 1.5 * s { 0.06 } else { 0.0 }));
+        match st.look {
+            crate::config::Look::Palco => {
+                cv.stroke_round(card, radius, s, fg, if dark { 0.11 } else { 0.08 });
+                // Brilho fino no topo (elevação).
+                cv.fill_rrect_ca(card.x, card.y, card.right(), card.bottom(), radius, |_, y| ([1.0; 3], if y < card.y + 1.5 * s { 0.06 } else { 0.0 }));
+            }
+            _ => crate::look::finish(cv, card, radius, st, dark, 0.0, s),
+        }
+        let hl_r = st.scale(4.0 * s);
 
         let tx0 = if self.l.has_icons { 44.0 * s } else { 18.0 * s };
         for (ri, row) in self.l.rows.iter().enumerate() {
@@ -297,9 +306,9 @@ impl State {
                     let selected = matches!(it.kind, Kind::Radio(true));
                     if hot && it.enabled {
                         let a = if self.pressed == Some(Hot::Row(ri)) { 0.035 } else if dark { 0.075 } else { 0.055 };
-                        cv.fill_round(hl, 4.0 * s, fg, a);
+                        cv.fill_round(hl, hl_r, fg, a);
                     } else if selected {
-                        cv.fill_round(hl, 4.0 * s, fg, if dark { 0.05 } else { 0.04 });
+                        cv.fill_round(hl, hl_r, fg, if dark { 0.05 } else { 0.04 });
                     }
                     if selected {
                         cv.fill_round(RectF::new(hl.x, hl.cy() - 8.0 * s, 3.0 * s, 16.0 * s), 1.5 * s, accent, 1.0);
@@ -313,7 +322,7 @@ impl State {
                     if let Kind::Toggle(_) = it.kind {
                         let k = self.knobs.get(row.entry).copied().unwrap_or(0.0);
                         let sw = RectF::new(r.right() - 16.0 * s - 36.0 * s, r.cy() - 9.0 * s, 36.0 * s, 18.0 * s);
-                        mini_switch(cv, sw, k, fg, accent, dark, s, a);
+                        crate::look::switch(cv, sw, ui::ease_move(k), st, accent, on_color(accent), fg, a, 0.0, s);
                     }
                 }
             }
@@ -394,18 +403,6 @@ impl State {
             }
         }
     }
-}
-
-/// Interruptor pequeno (36×18) com a bolinha em `k` (0 = desligado, 1 = ligado).
-fn mini_switch(cv: &mut Canvas, r: RectF, k: f32, fg: Rgb, accent: Rgb, dark: bool, s: f32, a: f32) {
-    let rad = r.h / 2.0;
-    let on = ui::ease_move(k);
-    cv.stroke_round(r, rad, s, fg, 0.55 * (1.0 - on) * a);
-    cv.fill_round(r, rad, accent, on * a);
-    let x = r.x + rad + (r.w - 2.0 * rad) * on;
-    let knob = lerp3(fg, on_color(accent), on);
-    let _ = dark;
-    cv.fill_circle(x, r.cy(), 5.0 * s + 0.5 * s * on, knob, (0.8 + 0.2 * on) * a);
 }
 
 // ---------------------------------------------------------------- janela

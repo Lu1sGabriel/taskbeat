@@ -7,7 +7,8 @@
 //! Segoe UI Variable) e cards de "now playing" populares no Dribbble (capa
 //! desfocada como fundo, cor extraída da capa, vidro, play circular).
 
-use crate::config::{CardLayout, CardStyle, Config, OsdIcon, OsdMaterial, OsdShape, OsdSize, SecondLine, Shape, ShuffleRepeat, Size3, TaskbarPlay, ThemeMode, WidgetShape, WidgetTint};
+use crate::config::{CardLayout, CardShadow, CardStyle, Config, OsdIcon, OsdMaterial, OsdShape, OsdSize, SecondLine, Shape, ShuffleRepeat, Size3, TaskbarPlay, ThemeMode, WidgetShape, WidgetTint};
+use crate::look::{self, Style};
 use crate::render::*;
 use crate::shared::MediaInfo;
 use crate::text::*;
@@ -17,8 +18,12 @@ use std::sync::Arc;
 
 /// Margem (lógica) em volta dos cards para caber a sombra.
 pub const SHADOW_MARGIN: f32 = 26.0;
-/// Desfoque (px lógicos) do fundo acrílico do card e do "A seguir".
-pub const GLASS_BLUR: f32 = 30.0;
+/// Desfoque (px físicos) do fundo acrílico do card e do "A seguir", conforme
+/// a opção "Desfoque do acrílico" (0% = 6 px lógicos, 50% = 30 px, o de
+/// sempre, 100% = 54 px).
+pub fn glass_blur_px(cfg: &Config, s: f32) -> f32 {
+    (6.0 + cfg.glass_blur as f32 * 0.48) * s
+}
 /// Cartão "A seguir" (sem a margem da sombra), em px lógicos.
 const UPNEXT_W: f32 = 360.0;
 const UPNEXT_H: f32 = 92.0;
@@ -57,7 +62,14 @@ pub enum Hit {
     MixMute(u8),
     /// Saída de áudio no cabeçalho do mixer (abre a lista para trocar).
     MixDevice,
+    /// Botão do card que mostra e esconde a letra na tela (Windows).
+    Lyrics,
+    /// Selo do app de origem na capa do card (a dica diz o nome do app).
+    Source,
 }
+
+/// Ícone da letra (o mesmo da aba Letras e do menu da bandeja).
+const G_LYRICS: &str = "\u{E7F0}";
 
 /// Cores de um componente já resolvidas (tema + cor de destaque).
 #[derive(Clone, Copy, Debug)]
@@ -66,6 +78,8 @@ pub struct Theme {
     pub accent: Rgb,
     pub on_accent: Rgb,
     pub dark: bool,
+    /// Identidade visual e cantos (ver `look.rs`).
+    pub style: Style,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -334,6 +348,7 @@ fn play_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, playing: bool, f
 /// dos glifos finos de contorno do Segoe Fluent), no espírito dos símbolos
 /// preenchidos do macOS. Cada um vira uma máscara guardada por tamanho.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
 enum VIcon {
     Play,
     Pause,
@@ -346,6 +361,54 @@ enum VIcon {
     Vol1,
     Vol2,
     Vol3,
+    // Barrinha da sobreposição de letra (sempre em vetor: os glifos de
+    // contorno ficam ralos demais nesse tamanho).
+    Lock,
+    Unlock,
+    Expand,
+    Collapse,
+    Close,
+    /// Compactar (duas setas que se encontram) e expandir (que se afastam).
+    Fold,
+    Unfold,
+}
+
+/// Glifos (só chaves: sempre em vetor) dos botões compactar e expandir da barrinha.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const G_FOLD: &str = "\u{E92C}";
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const G_UNFOLD: &str = "\u{E92D}";
+
+/// Glifos da barrinha da letra que têm desenho em vetor próprio (fora de
+/// `vicon_of`, para não mudar o cadeado do aviso de Caps Lock).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn tool_vicon(g: &str) -> Option<VIcon> {
+    match g {
+        "\u{E72E}" => Some(VIcon::Lock),
+        "\u{E785}" => Some(VIcon::Unlock),
+        "\u{E740}" => Some(VIcon::Expand),
+        "\u{E73F}" => Some(VIcon::Collapse),
+        "\u{E711}" => Some(VIcon::Close),
+        G_FOLD => Some(VIcon::Fold),
+        G_UNFOLD => Some(VIcon::Unfold),
+        _ => vicon_of(g),
+    }
+}
+
+/// Ícone cheio e opaco (traço grosso, em vetor) quando há desenho para ele;
+/// senão o glifo da fonte. Para os botões da barrinha da letra.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn solid_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, c: Rgb, a: f32, s: f32) {
+    let Some(v) = tool_vicon(g) else { return glyph(cv, tr, r, g, font, c, a) };
+    let em = match font {
+        Font::IconSmall => 13.0,
+        Font::IconMd => 16.0,
+        Font::IconLg => 18.0,
+        _ => 15.0,
+    } * s;
+    let m = vector_mask(v, em, r.w.round().max(1.0) as i32, r.h.round().max(1.0) as i32);
+    cv.blit_mask(r.x.round() as i32, r.y.round() as i32, &m, c, a);
 }
 
 fn vicon_of(g: &str) -> Option<VIcon> {
@@ -438,7 +501,37 @@ fn vicon_shape(v: VIcon) -> Shape2 {
         parts.push(tri((-0.31 + dx, -0.13), (-0.08 + dx, -0.37), (-0.08 + dx, 0.37), 0.035));
         parts.push(tri((-0.31 + dx, -0.13), (-0.08 + dx, 0.37), (-0.31 + dx, 0.13), 0.035));
     };
+    // Cadeado: corpo cheio e a alça (aberta: levantada, com a perna da direita solta).
+    let padlock = |parts: &mut Vec<Box<dyn Fn(Pt) -> f32>>, open: bool| {
+        parts.push(Box::new(move |p| sd_box(p, (0.0, 0.17), (0.33, 0.24), 0.08)));
+        let top = if open { -0.25 } else { -0.13 };
+        let mut pts = vec![(-0.19, -0.02)];
+        pts.extend(arc_pts((0.0, top), 0.19, 180.0, 360.0, 12));
+        pts.push((0.19, if open { -0.18 } else { -0.02 }));
+        parts.push(path(pts, 0.075));
+    };
     match v {
+        VIcon::Lock => padlock(&mut parts, false),
+        VIcon::Unlock => padlock(&mut parts, true),
+        // Tela cheia: quatro cantos para fora; sair dela: os cantos para dentro.
+        VIcon::Expand | VIcon::Collapse => {
+            let (a, b) = if v == VIcon::Expand { (0.38, 0.13) } else { (0.13, 0.38) };
+            for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                parts.push(path(vec![(sx * a, sy * b), (sx * a, sy * a), (sx * b, sy * a)], 0.07));
+            }
+        }
+        VIcon::Close => {
+            parts.push(path(vec![(-0.30, -0.30), (0.30, 0.30)], 0.075));
+            parts.push(path(vec![(-0.30, 0.30), (0.30, -0.30)], 0.075));
+        }
+        // Uma linha no meio; compactar: as setas apontam para ela; expandir: para fora.
+        VIcon::Fold | VIcon::Unfold => {
+            parts.push(path(vec![(-0.38, 0.0), (0.38, 0.0)], 0.07));
+            let (tip, base) = if v == VIcon::Fold { (0.18, 0.42) } else { (0.44, 0.20) };
+            for sy in [-1.0f32, 1.0] {
+                parts.push(path(vec![(-0.22, sy * base), (0.0, sy * tip), (0.22, sy * base)], 0.07));
+            }
+        }
         VIcon::Play => parts.push(tri((-0.29, -0.38), (-0.29, 0.38), (0.39, 0.0), 0.07)),
         VIcon::Pause => {
             for cx in [-0.19, 0.19] {
@@ -500,6 +593,13 @@ type VMaskCache = std::collections::HashMap<(VIcon, u32, i32, i32), std::rc::Rc<
 
 thread_local! {
     static VMASKS: RefCell<VMaskCache> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Máscara do ícone em vetor do glifo `g` (`G_*`), se houver desenho para ele.
+/// No Linux não há fonte de ícones no sistema: o `TextRenderer` desenha assim.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn vector_icon(g: &str, em: f32, w: i32, h: i32) -> Option<std::rc::Rc<Mask>> {
+    vicon_of(g).map(|v| vector_mask(v, em, w, h))
 }
 
 /// Máscara do ícone `v` com `em` px, centrado numa caixa `w`×`h` (guardada).
@@ -564,6 +664,24 @@ fn album_bg(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Rgb {
     if card_is_dark(cfg, colors) { lerp3(readable(base, true), [0.0; 3], 0.52) } else { lerp3(base, [1.0; 3], 0.72) }
 }
 
+/// Cor de destaque escolhida ("Cor de destaque": capa, Windows ou uma cor
+/// personalizada) para um fundo escuro ou claro. A da capa e a do Windows
+/// ganham contraste; a personalizada vale como foi escolhida.
+pub fn chosen_accent(cfg: &Config, colors: &Colors, media: &MediaInfo, dark: bool) -> Rgb {
+    use crate::config::AccentSource;
+    match (cfg.accent_source, &media.art) {
+        (AccentSource::Album, Some(a)) => readable(a.vibrant, dark),
+        (AccentSource::Custom, _) => crate::config::parse_hex(&cfg.accent_rgb).unwrap_or(colors.accent),
+        _ => {
+            if dark {
+                colors.accent_light
+            } else {
+                colors.accent
+            }
+        }
+    }
+}
+
 /// Cores do card expandido / "A seguir" / aviso de teclas.
 pub fn card_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     let has_art = media.art.is_some();
@@ -574,19 +692,10 @@ pub fn card_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     let fg = if dark { [1.0; 3] } else { [0.08, 0.08, 0.09] };
     if cfg.card_style == CardStyle::AlbumColor {
         let bg = album_bg(cfg, colors, media);
-        return Theme { fg, accent: fg, on_accent: readable(bg, !dark), dark };
+        return Theme { fg, accent: fg, on_accent: readable(bg, !dark), dark, style: Style::of(cfg) };
     }
-    let accent = match (cfg.accent_source, &media.art) {
-        (crate::config::AccentSource::Album, Some(a)) => readable(a.vibrant, dark),
-        _ => {
-            if dark {
-                colors.accent_light
-            } else {
-                colors.accent
-            }
-        }
-    };
-    Theme { fg, accent, on_accent: on_color(accent), dark }
+    let accent = chosen_accent(cfg, colors, media, dark);
+    Theme { fg, accent, on_accent: on_color(accent), dark, style: Style::of(cfg) }
 }
 
 /// Cores do widget na barra. O texto segue o fundo de verdade (a barra com o
@@ -595,17 +704,8 @@ pub fn card_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
 pub fn widget_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
     let dark = luma(widget_bg_mean(cfg, colors, media)) < 0.47;
     let fg = if dark { [1.0; 3] } else { [0.10, 0.10, 0.10] };
-    let accent = match (cfg.accent_source, &media.art) {
-        (crate::config::AccentSource::Album, Some(a)) => readable(a.vibrant, dark),
-        _ => {
-            if dark {
-                colors.accent_light
-            } else {
-                colors.accent
-            }
-        }
-    };
-    Theme { fg, accent, on_accent: on_color(accent), dark }
+    let accent = chosen_accent(cfg, colors, media, dark);
+    Theme { fg, accent, on_accent: on_color(accent), dark, style: Style::of(cfg) }
 }
 
 /// Cores dos controles (aleatório, anterior, play, próximo, repetir) conforme
@@ -613,7 +713,7 @@ pub fn widget_theme(cfg: &Config, colors: &Colors, media: &MediaInfo) -> Theme {
 /// preenchido e os botões ligados; `on_accent`: o ícone sobre o play.
 pub fn controls_theme(choice: crate::config::ControlColor, custom: &str, th: &Theme, m: &MediaInfo) -> Theme {
     use crate::config::ControlColor;
-    let one = |c: Rgb| Theme { fg: c, accent: c, on_accent: on_color(c), dark: th.dark };
+    let one = |c: Rgb| Theme { fg: c, accent: c, on_accent: on_color(c), dark: th.dark, style: th.style };
     match choice {
         // Branco no fundo escuro; no fundo claro (barra clara, gradiente pastel)
         // fica escuro, senão some.
@@ -635,6 +735,7 @@ struct Sides {
     a: f32,
     it: Interact,
     s: f32,
+    st: Style,
 }
 
 impl Sides {
@@ -649,7 +750,7 @@ impl Sides {
         };
         // Sobre fundo claro, o branco do play fica escuro (como o próprio play).
         let c = if !th.dark && luma(c) > 0.85 { th.fg } else { c };
-        Sides { c, a: (alpha as f32 / 100.0).clamp(0.2, 1.0), it, s }
+        Sides { c, a: (alpha as f32 / 100.0).clamp(0.2, 1.0), it, s, st: th.style }
     }
 
     fn draw(&self, cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, font: Font, h: Hit) {
@@ -660,7 +761,11 @@ impl Sides {
     fn toggle(&self, cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: &str, on: bool, h: Hit) {
         self.draw(cv, tr, r, g, Font::IconSmall, h);
         if on {
-            cv.fill_circle(r.cx(), r.bottom() - 5.0 * self.s, 1.7 * self.s, self.c, self.a);
+            // Numa barra fina o botão é baixo: o pontinho desce até sair de
+            // baixo do ícone (sem passar da borda do fundo).
+            let s = self.s;
+            let y = (r.bottom() - 5.0 * s).max(r.cy() + 8.0 * s).min(r.bottom() - 2.0 * s);
+            on_mark(cv, r.cx(), y, self.c, self.a, self.st, s);
         }
     }
 }
@@ -946,6 +1051,9 @@ pub(crate) fn marquee(cv: &mut Canvas, tr: &mut TextRenderer, t: &str, font: Fon
 
 pub(crate) fn hover_bg(cv: &mut Canvas, r: RectF, radius: f32, th: &Theme, pressed: bool) {
     let a = if pressed { 0.06 } else if th.dark { 0.10 } else { 0.07 };
+    // Pedido redondo (raio = metade do lado): segue o nível de cantos.
+    let side = r.w.min(r.h);
+    let radius = if radius >= side * 0.5 - 0.5 { th.style.round_btn(side) } else { th.style.scale(radius) };
     cv.fill_round(r, radius, th.fg, a);
 }
 
@@ -972,10 +1080,24 @@ fn source_badge(cv: &mut Canvas, art: RectF, icon: &Image, size: f32, th: &Theme
     cv.draw_image(RectF::new(cx - k / 2.0, cy - k / 2.0, k, k), icon, k * 0.22, alpha);
 }
 
+/// Selo do app no canto da capa do card e do "A seguir": o mesmo da barra,
+/// mas com um anel escuro em volta no lugar do recorte (lá o vão mostra a
+/// barra; aqui furaria o fundo do card).
+fn card_badge(cv: &mut Canvas, b: RectF, media: &MediaInfo, th: &Theme, s: f32) {
+    let Some(icon) = &media.icon else { return };
+    let (cx, cy, r) = (b.cx(), b.cy(), b.w / 2.0);
+    cv.fill_circle(cx, cy, r + 2.0 * s, [0.0; 3], 0.42);
+    let base: Rgb = if th.dark { [0.16, 0.16, 0.17] } else { [0.98, 0.98, 0.985] };
+    cv.fill_circle(cx, cy, r, base, 1.0);
+    cv.stroke_round(b, r, (0.8 * s).max(0.8), th.fg, 0.12);
+    let k = b.w * 0.74;
+    cv.draw_image(RectF::new(cx - k / 2.0, cy - k / 2.0, k, k), icon, k * 0.22, 1.0);
+}
+
 pub fn draw_art_a(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, media: &MediaInfo, th: &Theme, shape: Shape, s: f32, source: Option<f32>, alpha: f32) {
     let badge = source.unwrap_or(0.0);
     let icon = if source.is_some() { &media.icon } else { &None };
-    let radius = cover_radius(shape, r.w, s);
+    let radius = cover_radius(shape, r.w, s, th.style);
     match (&media.art, icon) {
         (Some(a), icon) => {
             cv.draw_image_cover(r, a, radius, alpha);
@@ -1026,11 +1148,24 @@ pub(crate) fn play_button(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, size
     let b = RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k);
     let radius = match shape {
         Shape::Circle => k / 2.0,
-        Shape::Rounded => 8.0 * s,
-        Shape::Square => 4.0 * s,
+        Shape::Rounded => th.style.scale(8.0 * s),
+        Shape::Square => 4.0 * s * th.style.scale(1.0).min(1.0),
     };
     let en = if enabled { 1.0 } else { 0.35 };
-    if it.glow {
+    if th.style.look == crate::config::Look::Estudio {
+        // Estúdio: liso, sem brilho nem sombra; uma linha fina em volta.
+        cv.fill_round(b, radius, if hot { lerp3(th.accent, [1.0; 3], 0.08) } else { th.accent }, en);
+        cv.stroke_round(b, radius, s, if luma(th.accent) > 0.6 { [0.0; 3] } else { [1.0; 3] }, 0.14 * en);
+    } else if th.style.look == crate::config::Look::Ilha {
+        // Ilha: botão claro com sombra macia (sem brilho colorido) e reflexo no alto.
+        if enabled {
+            cv.drop_shadow(b, radius, 10.0 * s, 3.0 * s, if th.dark { 0.34 } else { 0.16 });
+        }
+        let (top, bot) = (lerp3(th.accent, [1.0; 3], 0.22), th.accent);
+        let (y0, h) = (b.y, b.h);
+        cv.fill_rrect_ca(b.x, b.y, b.right(), b.bottom(), radius, |_, y| (lerp3(top, bot, ((y - y0) / h).clamp(0.0, 1.0).sqrt()), en));
+        cv.stroke_round(b, radius, s, [1.0; 3], 0.32 * en);
+    } else if it.glow {
         // Windows: brilho suave na cor do botão por baixo dele e um degradê
         // discreto (mais claro em cima), como um botão com volume.
         if enabled {
@@ -1060,26 +1195,82 @@ pub(crate) fn toggle_glyph(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, g: 
     let a = if !enabled { 0.3 } else if on { 1.0 } else { 0.8 };
     ctrl_glyph(cv, tr, r, g, Font::IconSmall, c, a, it, h, s);
     if on && enabled {
-        cv.fill_circle(r.cx(), r.bottom() - 5.0 * s, 1.7 * s, th.accent, 1.0);
+        on_mark(cv, r.cx(), r.bottom() - 5.0 * s, th.accent, 1.0, th.style, s);
+    }
+}
+
+/// Marca de "ligado" embaixo do aleatório e do repetir: pontinho, ou um
+/// risquinho no Estúdio.
+fn on_mark(cv: &mut Canvas, cx: f32, cy: f32, c: Rgb, a: f32, st: Style, s: f32) {
+    if st.look == crate::config::Look::Estudio {
+        cv.fill_rrect(cx - 4.0 * s, cy - 0.9 * s, cx + 4.0 * s, cy + 0.9 * s, 0.5 * s, a, c);
+    } else {
+        cv.fill_circle(cx, cy, 1.7 * s, c, a);
     }
 }
 
 pub(crate) fn slider(cv: &mut Canvas, x0: f32, x1: f32, cy: f32, t: f32, th: &Theme, hot: bool, thumb: bool, s: f32) {
-    // Engrossa sob o mouse; a parte cheia tem um brilho suave da própria cor.
-    let h = if hot { 6.0 * s } else { 4.0 * s };
-    cv.fill_rrect(x0, cy - h / 2.0, x1, cy + h / 2.0, h / 2.0, if th.dark { 0.22 } else { 0.16 }, th.fg);
+    use crate::config::{Corners, Look};
+    let st = th.style;
     let xv = x0 + (x1 - x0) * t.clamp(0.0, 1.0);
-    if xv > x0 + 0.5 {
-        let bar = RectF::new(x0, cy - h / 2.0, xv - x0, h);
-        cv.glow(bar, h / 2.0, 7.0 * s, 0.0, th.accent, if th.dark { 0.30 } else { 0.18 });
-        let (a, b) = (lerp3(th.accent, th.fg, 0.10), th.accent);
-        cv.fill_rrect_ca(bar.x, bar.y, bar.right(), bar.bottom(), h / 2.0, |x, _| (lerp3(a, b, ((x - x0) / (xv - x0).max(1.0)).clamp(0.0, 1.0)), 1.0));
-    }
-    if thumb {
-        let ring = if th.dark { [0.24, 0.24, 0.25] } else { [1.0; 3] };
-        cv.drop_shadow(RectF::new(xv - 8.0 * s, cy - 8.0 * s, 16.0 * s, 16.0 * s), 8.0 * s, 4.0 * s, 1.0 * s, 0.25);
-        cv.fill_circle(xv, cy, 8.5 * s, ring, 1.0);
-        cv.fill_circle(xv, cy, if hot { 5.2 * s } else { 4.2 * s }, th.accent, 1.0);
+    match st.look {
+        Look::Estudio => {
+            // Fader: linha fina, parte cheia em degradê e o botão retangular com risco.
+            let h = if hot { 3.0 * s } else { 2.0 * s };
+            cv.fill_rrect(x0, cy - h / 2.0, x1, cy + h / 2.0, 0.0, if th.dark { 0.24 } else { 0.18 }, th.fg);
+            if xv > x0 + 0.5 {
+                look::fill_accent(cv, RectF::new(x0, cy - h / 2.0, xv - x0, h), 0.0, st, th.accent, 1.0);
+            }
+            if thumb {
+                let k = RectF::new(xv - 4.5 * s, cy - 9.0 * s, 9.0 * s, 18.0 * s);
+                cv.drop_shadow(k, 2.0 * s, 4.0 * s, 1.0 * s, 0.35);
+                cv.fill_round(k, 2.0 * s, if th.dark { [1.0; 3] } else { [0.98; 3] }, 1.0);
+                cv.fill_rrect(k.x + 2.0 * s, cy - 0.5 * s, k.right() - 2.0 * s, cy + 0.5 * s, 0.0, 0.85, [0.06, 0.06, 0.08]);
+            }
+        }
+        Look::Ilha => {
+            // Trilho mais grosso, cheio na cor lisa, botão branco com sombra macia.
+            let h = if hot { 7.0 * s } else { 6.0 * s };
+            let tr_r = st.r(2.0, h, s);
+            cv.fill_rrect(x0, cy - h / 2.0, x1, cy + h / 2.0, tr_r, if th.dark { 0.22 } else { 0.15 }, th.fg);
+            if xv > x0 + 0.5 {
+                cv.fill_rrect(x0, cy - h / 2.0, xv.max(x0 + h), cy + h / 2.0, tr_r, 1.0, th.accent);
+            }
+            if thumb {
+                let k = if st.round == Corners::Large { RectF::new(xv - 9.0 * s, cy - 9.0 * s, 18.0 * s, 18.0 * s) } else { RectF::new(xv - 7.0 * s, cy - 9.5 * s, 14.0 * s, 19.0 * s) };
+                let kr = st.r(4.0, k.w, s);
+                cv.drop_shadow(k, kr, 6.0 * s, 1.5 * s, if th.dark { 0.42 } else { 0.22 });
+                cv.fill_round(k, kr, [1.0; 3], 1.0);
+                cv.stroke_round(k, kr, s, [0.0; 3], 0.08);
+            }
+        }
+        Look::Palco => {
+            // Engrossa sob o mouse; a parte cheia tem um brilho suave da própria cor.
+            let h = if hot { 6.0 * s } else { 4.0 * s };
+            let tr_r = if st.round == Corners::Small { 1.5 * s } else { h / 2.0 };
+            cv.fill_rrect(x0, cy - h / 2.0, x1, cy + h / 2.0, tr_r, if th.dark { 0.22 } else { 0.16 }, th.fg);
+            if xv > x0 + 0.5 {
+                let bar = RectF::new(x0, cy - h / 2.0, xv - x0, h);
+                cv.glow(bar, tr_r, 7.0 * s, 0.0, th.accent, if th.dark { 0.30 } else { 0.18 });
+                let (a, b) = (lerp3(th.accent, th.fg, 0.10), th.accent);
+                cv.fill_rrect_ca(bar.x, bar.y, bar.right(), bar.bottom(), tr_r, |x, _| (lerp3(a, b, ((x - x0) / (xv - x0).max(1.0)).clamp(0.0, 1.0)), 1.0));
+            }
+            if thumb {
+                let ring = if th.dark { [0.24, 0.24, 0.25] } else { [1.0; 3] };
+                if st.round == Corners::Small {
+                    // Cantos "Menos": botão retangular com a cor no meio.
+                    let k = RectF::new(xv - 7.0 * s, cy - 9.0 * s, 14.0 * s, 18.0 * s);
+                    cv.drop_shadow(k, 4.0 * s, 4.0 * s, 1.0 * s, 0.25);
+                    cv.fill_round(k, 4.0 * s, ring, 1.0);
+                    let d = if hot { 5.5 * s } else { 4.5 * s };
+                    cv.fill_round(RectF::new(xv - d / 2.0, cy - d, d, 2.0 * d), 1.5 * s, th.accent, 1.0);
+                } else {
+                    cv.drop_shadow(RectF::new(xv - 8.0 * s, cy - 8.0 * s, 16.0 * s, 16.0 * s), 8.0 * s, 4.0 * s, 1.0 * s, 0.25);
+                    cv.fill_circle(xv, cy, 8.5 * s, ring, 1.0);
+                    cv.fill_circle(xv, cy, if hot { 5.2 * s } else { 4.2 * s }, th.accent, 1.0);
+                }
+            }
+        }
     }
 }
 
@@ -1136,10 +1327,10 @@ pub struct WLayout {
 }
 
 /// Raio dos cantos da capa em cada formato (o mesmo de `draw_art`).
-fn cover_radius(shape: Shape, side: f32, s: f32) -> f32 {
+fn cover_radius(shape: Shape, side: f32, s: f32, st: Style) -> f32 {
     match shape {
         Shape::Circle => side / 2.0,
-        Shape::Rounded => (side * 0.16).max(3.0 * s),
+        Shape::Rounded => (side * st.cover()).max(st.scale(3.0 * s)),
         Shape::Square => 2.0 * s,
     }
 }
@@ -1160,6 +1351,18 @@ fn pill_lead(bh: f32, art: f32, rc: f32, s: f32) -> f32 {
     (r - rc - (room * room - dy * dy).sqrt()).max(centered)
 }
 
+/// Aleatório e repetir na barra: com a opção ligada, cada um aparece sempre ou
+/// só quando o player deixa mudar, conforme a mesma escolha do card ("Sempre" /
+/// "Quando o player permite"). Antes a barra mostrava os dois sempre, até
+/// num vídeo do YouTube, que não tem nenhum dos dois.
+pub fn bar_toggles(cfg: &Config, m: &MediaInfo) -> (bool, bool) {
+    if !cfg.taskbar_shuffle_repeat {
+        return (false, false);
+    }
+    let always = cfg.card_shuffle_repeat == ShuffleRepeat::Always;
+    (always || m.can_shuffle, always || m.can_repeat)
+}
+
 impl WLayout {
     /// Sem atalhos dentro do widget (capturas e testes).
     #[cfg(test)]
@@ -1167,12 +1370,21 @@ impl WLayout {
         Self::build_with(s, h, cfg, panel, viz, 0)
     }
 
-    /// Como `build`, com `launchers` atalhos de apps de música dentro do widget.
+    /// Como `build`, com `launchers` atalhos de apps de música dentro do widget
+    /// (aleatório e repetir conforme a opção, sem olhar o player: capturas).
+    #[cfg(test)]
     pub fn build_with(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool, launchers: usize) -> Self {
+        let sr = cfg.taskbar_shuffle_repeat;
+        Self::build_for(s, h, cfg, panel, viz, launchers, (sr, sr))
+    }
+
+    /// Como `build_with`, com o aleatório e o repetir à vista ou não
+    /// (`toggles`, ver `bar_toggles`).
+    pub fn build_for(s: f32, h: f32, cfg: &Config, panel: bool, viz: bool, launchers: usize, toggles: (bool, bool)) -> Self {
         let mut l = WLayout::default();
         let (top, bh) = (3.0 * s, h - 6.0 * s);
         l.radius = match cfg.widget_shape {
-            WidgetShape::Rounded => 6.0 * s,
+            WidgetShape::Rounded => Style::of(cfg).scale(6.0 * s),
             WidgetShape::Pill => bh / 2.0,
             WidgetShape::Square => 2.0 * s,
         };
@@ -1191,7 +1403,7 @@ impl WLayout {
         // Na pílula a capa fica dentro da ponta arredondada: os cantos dela não
         // podem passar da curva (com a capa quadrada ou de cantos pequenos,
         // centralizar no círculo da ponta deixava o canto para fora).
-        let lead = if pill { pill_lead(bh, art, cover_radius(cfg.cover_shape, art, s), s) } else { 7.0 * s };
+        let lead = if pill { pill_lead(bh, art, cover_radius(cfg.cover_shape, art, s, Style::of(cfg)), s) } else { 7.0 * s };
         if panel {
             l.art = Some(RectF::new(x + lead, (h - art) * 0.5, art, art));
             let tx = x + lead + art + 10.0 * s;
@@ -1215,13 +1427,13 @@ impl WLayout {
                     x += w;
                     Some(r)
                 };
-                if cfg.taskbar_shuffle_repeat {
+                if toggles.0 {
                     l.shuffle = slot(btn);
                 }
                 l.prev = slot(btn);
                 l.play = slot(32.0 * s);
                 l.next = slot(btn);
-                if cfg.taskbar_shuffle_repeat {
+                if toggles.1 {
                     l.repeat = slot(btn);
                 }
                 x += 2.0 * s;
@@ -1303,12 +1515,40 @@ pub struct WidgetFrame<'a> {
 }
 
 /// Fontes do título e da segunda linha do widget, e a altura de cada linha.
-fn widget_fonts(cfg: &Config, s: f32) -> (Font, Font, f32) {
-    match cfg.text_size {
+fn fonts_of(size: Size3, s: f32) -> (Font, Font, f32) {
+    match size {
         Size3::Small => (Font::TitleSm, Font::SubtitleSm, (15.5 * s).round()),
         Size3::Normal => (Font::Title, Font::Subtitle, (17.0 * s).round()),
         Size3::Large => (Font::TitleLg, Font::SubtitleLg, (19.0 * s).round()),
     }
+}
+
+/// Letras do widget numa área de texto de altura `h`, e se cabem duas linhas.
+/// Primeiro o tamanho escolhido; se as duas linhas não couberem (barra fina,
+/// como a do Windows 10), um tamanho menor; se nem assim, só o título numa
+/// linha. As linhas têm folga própria: duas cabem até 2 px além da área.
+fn widget_fit(cfg: &Config, h: f32, s: f32) -> (Font, Font, f32, bool) {
+    let sizes: &[Size3] = match cfg.text_size {
+        Size3::Large => &[Size3::Large, Size3::Normal, Size3::Small],
+        Size3::Normal => &[Size3::Normal, Size3::Small],
+        Size3::Small => &[Size3::Small],
+    };
+    for &z in sizes {
+        let (ft, fs, line) = fonts_of(z, s);
+        if 2.0 * line <= h + 2.0 * s {
+            return (ft, fs, line, true);
+        }
+    }
+    let (ft, fs, line) = sizes.iter().map(|&z| fonts_of(z, s)).find(|f| f.2 <= h).unwrap_or(fonts_of(Size3::Small, s));
+    (ft, fs, line, false)
+}
+
+/// Lado do círculo do play na barra, se ele cabe: numa barra fina o círculo
+/// ficava menor que o próprio ícone (só se via o ícone escuro, que é feito
+/// para ficar sobre a cor do círculo); aí o play vira só o ícone.
+fn filled_play(cfg: &Config, r: RectF, s: f32) -> Option<f32> {
+    let size = (24.0 * s).min(r.h - 6.0 * s);
+    (cfg.taskbar_play == TaskbarPlay::Filled && size >= 18.0 * s).then_some(size)
 }
 
 /// Texto da segunda linha do widget, conforme a opção.
@@ -1346,8 +1586,8 @@ fn widget_text(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, m: &MediaInfo, 
     } else {
         m.title.clone()
     };
-    let sub = widget_second_line(m, cfg, f.pb.pos);
-    let (ft, fs, line) = widget_fonts(cfg, s);
+    let (ft, fs, line, two) = widget_fit(cfg, r.h, s);
+    let sub = if two { widget_second_line(m, cfg, f.pb.pos) } else { String::new() };
     let scroll = cfg.marquee && f.pb.playing;
     if sub.is_empty() {
         let rr = RectF::new(r.x, (r.y + (r.h - line) / 2.0).round(), r.w, line);
@@ -1368,6 +1608,7 @@ fn widget_tint(cfg: &Config, colors: &Colors, m: &MediaInfo) -> Rgb {
         WidgetTint::Album | WidgetTint::Gradient | WidgetTint::Artwork => album.unwrap_or(taskbar_accent(colors)),
         WidgetTint::Accent => match (cfg.accent_source, album) {
             (crate::config::AccentSource::Album, Some(c)) => c,
+            (crate::config::AccentSource::Custom, _) => crate::config::parse_hex(&cfg.accent_rgb).unwrap_or_else(|| taskbar_accent(colors)),
             _ => taskbar_accent(colors),
         },
     }
@@ -1391,7 +1632,8 @@ fn rich_widget_bg(cv: &mut Canvas, l: &WLayout, f: &WidgetFrame, m: &MediaInfo, 
         rect_bits(bg),
         l.radius.to_bits(),
         (glow_at.0.to_bits(), glow_at.1.to_bits()),
-        (cfg.widget_intensity, cfg.widget_glow, light),
+        (cfg.widget_intensity, cfg.widget_glow, cfg.widget_border, light),
+        Style::of(cfg),
     ));
     let radius = l.radius;
     cached_layer(cv, LayerTag::Widget, key, alpha, |cv| {
@@ -1433,12 +1675,49 @@ fn rich_widget_bg(cv: &mut Canvas, l: &WLayout, f: &WidgetFrame, m: &MediaInfo, 
                 });
             }
         }
-        // Brilho fino no topo e contorno (elevação do Fluent).
-        cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |_, y| ([1.0; 3], if y < bg.y + 1.5 * s { 0.10 * a } else { 0.0 }));
-        if cfg.widget_border {
-            cv.stroke_round(bg, radius, s, if light { [0.0; 3] } else { [1.0; 3] }, if light { 0.10 } else { 0.12 });
+        // Brilho fino no topo e contorno (elevação do Fluent), no jeito do visual.
+        let st = Style::of(cfg);
+        match st.look {
+            crate::config::Look::Palco => {
+                cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |_, y| ([1.0; 3], if y < bg.y + 1.5 * s { 0.10 * a } else { 0.0 }));
+                if cfg.widget_border {
+                    cv.stroke_round(bg, radius, s, if light { [0.0; 3] } else { [1.0; 3] }, if light { 0.10 } else { 0.12 });
+                }
+            }
+            _ => widget_finish(cv, bg, radius, st, cfg.widget_border, !light, if light { [0.0; 3] } else { [1.0; 3] }, a, s),
         }
     });
+}
+
+/// Acabamento do fundo do widget: reflexo fino e contorno (Palco), linha fina
+/// e película grafite (Estúdio) ou vidro fosco (Ilha).
+#[allow(clippy::too_many_arguments)]
+fn widget_finish(cv: &mut Canvas, bg: RectF, radius: f32, st: Style, border: bool, dark: bool, fg: Rgb, a: f32, s: f32) {
+    let y0 = bg.y;
+    match st.look {
+        crate::config::Look::Palco => {
+            if border {
+                cv.stroke_round(bg, radius, s, fg, if dark { 0.08 } else { 0.10 });
+            }
+            cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |_, y| ([1.0; 3], if y < y0 + 1.5 * s { 0.05 } else { 0.0 }));
+        }
+        crate::config::Look::Estudio => {
+            look::graphite(cv, bg, radius, dark, 0.34 * a);
+            if border {
+                cv.stroke_round(bg, radius, s, fg, if dark { 0.13 } else { 0.14 });
+            }
+        }
+        crate::config::Look::Ilha => {
+            let h = bg.h.max(1.0);
+            cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), radius, |_, y| {
+                let t = ((y - y0) / (h * 0.55)).clamp(0.0, 1.0);
+                ([1.0; 3], (if dark { 0.16 } else { 0.26 }) * a * (1.0 - t) * (1.0 - t))
+            });
+            if border {
+                cv.stroke_round(bg, radius, s, [1.0; 3], (if dark { 0.28 } else { 0.60 }) * a.max(0.5));
+            }
+        }
+    }
 }
 
 pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &WidgetFrame) {
@@ -1461,11 +1740,7 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         } else {
             let a = cfg.widget_opacity as f32 / 100.0 + if f.flyout_open { 0.04 } else { 0.0 };
             cv.fill_round(bg, l.radius, widget_tint(cfg, f.colors, m), a.min(1.0));
-            if cfg.widget_border {
-                cv.stroke_round(bg, l.radius, s, th.fg, if th.dark { 0.08 } else { 0.10 });
-            }
-            // Brilho fino no topo (elevação do Fluent).
-            cv.fill_rrect_ca(bg.x, bg.y, bg.right(), bg.bottom(), l.radius, |_, y| ([1.0; 3], if y < bg.y + 1.5 * s { 0.05 } else { 0.0 }));
+            widget_finish(cv, bg, l.radius, th.style, cfg.widget_border, th.dark, th.fg, 1.0, s);
         }
     }
     // Hover dentro do fundo: a área da música e cada botão têm o próprio destaque.
@@ -1478,7 +1753,7 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         }
     }
     for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::Play] {
-        if h == Hit::Play && cfg.taskbar_play == TaskbarPlay::Filled {
+        if h == Hit::Play && l.play.is_some_and(|r| filled_play(cfg, r, s).is_some()) {
             continue;
         }
         if f.it.hover == Some(h) {
@@ -1556,9 +1831,12 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         side.draw(cv, tr, r, G_PREV, Font::IconSmall, Hit::Prev);
     }
     if let Some(r) = l.play {
-        match cfg.taskbar_play {
-            TaskbarPlay::Filled => play_button(cv, tr, r, (24.0 * s).min(r.h - 6.0 * s), f.cfg.play_shape, &ct, &it, f.pb.playing, m.can_toggle, s),
-            TaskbarPlay::Icon => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, ct.fg, dim(m.can_toggle), &it, s),
+        match filled_play(cfg, r, s) {
+            Some(size) => play_button(cv, tr, r, size, f.cfg.play_shape, &ct, &it, f.pb.playing, m.can_toggle, s),
+            // Só o ícone (opção, ou barra fina sem lugar para o círculo): na
+            // barra fina, na cor dos botões do lado, do tamanho deles.
+            None if cfg.taskbar_play == TaskbarPlay::Filled => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, side.c, dim(m.can_toggle), &it, s),
+            None => play_glyph(cv, tr, r, f.pb.playing, Font::Icon, ct.fg, dim(m.can_toggle), &it, s),
         }
     }
     if let Some(r) = l.next {
@@ -1584,7 +1862,7 @@ pub fn draw_widget(cv: &mut Canvas, tr: &mut TextRenderer, l: &WLayout, f: &Widg
         launcher_icon(cv, tr, RectF::new(r.cx() - k / 2.0, r.cy() - k / 2.0, k, k), app, th, 1.0);
     }
     if let (Some(r), Some((values, peaks))) = (l.viz, f.viz) {
-        draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s });
+        draw(cv, r, &Frame { style: cfg.style, values, peaks, show_peaks: cfg.show_peaks, colors: f.colors, scale: s, square: cfg.bar_shape == crate::config::BarShape::Square });
     }
 }
 
@@ -1598,7 +1876,8 @@ pub struct CLayout {
     pub card: RectF,
     pub radius: f32,
     pub art: RectF,
-    pub chip: RectF,
+    /// Selo do app de origem no canto da capa ("App de origem").
+    pub source: Option<RectF>,
     pub title: RectF,
     pub artist: RectF,
     pub shuffle: RectF,
@@ -1632,13 +1911,30 @@ pub struct CLayout {
     /// Quanto a lista do mixer rola no máximo (px lógicos) e quanto rolou (px).
     pub mixer_scroll_max: f32,
     pub mixer_scroll: f32,
+    /// Tempos (decorrido e restante) embaixo do progresso.
+    pub times: bool,
+    /// Botão que mostra e esconde a letra na tela (ponta direita da linha do volume).
+    pub lyrics: Option<RectF>,
+    /// Título e artista centralizados sobre os botões, em vez de encostados
+    /// à esquerda (o player da sobreposição da letra).
+    pub center_text: bool,
 }
+
+/// Largura do card aberto na horizontal (px lógicos).
+pub const CARD_W: f32 = 372.0;
 
 impl CLayout {
     pub fn build(s: f32, cfg: &Config, has_seek: bool) -> Self {
+        Self::build_w(s, cfg, has_seek, None)
+    }
+
+    /// Como `build`, com outra largura (px, no mínimo `CARD_W`) no card
+    /// horizontal: o progresso e o volume esticam; os botões ficam com o
+    /// tamanho de sempre, no meio da coluna do título (o player da letra).
+    pub fn build_w(s: f32, cfg: &Config, has_seek: bool, width: Option<f32>) -> Self {
         let m = SHADOW_MARGIN * s;
         let pad = 16.0 * s;
-        let mut l = CLayout { radius: cfg.corners.radius() * s, vertical: cfg.card_layout == CardLayout::Vertical, ..Default::default() };
+        let mut l = CLayout { radius: Style::of(cfg).card_radius() * s, vertical: cfg.card_layout == CardLayout::Vertical, times: true, ..Default::default() };
         let seek = has_seek && cfg.card_seek;
         // Cinco botões com os ícones das pontas alinhados às bordas da coluna
         // (aleatório começa onde o título começa; repetir termina onde ele termina).
@@ -1650,18 +1946,20 @@ impl CLayout {
         };
         let (cw, mut y);
         if !l.vertical {
-            cw = 372.0 * s;
+            cw = width.map_or(CARD_W * s, |w| w.max(CARD_W * s));
             let art = 112.0 * s;
             l.art = RectF::new(m + pad, m + pad, art, art);
             let tx = l.art.right() + 18.0 * s;
             let tw = m + cw - pad - tx;
-            l.chip = RectF::new(tx, m + pad, tw, 22.0 * s);
             let by = l.art.bottom() - 40.0 * s;
-            (l.shuffle, l.prev, l.play, l.next, l.repeat) = row(tx, tx + tw, by, 40.0 * s, 9.0 * s);
+            // Mais largo que o normal: a fileira fica do tamanho de sempre, no meio da coluna.
+            let rw = tw.min(m + CARD_W * s - pad - tx);
+            let rx = tx + (tw - rw) / 2.0;
+            (l.shuffle, l.prev, l.play, l.next, l.repeat) = row(rx, rx + rw, by, 40.0 * s, 9.0 * s);
             l.play_size = 38.0 * s;
-            // Título e artista ficam centralizados entre o topo da capa (ou o nome
-            // do app) e os botões; `draw_card` desce um pouco se houver álbum.
-            let top = if cfg.show_source { l.chip.bottom() + 4.0 * s } else { l.art.y };
+            // Título e artista ficam centralizados entre o topo da capa e os
+            // botões; `draw_card` sobe um pouco se houver álbum.
+            let top = l.art.y;
             let ty = top + ((by - top) - 43.0 * s) / 2.0;
             l.title = RectF::new(tx, ty.round(), tw, 24.0 * s);
             l.artist = RectF::new(tx, (ty + 24.0 * s).round(), tw, 19.0 * s);
@@ -1670,7 +1968,6 @@ impl CLayout {
             cw = 304.0 * s;
             let art = cw - 2.0 * pad;
             l.art = RectF::new(m + pad, m + pad, art, art);
-            l.chip = RectF::new(l.art.x + 10.0 * s, l.art.y + 10.0 * s, art - 20.0 * s, 24.0 * s);
             l.title = RectF::new(m + pad, l.art.bottom() + 14.0 * s, art, 26.0 * s);
             l.artist = RectF::new(m + pad, l.art.bottom() + 40.0 * s, art, 19.0 * s);
             let by = l.art.bottom() + 66.0 * s;
@@ -1678,16 +1975,32 @@ impl CLayout {
             l.play_size = 46.0 * s;
             y = by + 46.0 * s + 12.0 * s;
         }
+        // Selo do app no canto de baixo da capa, como o da barra (um pouco
+        // para fora dela, com um anel em volta).
+        if cfg.show_source {
+            let k = (if l.vertical { 32.0 } else { 24.0 } * s).round();
+            let (cx, cy) = (l.art.right() - k * 0.22, l.art.bottom() - k * 0.22);
+            l.source = Some(RectF::new(cx - k / 2.0, cy - k / 2.0, k, k));
+        }
         // Progresso e volume com os trilhos nas mesmas bordas (as da capa e do texto).
         if seek {
             l.seek = Some(RectF::new(m + pad, y, cw - 2.0 * pad, 30.0 * s));
             y += 34.0 * s;
         }
-        if cfg.show_volume {
-            let b = RectF::new(m + pad - 8.0 * s, y, 32.0 * s, 32.0 * s);
-            l.vol_btn = Some(b);
-            let vx = m + pad + 26.0 * s;
-            l.vol = Some(RectF::new(vx, y, m + cw - pad - vx, 32.0 * s));
+        // Botão da letra na ponta direita da linha do volume, espelhando o do
+        // volume na esquerda (o slider encolhe); sem o volume, a linha fica só com ele.
+        let lyrics = cfg.lyrics.card_button;
+        if cfg.show_volume || lyrics {
+            if lyrics {
+                l.lyrics = Some(RectF::new(m + cw - pad - 24.0 * s, y, 32.0 * s, 32.0 * s));
+            }
+            if cfg.show_volume {
+                let b = RectF::new(m + pad - 8.0 * s, y, 32.0 * s, 32.0 * s);
+                l.vol_btn = Some(b);
+                let vx = m + pad + 26.0 * s;
+                let right = m + cw - pad - if lyrics { 30.0 * s } else { 0.0 };
+                l.vol = Some(RectF::new(vx, y, right - vx, 32.0 * s));
+            }
             y += 36.0 * s;
         }
         let ch = y + 8.0 * s - m;
@@ -1787,6 +2100,8 @@ impl CLayout {
             (self.seek, Hit::Seek),
             (self.vol_btn, Hit::VolBtn),
             (self.vol, Hit::Vol),
+            (self.lyrics, Hit::Lyrics),
+            (self.source, Hit::Source),
         ];
         if let Some(h) = all.iter().find(|(r, _)| r.is_some_and(|r| r.contains(x, y))).map(|(_, h)| *h) {
             return Some(h);
@@ -1809,6 +2124,12 @@ pub fn card_background(cv: &mut Canvas, card: RectF, radius: f32, cfg: &Config, 
     card_bg(cv, &BgSpec { card, radius, cfg, colors, media, th, s, backdrop }, None);
 }
 
+/// Opções de design que mudam o fundo do card e do "A seguir" (entram na
+/// chave das camadas guardadas; o desfoque já vem no `id` do fundo acrílico).
+fn card_look(cfg: &Config) -> (u8, bool, i32, i32, Style) {
+    (cfg.card_shadow as u8, cfg.card_grain, cfg.glass_tint, cfg.artwork_dim, Style::of(cfg))
+}
+
 /// O que `card_background` desenha (para passar adiante sem uma lista enorme).
 struct BgSpec<'a> {
     card: RectF,
@@ -1823,6 +2144,9 @@ struct BgSpec<'a> {
 
 /// Intensidade do granulado do card (o acrílico tem o dele).
 fn card_grain(cfg: &Config, th: &Theme, backdrop: bool) -> f32 {
+    if !cfg.card_grain {
+        return 0.0;
+    }
     match cfg.card_style {
         CardStyle::Glass if backdrop => 0.026,
         CardStyle::Glass => 0.0,
@@ -1835,13 +2159,24 @@ fn card_grain(cfg: &Config, th: &Theme, backdrop: bool) -> f32 {
 /// estica com o mixer: o granulado dela é feito depois, na altura certa).
 fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
     let BgSpec { card, radius, cfg, colors, media, th, s, backdrop } = *b;
-    cv.drop_shadow(card, radius, 28.0 * s, 10.0 * s, if th.dark { 0.58 } else { 0.24 });
-    cv.drop_shadow(card, radius, 6.0 * s, 1.5 * s, if th.dark { 0.30 } else { 0.10 });
+    match cfg.card_shadow {
+        CardShadow::Strong => {
+            cv.drop_shadow(card, radius, 28.0 * s, 10.0 * s, if th.dark { 0.58 } else { 0.24 });
+            cv.drop_shadow(card, radius, 6.0 * s, 1.5 * s, if th.dark { 0.30 } else { 0.10 });
+        }
+        CardShadow::Soft => {
+            cv.drop_shadow(card, radius, 16.0 * s, 5.0 * s, if th.dark { 0.30 } else { 0.12 });
+            cv.drop_shadow(card, radius, 4.0 * s, 1.0 * s, if th.dark { 0.18 } else { 0.06 });
+        }
+        CardShadow::None => {}
+    }
     let (x0, y0, w, h) = (card.x, card.y, card.w, card.h);
     // Posição relativa (0..1) e distância ao centro, para as luzes e a vinheta.
     let rel = move |x: f32, y: f32| (((x - x0) / w).clamp(0.0, 1.0), ((y - y0) / h).clamp(0.0, 1.0));
     match (cfg.card_style, &media.art) {
         (CardStyle::Artwork, Some(art)) => {
+            // A Ilha deixa a capa aparecer mais (o vidro é claro).
+            let dim = cfg.artwork_dim as f32 / 100.0 * if th.style.look == crate::config::Look::Ilha { 0.62 } else { 1.0 };
             let b = blurred(art);
             cv.draw_image_cover(card, &b, radius, 1.0);
             // Película escura (mais forte embaixo, onde ficam os controles), um
@@ -1852,7 +2187,7 @@ fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
                 let light = (-(((u - 0.18) * 2.0).powi(2) + ((v - 0.15) * 2.2).powi(2))).exp();
                 let edge = ((u - 0.5).powi(2) * 1.6 + (v - 0.5).powi(2) * 2.2).min(1.0);
                 let c = lerp3([0.02, 0.02, 0.03], glow, 0.22 * light);
-                (c, (0.34 + 0.30 * v + 0.30 * edge - 0.10 * light).clamp(0.0, 0.92))
+                (c, ((0.34 + 0.30 * v + 0.30 * edge - 0.10 * light) * dim).clamp(0.0, 0.92))
             });
         }
         (CardStyle::AlbumColor, _) | (CardStyle::Artwork, None) => {
@@ -1878,18 +2213,34 @@ fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
                 // Acrílico sem o granulado dele: vem logo abaixo, com o dos outros.
                 Some(b) => {
                     cv.draw_image_cover(card, b, radius, 1.0);
-                    cv.fill_round(card, radius, c, if th.dark { 0.70 } else { 0.66 });
+                    let tint = cfg.glass_tint as f32 / 100.0;
+                    cv.fill_round(card, radius, c, if th.dark { tint } else { (tint - 0.04).max(0.16) });
                 }
                 None => cv.fill_round(card, radius, c, 0.96),
             }
         }
     }
+    // Película do visual: grafite no Estúdio, clara (fosco) na Ilha.
+    let dark_bg = th.dark || cfg.card_style == CardStyle::Artwork;
+    match th.style.look {
+        crate::config::Look::Estudio => {
+            let k = match cfg.card_style {
+                CardStyle::Artwork => 0.70,
+                CardStyle::AlbumColor => 0.55,
+                CardStyle::Glass => 0.35,
+            };
+            look::graphite(cv, card, radius, dark_bg, k);
+        }
+        crate::config::Look::Ilha => look::frost(cv, card, radius, dark_bg),
+        crate::config::Look::Palco => {}
+    }
     // Granulado fino (tira o aspecto de "plástico" dos degradês), reflexo no
-    // alto e contorno.
-    let amount = card_grain(cfg, th, backdrop.is_some());
+    // alto e contorno, no jeito do visual (o Estúdio é liso).
+    let amount = if th.style.look == crate::config::Look::Estudio { 0.0 } else { card_grain(cfg, th, backdrop.is_some()) };
     match skip {
-        None => cv.grain(card, radius, amount),
+        None => look::finish(cv, card, radius, th.style, dark_bg, amount, s),
         Some((y0, y1)) => {
+            // A faixa do meio fica sem granulado (é feito depois, na altura certa).
             let clip = cv.clip_rect();
             let w = cv.w as f32;
             cv.set_clip(clip.intersect(RectF::new(0.0, 0.0, w, y0 as f32)));
@@ -1897,44 +2248,9 @@ fn card_bg(cv: &mut Canvas, b: &BgSpec, skip: Option<(usize, usize)>) {
             cv.set_clip(clip.intersect(RectF::new(0.0, y1 as f32, w, cv.h as f32 - y1 as f32)));
             cv.grain(card, radius, amount);
             cv.set_clip(clip);
+            look::finish(cv, card, radius, th.style, dark_bg, 0.0, s);
         }
     }
-    cv.fill_rrect_ca(x0, y0, card.right(), card.bottom(), radius, |_, y| ([1.0; 3], if y < y0 + 1.5 * s { 0.10 } else { 0.0 }));
-    let line: Rgb = if th.dark || cfg.card_style == CardStyle::Artwork { [1.0; 3] } else { [0.0; 3] };
-    cv.stroke_round(card, radius, s, line, if th.dark { 0.12 } else { 0.08 });
-}
-
-/// Selo com ícone + nome do app de origem ("de onde vem a música").
-/// `align_right`: encosta a pílula na direita de `r`. Devolve o retângulo usado.
-pub fn app_chip(cv: &mut Canvas, tr: &mut TextRenderer, r: RectF, media: &MediaInfo, th: &Theme, s: f32, on_art: bool, align_right: bool, alpha: f32) -> Option<RectF> {
-    if media.app.is_empty() || r.w < 40.0 * s || alpha <= 0.0 {
-        return None;
-    }
-    let name_w = tr.mask(&media.app, Font::CaptionStrong, (240.0 * s) as i32, r.h as i32, Align::Left).used_width();
-    let icon = (r.h - 8.0 * s).clamp(10.0 * s, 15.0 * s).round();
-    let pad = ((r.h - icon) / 2.0).max(3.0 * s);
-    let w = (pad + icon + 6.0 * s + name_w + 9.0 * s).min(r.w).round();
-    let pill = RectF::new(if align_right { r.right() - w } else { r.x }, r.y, w, r.h);
-    let rad = r.h / 2.0;
-    if on_art {
-        cv.fill_round(pill, rad, [0.0; 3], 0.42 * alpha);
-        cv.stroke_round(pill, rad, s, [1.0; 3], 0.16 * alpha);
-    } else {
-        cv.fill_round(pill, rad, th.fg, (if th.dark { 0.09 } else { 0.06 }) * alpha);
-        cv.stroke_round(pill, rad, s, th.fg, (if th.dark { 0.10 } else { 0.09 }) * alpha);
-    }
-    let fg = if on_art { [1.0; 3] } else { th.fg };
-    let ic = RectF::new(pill.x + pad, (pill.cy() - icon / 2.0).round(), icon, icon);
-    match &media.icon {
-        Some(i) => cv.draw_image(ic, i, icon * 0.24, alpha),
-        None => {
-            cv.fill_circle(ic.cx(), ic.cy(), icon / 2.0, th.accent, alpha);
-            glyph(cv, tr, ic, G_MUSIC, Font::Small, on_color(th.accent), alpha);
-        }
-    }
-    let x = ic.right() + 6.0 * s;
-    text(cv, tr, &media.app, Font::CaptionStrong, x, pill.y, pill.right() - x - 7.0 * s, pill.h, fg, 0.92 * alpha);
-    Some(pill)
 }
 
 pub struct CardFrame<'a> {
@@ -2003,7 +2319,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     let grow = if band.1 > band.0 + 4 && grow < cv.h { grow } else { 0 };
     let base = RectF { h: l.card.h - grow as f32, ..l.card };
     let key = layer_key((
-        (cfg.card_style as u8, art_shape as u8, cfg.show_source, l.vertical),
+        (cfg.card_style as u8, art_shape as u8, cfg.show_source, l.vertical, card_look(cfg)),
         (rect_bits(base), rect_bits(l.art), l.radius.to_bits()),
         (m.art.as_ref().map(|a| a.id), m.icon.as_ref().map(|a| a.id)),
         (th.dark, th.accent.map(f32::to_bits), th.fg.map(f32::to_bits), f.colors.accent.map(f32::to_bits)),
@@ -2024,6 +2340,10 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
                 None => draw_art(cv, tr, l.art, m, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
             },
         }
+        // Sem capa o próprio ícone do app já está no lugar dela.
+        if let (Some(b), Some(_)) = (l.source, &m.art) {
+            card_badge(cv, b, m, th, s);
+        }
     };
     // Fundo na altura atual: o guardado (esticado com o mixer) e o granulado
     // da faixa do meio feito por cima, na altura certa. Fechado ou aberto
@@ -2041,10 +2361,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
     });
     cv.composite(0, 0, &fin, w, h, 1.0);
 
-    // App, título, artista.
-    if cfg.show_source {
-        app_chip(cv, tr, l.chip, m, th, s, l.vertical && m.art.is_some(), false, 1.0);
-    }
+    // Título, artista.
     let title = if !m.present() {
         crate::i18n::tr("Nada tocando").to_string()
     } else if m.title.is_empty() {
@@ -2068,26 +2385,41 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let t = title_w(l.title);
         text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
         draw_bars(cv, l.title);
-        text(cv, tr, &artist_album(m), Font::Subtitle, l.artist.x, l.artist.y, l.artist.w, l.artist.h, th.fg, 0.72);
+        artist_line(cv, tr, &artist_album(m), source_name(cfg, m), Font::Subtitle, l.artist, (th.fg, 0.72));
     } else {
         // Álbum numa terceira linha; o bloco sobe metade dela para seguir centralizado.
-        // Com o selo do app em cima não sobra espaço: "Artista · Álbum" numa linha só.
         let sub = artist_album(m);
-        let album = (sub != m.artist && !m.artist.is_empty() && !cfg.show_source).then(|| m.album.trim());
+        let album = (sub != m.artist && !m.artist.is_empty()).then(|| m.album.trim());
         let dy = if album.is_some() { -8.0 * s } else { 0.0 };
         let (t, a) = (title_w(l.title.offset(0.0, dy)), l.artist.offset(0.0, dy));
-        text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
-        draw_bars(cv, l.title.offset(0.0, dy));
-        text(cv, tr, if m.artist.is_empty() || cfg.show_source { &sub } else { &m.artist }, Font::Subtitle, a.x, a.y, a.w, a.h, th.fg, 0.72);
-        if let Some(album) = album {
-            text(cv, tr, album, Font::Small, a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s, th.fg, 0.52);
+        let artist = if m.artist.is_empty() { &sub } else { &m.artist };
+        let album_r = RectF::new(a.x, a.bottom() - 1.0 * s, a.w, 17.0 * s);
+        if l.center_text {
+            // No meio da coluna, que é o meio do play (sem as mini barras nem o nome do app).
+            text_center(cv, tr, &title, Font::CardTitle, l.title.offset(0.0, dy), th.fg, 1.0);
+            let main = match source_name(cfg, m) {
+                Some(app) if artist.is_empty() => app.to_string(),
+                Some(app) => format!("{artist} · {app}"),
+                None => artist.to_string(),
+            };
+            text_center(cv, tr, &main, Font::Subtitle, a, th.fg, 0.72);
+            if let Some(album) = album {
+                text_center(cv, tr, album, Font::Small, album_r, th.fg, 0.52);
+            }
+        } else {
+            text(cv, tr, &title, Font::CardTitle, t.x, t.y, t.w, t.h, th.fg, 1.0);
+            draw_bars(cv, l.title.offset(0.0, dy));
+            artist_line(cv, tr, artist, source_name(cfg, m), Font::Subtitle, a, (th.fg, 0.72));
+            if let Some(album) = album {
+                text(cv, tr, album, Font::Small, album_r.x, album_r.y, album_r.w, album_r.h, th.fg, 0.52);
+            }
         }
     }
 
     // Controles. Aleatório/repetir: sempre (apagados quando o player não deixa
     // mudar pelo Windows, como os navegadores) ou só quando dá, conforme a opção.
     let always = cfg.card_shuffle_repeat == ShuffleRepeat::Always;
-    for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::VolBtn] {
+    for h in [Hit::Shuffle, Hit::Prev, Hit::Next, Hit::Repeat, Hit::VolBtn, Hit::Lyrics] {
         let shown = match h {
             Hit::Shuffle => m.can_shuffle || always,
             Hit::Repeat => m.can_repeat || always,
@@ -2099,6 +2431,7 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
                 Hit::Prev => l.prev,
                 Hit::Next => l.next,
                 Hit::Repeat => l.repeat,
+                Hit::Lyrics => l.lyrics.unwrap_or_default(),
                 _ => l.vol_btn.unwrap_or_default(),
             };
             let k = r.h.min(r.w) - 4.0 * s;
@@ -2121,6 +2454,11 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
 
     // Progresso com tempos embaixo.
     if let (Some(r), Some((x0, x1))) = (l.seek, l.seek_track(s)) {
+        // Estúdio: uma régua fina separa os controles do tempo (como num painel).
+        if th.style.look == crate::config::Look::Estudio {
+            let y = (r.y - 9.0 * s).round();
+            cv.fill_rrect(x0, y, x1, y + s.round().max(1.0), 0.0, if th.dark { 0.10 } else { 0.12 }, th.fg);
+        }
         let mut pos = f.pb.pos;
         let mut t = if m.dur > 0.0 { (pos / m.dur) as f32 } else { 0.0 };
         if let Some(p) = f.pb.seek_preview {
@@ -2129,8 +2467,10 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         }
         let hot = (f.it.hover == Some(Hit::Seek) || f.it.drag == Some(Hit::Seek)) && m.can_seek;
         slider(cv, x0, x1, r.y + 7.0 * s, t, th, hot, hot, s);
-        text(cv, tr, &fmt_time(pos), Font::Small, x0, r.y + 13.0 * s, 60.0 * s, 16.0 * s, th.fg, 0.62);
-        text_right(cv, tr, &format!("-{}", fmt_time((m.dur - pos).max(0.0))), Font::Small, x1, r.y + 13.0 * s, 16.0 * s, th.fg, 0.62, s);
+        if l.times {
+            text(cv, tr, &fmt_time(pos), Font::Small, x0, r.y + 13.0 * s, 60.0 * s, 16.0 * s, th.fg, 0.62);
+            text_right(cv, tr, &format!("-{}", fmt_time((m.dur - pos).max(0.0))), Font::Small, x1, r.y + 13.0 * s, 16.0 * s, th.fg, 0.62, s);
+        }
     }
 
     // Volume.
@@ -2149,6 +2489,17 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let hot = f.it.hover == Some(Hit::Vol) || f.it.drag == Some(Hit::Vol);
         let fill = f.it.vol_fill.unwrap_or(if f.pb.muted { 0.0 } else { v });
         slider(cv, x0, x1, r.cy(), fill, th, hot, true, s);
+    }
+
+    // Letra na tela: ícone com o pontinho embaixo quando ela está à vista
+    // (como o aleatório e o repetir ligados).
+    if let Some(b) = l.lyrics {
+        let on = cfg.lyrics.show;
+        ctrl_glyph(cv, tr, b, G_LYRICS, Font::IconSmall, th.fg, if on { 1.0 } else { 0.9 }, &it, Hit::Lyrics, s);
+        if on {
+            let y = (b.bottom() - 5.0 * s).max(b.cy() + 8.0 * s).min(b.bottom() - 2.0 * s);
+            cv.fill_circle(b.cx(), y, 1.7 * s, th.fg, 0.95);
+        }
     }
 
     // Mixer de volume (setinha embaixo; aberto, uma linha por app).
@@ -2179,6 +2530,41 @@ pub fn draw_card(cv: &mut Canvas, tr: &mut TextRenderer, l: &CLayout, f: &CardFr
         let msg = crate::i18n::tr(if l.mixer_open > 0.5 { "Fechar mixer de volume" } else { "Abrir mixer de volume" });
         tooltip(cv, tr, msg, b, th, f.it.tip, s);
     }
+    if let Some(b) = l.lyrics.filter(|_| f.it.hover == Some(Hit::Lyrics) && f.it.tip > 0.0) {
+        tooltip(cv, tr, &lyrics_tip(cfg), b, th, f.it.tip, s);
+    }
+    if let Some(b) = l.source.filter(|_| f.it.hover == Some(Hit::Source) && f.it.tip > 0.0 && !m.app.is_empty()) {
+        tooltip(cv, tr, &crate::i18n::tr("Tocando no {}").replace("{}", &m.app), b, th, f.it.tip, s);
+    }
+}
+
+/// Nome do app para o fim da linha do artista ("App de origem": "Selo e nome").
+fn source_name<'a>(cfg: &Config, m: &'a MediaInfo) -> Option<&'a str> {
+    (cfg.show_source && cfg.source_name && !m.app.is_empty()).then_some(m.app.as_str())
+}
+
+/// Linha do artista com o nome do app no fim, mais apagado ("Artista · Brave").
+/// O nome tem lugar garantido (até metade da linha); o artista corta antes.
+fn artist_line(cv: &mut Canvas, tr: &mut TextRenderer, main: &str, app: Option<&str>, font: Font, r: RectF, (c, a): (Rgb, f32)) {
+    let Some(app) = app else {
+        text(cv, tr, main, font, r.x, r.y, r.w, r.h, c, a);
+        return;
+    };
+    let suffix = if main.is_empty() { app.to_string() } else { format!(" · {app}") };
+    let sw = tr.mask(&suffix, font, r.w.max(1.0) as i32, r.h.max(1.0) as i32, Align::Left).used_width().min(r.w * 0.5);
+    let mw = if main.is_empty() { 0.0 } else { tr.mask(main, font, (r.w - sw).max(1.0) as i32, r.h.max(1.0) as i32, Align::Left).used_width() };
+    text(cv, tr, main, font, r.x, r.y, r.w - sw, r.h, c, a);
+    text(cv, tr, &suffix, font, r.x + mw, r.y, r.w - mw, r.h, c, a * 0.62);
+}
+
+/// Dica do botão da letra, com o atalho quando ele funciona.
+fn lyrics_tip(cfg: &Config) -> String {
+    let what = crate::i18n::tr(if cfg.lyrics.show { "Esconder a letra" } else { "Mostrar a letra na tela" });
+    #[cfg(windows)]
+    if let Some(k) = crate::lyrics_overlay::working_hotkey(cfg.lyrics.hotkey) {
+        return format!("{what} ({k})");
+    }
+    what.to_string()
 }
 
 /// Setinha do mixer (para baixo; vira para cima conforme `open` vai a 1).
@@ -2400,9 +2786,9 @@ pub fn upnext_card(s: f32) -> RectF {
 /// barrinha do tempo restante do cartão.
 pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &Colors, media: &MediaInfo, th: &Theme, s: f32, t: f32, total: f32, backdrop: Option<&Image>) {
     let card = upnext_card(s);
-    let radius = cfg.corners.radius() * s;
+    let radius = Style::of(cfg).card_radius() * s;
     let key = layer_key((
-        (cfg.card_style as u8, rect_bits(card), radius.to_bits()),
+        (cfg.card_style as u8, rect_bits(card), radius.to_bits(), card_look(cfg)),
         media.art.as_ref().map(|a| a.id),
         (th.dark, th.accent.map(f32::to_bits), colors.accent.map(f32::to_bits)),
         backdrop.map(|b| b.id),
@@ -2421,6 +2807,12 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
             art_shadow(cv, art, art_r, img, th, s);
             cv.draw_image_cover(art, img, art_r, 1.0);
             cv.stroke_round(art, art_r, s, [1.0; 3], 0.10);
+            // Selo do app no canto da capa, como no card.
+            if cfg.show_source {
+                let b = (18.0 * s * k).round();
+                let (cx, cy) = (art.right() - b * 0.22, art.bottom() - b * 0.22);
+                card_badge(cv, RectF::new(cx - b / 2.0, cy - b / 2.0, b, b), media, th, s);
+            }
         }
         None => draw_art(cv, tr, art, media, th, Shape::Rounded, s, cfg.show_source.then_some(0.0)),
     }
@@ -2454,14 +2846,10 @@ pub fn draw_upnext(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors:
     cv.set_clip(clip.intersect(badge));
     text(cv, tr, label, Font::Label, badge.x + 25.5 * s, badge.y, lw + 4.0 * s, lh, on, ba * grow);
     cv.set_clip(clip);
-    if cfg.show_source {
-        let avail = RectF::new(tx0 + full_w + 10.0 * s, badge.y, (right - tx0 - full_w - 10.0 * s).max(0.0), lh);
-        app_chip(cv, tr, avail, media, th, s, false, true, ta);
-    }
 
     let title = if media.title.is_empty() { media.app.clone() } else { media.title.clone() };
     text(cv, tr, &title, Font::CardTitle, tx, top + 20.0 * s, tw, 22.0 * s, th.fg, ta);
-    text(cv, tr, &artist_album(media), Font::Subtitle, tx, top + 42.0 * s, tw, 17.0 * s, th.fg, ta * 0.72);
+    artist_line(cv, tr, &artist_album(media), source_name(cfg, media), Font::Subtitle, RectF::new(tx, top + 42.0 * s, tw, 17.0 * s), (th.fg, ta * 0.72));
 
     // Tempo restante do cartão: a base da barrinha encosta na base da capa.
     let hold = ((t - 0.45) / (total - 0.85).max(0.5)).clamp(0.0, 1.0);
@@ -2508,12 +2896,12 @@ pub fn osd_theme(cfg: &Config, colors: &Colors) -> Theme {
     if cfg.osd_material == OsdMaterial::Accent {
         let bg = osd_accent_bg(cfg, colors);
         let fg = on_color(bg);
-        return Theme { fg, accent: fg, on_accent: bg, dark: luma(bg) < 0.5 };
+        return Theme { fg, accent: fg, on_accent: bg, dark: luma(bg) < 0.5, style: Style::of(cfg) };
     }
     let dark = osd_dark(cfg, colors);
     let fg = if dark { [1.0; 3] } else { [0.08, 0.08, 0.09] };
     let accent = if dark { colors.accent_light } else { colors.accent };
-    Theme { fg, accent, on_accent: on_color(accent), dark }
+    Theme { fg, accent, on_accent: on_color(accent), dark, style: Style::of(cfg) }
 }
 
 /// Aviso de tecla de bloqueio: cartão (sólido, acrílico ou colorido) com ícone
@@ -2524,9 +2912,10 @@ pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &C
     let k = s * cfg.osd_size.factor();
     let (cw, ch) = osd_card(s, cfg);
     let card = RectF::new(m, m, cw, ch);
+    let st = Style::of(cfg);
     let radius = match cfg.osd_shape {
         OsdShape::Pill => card.h / 2.0,
-        OsdShape::Rounded => cfg.corners.radius() * k,
+        OsdShape::Rounded => st.card_radius() * k,
         OsdShape::Square => 5.0 * k,
     };
     let opacity = cfg.osd_opacity as f32 / 100.0;
@@ -2541,7 +2930,15 @@ pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &C
         }
         _ => cv.fill_round(card, radius, base, opacity),
     }
-    cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.12 } else { 0.08 });
+    match st.look {
+        crate::config::Look::Palco => cv.stroke_round(card, radius, s, if th.dark { [1.0; 3] } else { [0.0; 3] }, if th.dark { 0.12 } else { 0.08 }),
+        _ => {
+            if st.look == crate::config::Look::Estudio && cfg.osd_material != OsdMaterial::Accent {
+                look::graphite(cv, card, radius, th.dark, 0.18);
+            }
+            look::finish(cv, card, radius, st, th.dark, 0.0, s);
+        }
+    }
 
     let (f_sym, f_key, f_state, f_icon) = match cfg.osd_size {
         OsdSize::Compact => (Font::CardTitle, Font::Title, Font::Small, Font::Icon),
@@ -2556,7 +2953,7 @@ pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &C
     let c = RectF::new(card.x + 12.0 * k + (full - d) / 2.0, card.cy() - d / 2.0, d, d);
     let icon_r = match cfg.osd_shape {
         OsdShape::Pill => d / 2.0,
-        OsdShape::Rounded => (cfg.corners.radius() * 0.7).max(6.0) * k,
+        OsdShape::Rounded => (st.card_radius() * 0.7).max(st.scale(6.0)) * k,
         OsdShape::Square => 4.0 * k,
     };
     let lit = if on { ease_out_cubic(t / 0.3) } else { 1.0 - ease_out_cubic(t / 0.3) };
@@ -2577,14 +2974,8 @@ pub fn draw_osd(cv: &mut Canvas, tr: &mut TextRenderer, cfg: &Config, colors: &C
 
     if cfg.osd_switch {
         let sw = RectF::new(card.right() - 56.0 * k, card.cy() - 10.0 * k, 40.0 * k, 20.0 * k);
-        let kx = sw.x + 10.0 * k + 20.0 * k * if on { ease_out_cubic(t / 0.35) } else { 1.0 - ease_out_cubic(t / 0.35) };
-        if on {
-            cv.fill_round(sw, 10.0 * k, th.accent, 1.0);
-            cv.fill_circle(kx, sw.cy(), 6.0 * k, th.on_accent, 1.0);
-        } else {
-            cv.stroke_round(sw, 10.0 * k, s, th.fg, 0.55);
-            cv.fill_circle(kx, sw.cy(), 6.0 * k, th.fg, 0.8);
-        }
+        let e = if on { ease_out_cubic(t / 0.35) } else { 1.0 - ease_out_cubic(t / 0.35) };
+        look::switch(cv, sw, e, st, th.accent, th.on_accent, th.fg, 1.0, 0.0, k);
     }
 }
 
@@ -2718,6 +3109,25 @@ fn sample_art() -> Image {
 mod tests {
     use super::*;
 
+    /// Na barra, "Quando o player permite" esconde o aleatório e o repetir de
+    /// um player que não deixa mudá-los (um vídeo do YouTube no navegador);
+    /// "Sempre" os mantém; com a opção da barra desligada, nunca aparecem.
+    #[test]
+    fn aleatorio_e_repetir_na_barra_seguem_o_player() {
+        let mut m = sample_media();
+        (m.can_shuffle, m.can_repeat) = (false, false);
+        let mut cfg = Config { taskbar_shuffle_repeat: true, card_shuffle_repeat: ShuffleRepeat::WhenSupported, ..Config::default() };
+        assert_eq!(bar_toggles(&cfg, &m), (false, false));
+        let l = WLayout::build_for(1.0, 40.0, &cfg, true, false, 0, bar_toggles(&cfg, &m));
+        assert!(l.shuffle.is_none() && l.repeat.is_none() && l.prev.is_some());
+        m.can_repeat = true;
+        assert_eq!(bar_toggles(&cfg, &m), (false, true));
+        cfg.card_shuffle_repeat = ShuffleRepeat::Always;
+        assert_eq!(bar_toggles(&cfg, &m), (true, true));
+        cfg.taskbar_shuffle_repeat = false;
+        assert_eq!(bar_toggles(&cfg, &m), (false, false));
+    }
+
     /// Capa nova no mesmo endereço de uma já liberada não herda o desfoque
     /// dela (o cache era pelo endereço).
     #[test]
@@ -2763,7 +3173,7 @@ mod tests {
     /// (8 a 11, 15, 16... davam pânico ao cortar a faixa).
     #[test]
     fn barras_do_card_com_qualquer_quantidade() {
-        let th = Theme { fg: [1.0; 3], accent: [1.0, 0.4, 0.6], on_accent: [0.0; 3], dark: true };
+        let th = Theme { fg: [1.0; 3], accent: [1.0, 0.4, 0.6], on_accent: [0.0; 3], dark: true, style: Style::default() };
         let mut px = vec![0u32; 60 * 30];
         for n in 1..=128 {
             let values: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
@@ -2797,7 +3207,7 @@ mod tests {
                         let cfg = Config { widget_shape: WidgetShape::Pill, widget_pill: true, cover_shape: shape, cover_size: size, ..Config::default() };
                         let l = WLayout::build(s, bar * s, &cfg, true, false);
                         let (bg, art) = (l.bg.unwrap(), l.art.unwrap());
-                        let rc = cover_radius(shape, art.w, s);
+                        let rc = cover_radius(shape, art.w, s, Style::default());
                         // Pontos da borda da capa (arcos dos cantos) dentro da pílula.
                         for k in 0..=32 {
                             let t = k as f32 / 32.0 * std::f32::consts::FRAC_PI_2;

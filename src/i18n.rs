@@ -81,26 +81,47 @@ fn system_lang() -> Lang {
     }
 }
 
+/// Idioma da sessão (variáveis de localidade, na ordem que o gettext usa).
+#[cfg(target_os = "linux")]
+fn system_lang() -> Lang {
+    let first = ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .flat_map(|v| v.split(':').map(str::to_string).collect::<Vec<_>>())
+        .find(|v| !v.is_empty() && v != "C" && v != "POSIX" && !v.starts_with("C."))
+        .unwrap_or_default();
+    match first.to_ascii_lowercase().get(..2) {
+        Some("pt") => Lang::Pt,
+        Some("es") => Lang::Es,
+        Some("de") => Lang::De,
+        _ => Lang::En,
+    }
+}
+
 /// Texto no idioma atual (a chave é o texto em português).
 pub fn tr(pt: &'static str) -> &'static str {
-    static MAP: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    static MAP: OnceLock<HashMap<&'static str, &'static [&'static str; 4]>> = OnceLock::new();
     let col = match lang() {
         Lang::Pt => return pt,
         Lang::En => 1,
         Lang::Es => 2,
         Lang::De => 3,
     };
-    let map = MAP.get_or_init(|| T.iter().enumerate().map(|(i, r)| (r[0], i)).collect());
+    let map = MAP.get_or_init(|| T.iter().chain(lyrics_t::T).map(|r| (r[0], r)).collect());
     match map.get(pt) {
-        Some(&i) => T[i][col],
+        Some(r) => r[col],
         None => pt,
     }
 }
 
 #[cfg(test)]
 pub fn has(pt: &str) -> bool {
-    T.iter().any(|r| r[0] == pt)
+    T.iter().chain(lyrics_t::T).any(|r| r[0] == pt)
 }
+
+/// Textos da sobreposição de letra (tabela à parte).
+#[path = "i18n_lyrics.rs"]
+mod lyrics_t;
 
 /// [português, inglês, espanhol, alemão]
 static T: &[[&str; 4]] = &[
@@ -122,6 +143,7 @@ static T: &[[&str; 4]] = &[
     ["Cartão \"A seguir\"", "\"Up next\" card", "Tarjeta \"A continuación\"", "„Als Nächstes“-Karte"],
     ["Aviso de Caps Lock", "Caps Lock alert", "Aviso de Bloq Mayús", "Feststelltasten-Hinweis"],
     ["Sair do Taskbeat", "Quit Taskbeat", "Salir de Taskbeat", "Taskbeat beenden"],
+    ["Reiniciar o Taskbeat", "Restart Taskbeat", "Reiniciar Taskbeat", "Taskbeat neu starten"],
     // ---- opções
     ["Arredondada", "Rounded", "Redondeada", "Abgerundet"],
     ["Arredondado", "Rounded", "Redondeado", "Abgerundet"],
@@ -222,11 +244,15 @@ static T: &[[&str; 4]] = &[
     ["Tempo decorrido e restante; arraste para pular", "Elapsed and remaining time; drag to seek", "Tiempo transcurrido y restante; arrastra para saltar", "Verstrichene und verbleibende Zeit; ziehen zum Springen"],
     ["Volume", "Volume", "Volumen", "Lautstärke"],
     ["Slider de volume e botão de mudo", "Volume slider and mute button", "Control de volumen y botón de silencio", "Lautstärkeregler und Stummschalter"],
-    ["Mostrar app de origem", "Show source app", "Mostrar app de origen", "Quell-App anzeigen"],
     ["Nome do app (Spotify, Brave…) no card e ícone sobre a capa", "App name (Spotify, Brave…) on the card and an icon over the cover", "Nombre de la app (Spotify, Brave…) en la tarjeta e icono sobre la portada", "App-Name (Spotify, Brave…) auf der Karte und Symbol auf dem Cover"],
     ["Fechar sozinho após", "Close automatically after", "Cerrar automáticamente tras", "Automatisch schließen nach"],
     ["Tempo sem o mouse em cima do card", "Time without the mouse over the card", "Tiempo sin el ratón sobre la tarjeta", "Zeit ohne Maus über der Karte"],
     ["Aleatório e repetir", "Shuffle and repeat", "Aleatorio y repetir", "Zufall und Wiederholen"],
+    ["Extensão do navegador", "Browser extension", "Extensión del navegador", "Browser-Erweiterung"],
+    ["Conectada", "Connected", "Conectada", "Verbunden"],
+    ["o aleatório e o repetir do YouTube Music vêm da própria página", "YouTube Music shuffle and repeat come straight from the page", "el aleatorio y la repetición de YouTube Music vienen de la propia página", "Zufall und Wiederholen von YouTube Music kommen direkt von der Seite"],
+    ["Não conectada. Opcional: com ela, o aleatório, o repetir e a capa em alta do YouTube Music vêm da própria página. Chega em breve à Chrome Web Store; até lá, o botão abre a pasta dela, que vem com o Taskbeat, e o passo a passo para o Chrome, Brave ou Edge", "Not connected. Optional: with it, YouTube Music shuffle, repeat and the high-resolution cover come straight from the page. It is coming soon to the Chrome Web Store; until then, the button opens its folder, which ships with Taskbeat, and the steps for Chrome, Brave or Edge", "No conectada. Opcional: con ella, el aleatorio, la repetición y la portada en alta de YouTube Music vienen de la propia página. Llega pronto a la Chrome Web Store; hasta entonces, el botón abre su carpeta, que viene con Taskbeat, y los pasos para Chrome, Brave o Edge", "Nicht verbunden. Optional: Damit kommen Zufall, Wiederholen und das hochaufgelöste Cover von YouTube Music direkt von der Seite. Bald im Chrome Web Store; bis dahin öffnet die Schaltfläche ihren Ordner, der mit Taskbeat kommt, und die Schritte für Chrome, Brave oder Edge"],
+    ["Instalar extensão", "Install extension", "Instalar extensión", "Erweiterung installieren"],
     ["Aparecem quando o player permite (Spotify, Media Player). Navegadores como Brave e Chrome não permitem", "Shown when the player allows it (Spotify, Media Player). Browsers like Brave and Chrome don't", "Aparecen cuando el reproductor lo permite (Spotify, Media Player). Navegadores como Brave y Chrome no lo permiten", "Erscheinen, wenn der Player es erlaubt (Spotify, Media Player). Browser wie Brave und Chrome erlauben es nicht"],
     // ---- a seguir
     ["Mostrar \"A seguir\"", "Show \"Up next\"", "Mostrar \"A continuación\"", "„Als Nächstes“ anzeigen"],
@@ -258,7 +284,7 @@ static T: &[[&str; 4]] = &[
     ["Nada tocando", "Nothing playing", "Nada sonando", "Nichts läuft"],
     ["Anterior, play e próximo dentro do widget; desligados, ficam só no card", "Previous, play and next inside the widget; when off, they're only in the card", "Anterior, reproducir y siguiente dentro del widget; desactivados, solo están en la tarjeta", "Zurück, Wiedergabe und Weiter im Widget; wenn aus, nur auf der Karte"],
     ["Aleatório e repetir na barra", "Shuffle and repeat on the taskbar", "Aleatorio y repetir en la barra", "Zufall und Wiederholen in der Taskleiste"],
-    ["Junto dos botões; no YouTube Music do navegador eles apertam os botões da própria página", "Next to the buttons; in YouTube Music in the browser they press the page's own buttons", "Junto a los botones; en YouTube Music del navegador pulsan los botones de la propia página", "Neben den Tasten; bei YouTube Music im Browser drücken sie die Tasten der Seite selbst"],
+    ["Junto dos botões; somem quando o player não deixa mudar, se \"Aleatório e repetir\" (em Apps de música) estiver em \"Quando o player permite\". No YouTube Music do navegador eles apertam os botões da própria página", "Next to the buttons; they hide when the player doesn't allow changing them, if \"Shuffle and repeat\" (in Music apps) is set to \"When the player allows\". In YouTube Music in the browser they press the page's own buttons", "Junto a los botones; se ocultan cuando el reproductor no deja cambiarlos, si \"Aleatorio y repetir\" (en Apps de música) está en \"Cuando el reproductor lo permite\". En YouTube Music del navegador pulsan los botones de la propia página", "Neben den Tasten; sie verschwinden, wenn der Player keine Änderung zulässt, sofern „Zufall und Wiederholen“ (unter Musik-Apps) auf „Wenn der Player es erlaubt“ steht. Bei YouTube Music im Browser drücken sie die Tasten der Seite selbst"],
     ["Preenchido, na cor dos controles, ou só o ícone, como os outros", "Filled, in the controls color, or just the icon like the others", "Relleno, en el color de los controles, o solo el icono como los demás", "Gefüllt in der Farbe der Steuerelemente oder nur das Symbol wie die anderen"],
     ["Preenchido", "Filled", "Relleno", "Gefüllt"],
     ["Só o ícone", "Icon only", "Solo el icono", "Nur Symbol"],
@@ -289,6 +315,20 @@ static T: &[[&str; 4]] = &[
     ["Deslizar", "Slide", "Deslizar", "Gleiten"],
     ["Zoom", "Zoom", "Zoom", "Zoom"],
     ["Esmaecer", "Fade", "Desvanecer", "Überblenden"],
+    // ---- animação de abrir e fechar do card
+    ["Abrir e fechar", "Open and close", "Abrir y cerrar", "Öffnen und Schließen"],
+    ["Como o card e o \"A seguir\" entram e saem da tela", "How the card and \"Up next\" enter and leave the screen", "Cómo la tarjeta y \"A continuación\" entran y salen de la pantalla", "Wie die Karte und „Als Nächstes“ ein- und ausgeblendet werden"],
+    ["Suave", "Smooth", "Suave", "Sanft"],
+    ["Deslizar da barra", "Slide from the taskbar", "Deslizar desde la barra", "Aus der Taskleiste gleiten"],
+    ["Subir", "Rise", "Subir", "Aufsteigen"],
+    ["Descer", "Drop", "Bajar", "Absinken"],
+    ["Estourar", "Pop", "Estallar", "Aufploppen"],
+    ["Nenhuma", "None", "Ninguna", "Keine"],
+    ["Velocidade", "Speed", "Velocidad", "Geschwindigkeit"],
+    ["Duração das animações de abrir e fechar", "How long the open and close animations take", "Duración de las animaciones de abrir y cerrar", "Dauer der Animationen zum Öffnen und Schließen"],
+    ["Rápida", "Fast", "Rápida", "Schnell"],
+    ["Lenta", "Slow", "Lenta", "Langsam"],
+    ["Escolha uma animação em \"Abrir e fechar\" para usar esta opção", "Choose an animation in \"Open and close\" to use this option", "Elige una animación en \"Abrir y cerrar\" para usar esta opción", "Wähle unter „Öffnen und Schließen“ eine Animation, um diese Option zu nutzen"],
     ["Só essas duas teclas são observadas; nada do que você digita é lido ou guardado", "Only these two keys are watched; nothing you type is read or stored", "Solo se observan estas dos teclas; nada de lo que escribes se lee ni se guarda", "Nur diese zwei Tasten werden beobachtet; nichts, was du tippst, wird gelesen oder gespeichert"],
     // ---- visualizador
     ["Mostrar barras dinâmicas", "Show dynamic bars", "Mostrar barras dinámicas", "Dynamische Balken anzeigen"],
@@ -399,7 +439,6 @@ static T: &[[&str; 4]] = &[
     ["Quanto o fundo aparece sobre a barra", "How much the background shows over the taskbar", "Cuánto se ve el fondo sobre la barra", "Wie stark der Hintergrund über der Taskleiste sichtbar ist"],
     ["Contorno", "Outline", "Contorno", "Umriss"],
     ["Borda fina em volta do fundo", "Thin border around the background", "Borde fino alrededor del fondo", "Dünner Rand um den Hintergrund"],
-    ["Selo com o app (Spotify, Brave…) no card, no \"A seguir\" e sobre a capa na barra", "Badge with the app (Spotify, Brave…) on the card, on \"Up next\" and over the cover on the taskbar", "Insignia con la app (Spotify, Brave…) en la tarjeta, en \"A continuación\" y sobre la portada en la barra", "Abzeichen mit der App (Spotify, Brave…) in der Karte, bei \"Als Nächstes\" und auf dem Cover in der Taskleiste"],
     ["Pequeno", "Small", "Pequeño", "Klein"],
     ["Pequena", "Small", "Pequeña", "Klein"],
     ["Artista", "Artist", "Artista", "Künstler"],
@@ -415,6 +454,45 @@ static T: &[[&str; 4]] = &[
     ["Ligue o aviso de Caps Lock ou de Num Lock para usar esta opção", "Turn on the Caps Lock or Num Lock alert to use this option", "Activa el aviso de Bloq Mayús o Bloq Num para usar esta opción", "Aktiviere den Hinweis für Feststelltaste oder Num-Taste, um diese Option zu nutzen"],
     ["O desfoque só vale para o material Acrílico", "Blur only applies to the Acrylic material", "El desenfoque solo se aplica al material Acrílico", "Die Unschärfe gilt nur für das Material Acryl"],
     ["Ligue \"Mostrar barras dinâmicas\" para usar esta opção", "Turn on \"Show dynamic bars\" to use this option", "Activa \"Mostrar barras dinámicas\" para usar esta opción", "Aktiviere \"Dynamische Balken anzeigen\", um diese Option zu nutzen"],
+    ["Com as barras de áudio ligadas, elas ficam no lugar do indicador", "With the audio bars on, they take the indicator's place", "Con las barras de audio activadas, ocupan el lugar del indicador", "Mit eingeschalteten Audiobalken stehen sie an der Stelle des Indikators"],
+    ["Com o fundo \"Capa desfocada\" o card é sempre escuro", "With the \"Blurred cover\" background the card is always dark", "Con el fondo \"Portada difuminada\" la tarjeta siempre es oscura", "Mit dem Hintergrund \"Unscharfes Cover\" ist die Karte immer dunkel"],
+    ["Os picos só aparecem no estilo \"Barras\"", "Peaks only show in the \"Bars\" style", "Los picos solo aparecen en el estilo \"Barras\"", "Spitzen erscheinen nur im Stil \"Balken\""],
+    // ---- Configurações com identidade própria (visual, abas, busca)
+    ["A letra sincronizada numa janela sempre por cima", "The synced lyrics in an always-on-top window", "La letra sincronizada en una ventana siempre visible", "Der synchronisierte Liedtext in einem Fenster, das immer oben bleibt"],
+    ["Ajuste fino", "Fine-tuning", "Ajuste fino", "Feinabstimmung"],
+    ["Atalhos para os players e o que vem de cada um", "Shortcuts to the players and what comes from each one", "Accesos a los reproductores y lo que viene de cada uno", "Verknüpfungen zu den Playern und was von jedem kommt"],
+    ["Aviso na tela quando as maiúsculas ligam ou desligam", "On-screen alert when caps turn on or off", "Aviso en pantalla cuando las mayúsculas se activan o desactivan", "Hinweis auf dem Bildschirm, wenn die Großschreibung an- oder ausgeht"],
+    ["Avisos, aparência e onde aparecem", "Alerts, look and where they appear", "Avisos, aspecto y dónde aparecen", "Hinweise, Aussehen und wo sie erscheinen"],
+    ["Buscar opção", "Search settings", "Buscar opción", "Einstellung suchen"],
+    ["Card", "Card", "Tarjeta", "Karte"],
+    ["Como o card e o \"A seguir\" entram e saem da tela (a prévia mostra ao mudar)", "How the card and \"Up next\" enter and leave the screen (the preview plays it when you change)", "Cómo la tarjeta y \"A continuación\" entran y salen de la pantalla (la vista previa lo muestra al cambiar)", "Wie die Karte und \"Als Nächstes\" erscheinen und verschwinden (die Vorschau zeigt es beim Ändern)"],
+    ["Conteúdo, botões, fundo, posição e barras de áudio", "Content, buttons, background, position and audio bars", "Contenido, botones, fondo, posición y barras de audio", "Inhalt, Tasten, Hintergrund, Position und Audiobalken"],
+    ["Desligada", "Off", "Desactivada", "Aus"],
+    ["Esc volta", "Esc goes back", "Esc vuelve", "Esc geht zurück"],
+    ["Estilo, botões, animação e o \"A seguir\"", "Style, buttons, animation and \"Up next\"", "Estilo, botones, animación y \"A continuación\"", "Stil, Tasten, Animation und \"Als Nächstes\""],
+    ["Estúdio", "Studio", "Estudio", "Studio"],
+    ["Formato do aviso e do ícone (\"Iguais ao card\" segue a opção Cantos do Visual)", "Shape of the alert and its icon (\"Same as card\" follows the Corners option in Look)", "Forma del aviso y del icono (\"Igual que la tarjeta\" sigue la opción Esquinas de Aspecto)", "Form des Hinweises und des Symbols (\"Wie die Karte\" folgt der Option Ecken unter Aussehen)"],
+    ["Fundo do card", "Card background", "Fondo de la tarjeta", "Kartenhintergrund"],
+    ["Inicialização, atualizações e informações", "Startup, updates and info", "Inicio, actualizaciones e información", "Start, Updates und Infos"],
+    ["Início", "Home", "Inicio", "Start"],
+    ["Janela, posição, aparência e de onde vem a letra", "Window, position, look and where the lyrics come from", "Ventana, posición, aspecto y de dónde viene la letra", "Fenster, Position, Aussehen und woher der Liedtext kommt"],
+    ["Ligado e desligado", "On and off", "Activado y desactivado", "An und aus"],
+    ["Mais", "More", "Más", "Mehr"],
+    ["Menos", "Less", "Menos", "Weniger"],
+    ["Menos ou mais arredondado: configurações, barra, card, aviso e letra", "Less or more rounded: settings, taskbar, card, alert and lyrics", "Menos o más redondeado: ajustes, barra, tarjeta, aviso y letra", "Weniger oder mehr abgerundet: Einstellungen, Taskleiste, Karte, Hinweis und Liedtext"],
+    ["Música na barra", "Music on the taskbar", "Música en la barra", "Musik in der Taskleiste"],
+    ["Nada encontrado. Tente outra palavra", "Nothing found. Try another word", "No se encontró nada. Prueba otra palabra", "Nichts gefunden. Versuche ein anderes Wort"],
+    ["O jeito do app inteiro: configurações, barra, card, aviso e letra", "The look of the whole app: settings, taskbar, card, alert and lyrics", "El aspecto de toda la app: ajustes, barra, tarjeta, aviso y letra", "Das Aussehen der ganzen App: Einstellungen, Taskleiste, Karte, Hinweis und Liedtext"],
+    ["O que você mais usa, num lugar só", "What you use the most, in one place", "Lo que más usas, en un solo lugar", "Was du am meisten nutzt, an einem Ort"],
+    ["O widget ao lado do relógio, com capa, título e botões", "The widget next to the clock, with cover, title and buttons", "El widget junto al reloj, con portada, título y botones", "Das Widget neben der Uhr, mit Cover, Titel und Tasten"],
+    ["PRÉVIA", "PREVIEW", "VISTA PREVIA", "VORSCHAU"],
+    ["Palco", "Stage", "Escenario", "Bühne"],
+    ["Palco: escuro com a cor da música. Estúdio: grafite e linhas finas. Ilha: vidro fosco", "Stage: dark with the music's color. Studio: graphite and thin lines. Island: frosted glass", "Escenario: oscuro con el color de la música. Estudio: grafito y líneas finas. Isla: vidrio esmerilado", "Bühne: dunkel mit der Farbe der Musik. Studio: Graphit und feine Linien. Insel: Milchglas"],
+    ["Resultados para", "Results for", "Resultados para", "Ergebnisse für"],
+    ["Todas as opções", "All settings", "Todas las opciones", "Alle Einstellungen"],
+    ["Usa o fundo, o tema, a sombra e os cantos do card", "Uses the card's background, theme, shadow and corners", "Usa el fondo, el tema, la sombra y las esquinas de la tarjeta", "Nutzt Hintergrund, Design, Schatten und Ecken der Karte"],
+    ["Visual do app", "App look", "Aspecto de la app", "App-Aussehen"],
+    ["Visual do app, cantos, cor de destaque e ícones", "App look, corners, accent color and icons", "Aspecto de la app, esquinas, color de énfasis e iconos", "App-Aussehen, Ecken, Akzentfarbe und Symbole"],
     // ---- Mac (notch, menu e configurações)
     ["Preto", "Black", "Negro", "Schwarz"],
     ["Cor do sistema", "System color", "Color del sistema", "Systemfarbe"],
@@ -456,7 +534,7 @@ static T: &[[&str; 4]] = &[
     ["Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar (no card e na barra)", "Play/pause, skip, shuffle, repeat and volume move when they change (in the card and on the taskbar)", "Reproducir/pausa, saltar, aleatorio, repetir y volumen se mueven al cambiar (en la tarjeta y en la barra)", "Wiedergabe/Pause, Überspringen, Zufall, Wiederholen und Lautstärke bewegen sich bei Änderungen (in der Karte und in der Taskleiste)"],
     ["Play/pausa, pular, aleatório, repetir e volume se mexem ao mudar", "Play/pause, skip, shuffle, repeat and volume move when they change", "Reproducir/pausa, saltar, aleatorio, repetir y volumen se mueven al cambiar", "Wiedergabe/Pause, Überspringen, Zufall, Wiederholen und Lautstärke bewegen sich bei Änderungen"],
     ["Atalhos dos apps de música", "Music app shortcuts", "Accesos a las apps de música", "Verknüpfungen zu Musik-Apps"],
-    ["Ícones dos players instalados (Spotify, YouTube Music…) para abrir com um clique", "Icons of the installed players (Spotify, YouTube Music…) to open with one click", "Iconos de los reproductores instalados (Spotify, YouTube Music…) para abrir con un clic", "Symbole der installierten Player (Spotify, YouTube Music…), mit einem Klick zu öffnen"],
+    ["Ícones dos players instalados para abrir com um clique; vêm ligados só os de música (VLC e Media Player ficam desligados até você ligar)", "Icons of the installed players to open with one click; only music apps start turned on (VLC and Media Player stay off until you turn them on)", "Iconos de los reproductores instalados para abrir con un clic; vienen activados solo los de música (VLC y Media Player quedan desactivados hasta que los actives)", "Symbole der installierten Player, mit einem Klick zu öffnen; nur Musik-Apps sind anfangs an (VLC und Media Player bleiben aus, bis du sie einschaltest)"],
     ["Mixer de volume", "Volume mixer", "Mezclador de volumen", "Lautstärkemixer"],
     ["Setinha embaixo do card que abre o volume de cada app com som", "Small arrow at the bottom of the card that opens the volume of each app playing sound", "Flechita debajo de la tarjeta que abre el volumen de cada app con sonido", "Kleiner Pfeil unten in der Karte, der die Lautstärke jeder App mit Ton öffnet"],
     ["VOLUME POR APP","VOLUME PER APP", "VOLUMEN POR APP", "LAUTSTÄRKE PRO APP"],
@@ -505,4 +583,89 @@ static T: &[[&str; 4]] = &[
     ["Segue o macOS ou fixa claro/escuro", "Follows macOS or stays light/dark", "Sigue a macOS o fija claro/oscuro", "Folgt macOS oder bleibt hell/dunkel"],
     ["Só o estado do Caps Lock é observado; nada do que você digita é lido ou guardado", "Only the Caps Lock state is watched; nothing you type is read or stored", "Solo se observa el estado de Bloq Mayús; nada de lo que escribes se lee ni se guarda", "Nur der Status der Feststelltaste wird beobachtet; nichts, was du tippst, wird gelesen oder gespeichert"],
     ["Ligue o aviso de Caps Lock para usar esta opção", "Turn on the Caps Lock alert to use this option", "Activa el aviso de Bloq Mayús para usar esta opción", "Aktiviere den Feststelltasten-Hinweis, um diese Option zu nutzen"],
+    // Configurações reorganizadas (2026-11-25): abas, grupos, prévia e opções de design.
+    ["Apps de música", "Music apps", "Apps de música", "Musik-Apps"],
+    ["Atalhos para abrir os players e o que vem de cada um", "Shortcuts to open the players, and what comes from each one", "Accesos para abrir los reproductores y lo que viene de cada uno", "Verknüpfungen zum Öffnen der Player und was von jedem kommt"],
+    ["Cores e ícones da barra, do card e do \"A seguir\"", "Colors and icons of the taskbar, the card and \"Up next\"", "Colores e iconos de la barra, la tarjeta y \"A continuación\"", "Farben und Symbole von Taskleiste, Karte und „Als Nächstes“"],
+    ["Para todos", "For everything", "Para todo", "Für alles"],
+    ["Avançado", "Advanced", "Avanzado", "Erweitert"],
+    ["Botões", "Buttons", "Botones", "Tasten"],
+    ["Atalhos", "Shortcuts", "Accesos", "Verknüpfungen"],
+    ["Players", "Players", "Reproductores", "Player"],
+    ["Ícones", "Icons", "Iconos", "Symbole"],
+    ["Na tela", "On screen", "En pantalla", "Auf dem Bildschirm"],
+    ["Tocando no {}", "Playing on {}", "Sonando en {}", "Läuft in {}"],
+    ["App de origem", "Source app", "App de origen", "Quell-App"],
+    ["Selo com o ícone do app (Spotify, Brave…) no canto da capa, na barra, no card e no \"A seguir\"; com o nome, ele aparece também na linha do artista", "Badge with the app's icon (Spotify, Brave…) on the corner of the cover, on the taskbar, the card and \"Up next\"; with the name, it also shows in the artist line", "Insignia con el icono de la app (Spotify, Brave…) en la esquina de la portada, en la barra, la tarjeta y \"A continuación\"; con el nombre, también aparece en la línea del artista", "Abzeichen mit dem App-Symbol (Spotify, Brave…) in der Ecke des Covers, in der Taskleiste, auf der Karte und bei \"Als Nächstes\"; mit dem Namen erscheint es auch in der Interpretenzeile"],
+    ["Só o selo", "Badge only", "Solo la insignia", "Nur Abzeichen"],
+    ["Selo e nome", "Badge and name", "Insignia y nombre", "Abzeichen und Name"],
+    ["Visual", "Look", "Aspecto", "Aussehen"],
+    ["Visual do cartão", "Card look", "Aspecto de la tarjeta", "Aussehen der Karte"],
+    ["Usa o fundo, o tema, os cantos e a sombra do card expandido", "Uses the background, theme, corners and shadow of the expanded card", "Usa el fondo, el tema, las esquinas y la sombra de la tarjeta expandida", "Nutzt Hintergrund, Design, Ecken und Schatten der erweiterten Karte"],
+    ["Capa desfocada, cor extraída da capa ou acrílico (desfoca o que está atrás); vale também para o \"A seguir\"", "Blurred cover, color taken from the cover or acrylic (blurs what's behind); also used by \"Up next\"", "Portada difuminada, color tomado de la portada o acrílico (difumina lo que hay detrás); también vale para \"A continuación\"", "Unscharfes Cover, Farbe aus dem Cover oder Acryl (zeichnet den Hintergrund weich); gilt auch für „Als Nächstes“"],
+    ["Raio das bordas do card e do \"A seguir\" (e do aviso de Caps Lock, com \"Iguais ao card\")", "Corner radius of the card and \"Up next\" (and of the Caps Lock alert, with \"Same as card\")", "Radio de las esquinas de la tarjeta y de \"A continuación\" (y del aviso de Bloq Mayús, con \"Como la tarjeta\")", "Eckenradius der Karte und von „Als Nächstes“ (und des Feststelltasten-Hinweises bei „Wie die Karte“)"],
+    ["Sombra", "Shadow", "Sombra", "Schatten"],
+    ["Sombra do card e do \"A seguir\" sobre o que está atrás", "Shadow of the card and \"Up next\" over what's behind", "Sombra de la tarjeta y de \"A continuación\" sobre lo que hay detrás", "Schatten der Karte und von „Als Nächstes“ auf dem Hintergrund"],
+    ["Forte", "Strong", "Fuerte", "Stark"],
+    ["Suave", "Soft", "Suave", "Weich"],
+    ["Nenhuma", "None", "Ninguna", "Keiner"],
+    ["Granulado", "Grain", "Grano", "Körnung"],
+    ["Textura fina no fundo, que tira o aspecto de plástico dos degradês", "Fine texture on the background that takes the plastic look off the gradients", "Textura fina en el fondo, que quita el aspecto de plástico a los degradados", "Feine Struktur im Hintergrund, die den Verläufen den Plastiklook nimmt"],
+    ["Desfoque do acrílico", "Acrylic blur", "Desenfoque del acrílico", "Acryl-Unschärfe"],
+    ["Quanto o fundo Acrílico desfoca o que está atrás do card e do \"A seguir\"", "How much the Acrylic background blurs what's behind the card and \"Up next\"", "Cuánto difumina el fondo Acrílico lo que hay detrás de la tarjeta y de \"A continuación\"", "Wie stark der Acryl-Hintergrund das hinter Karte und „Als Nächstes“ weichzeichnet"],
+    ["Película do acrílico", "Acrylic tint", "Tinte del acrílico", "Acryl-Tönung"],
+    ["Quanto a cor do tema cobre o desfoque; menos deixa o card mais transparente", "How much the theme color covers the blur; less makes the card more see-through", "Cuánto cubre el color del tema el desenfoque; menos deja la tarjeta más transparente", "Wie stark die Designfarbe die Unschärfe abdeckt; weniger macht die Karte durchsichtiger"],
+    ["Escurecer a capa", "Darken the cover", "Oscurecer la portada", "Cover abdunkeln"],
+    ["Película escura sobre a capa desfocada; menos deixa a capa mais viva", "Dark film over the blurred cover; less makes the cover more vivid", "Película oscura sobre la portada difuminada; menos deja la portada más viva", "Dunkler Film über dem unscharfen Cover; weniger macht das Cover lebendiger"],
+    ["Só vale para o fundo \"Acrílico\" do card", "Only for the card's \"Acrylic\" background", "Solo vale para el fondo \"Acrílico\" de la tarjeta", "Nur für den Hintergrund „Acryl“ der Karte"],
+    ["Só vale para o fundo \"Capa desfocada\" do card", "Only for the card's \"Blurred cover\" background", "Solo vale para el fondo \"Portada difuminada\" de la tarjeta", "Nur für den Hintergrund „Unscharfes Cover“ der Karte"],
+    ["Pontas das barras", "Bar ends", "Extremos de las barras", "Balkenenden"],
+    ["Arredondadas ou retas", "Rounded or square", "Redondeados o rectos", "Abgerundet oder eckig"],
+    ["Arredondadas", "Rounded", "Redondeados", "Abgerundet"],
+    ["Retas", "Square", "Rectos", "Eckig"],
+    ["As pontas não valem para o estilo \"Onda\"", "Bar ends don't apply to the \"Wave\" style", "Los extremos no valen para el estilo \"Onda\"", "Balkenenden gelten nicht für den Stil „Welle“"],
+    ["Play, progresso e botões ligados na barra, no card e no \"A seguir\"", "Play, progress and active buttons on the taskbar, in the card and in \"Up next\"", "Reproducir, progreso y botones activos en la barra, la tarjeta y \"A continuación\"", "Wiedergabe, Fortschritt und aktive Tasten in Taskleiste, Karte und „Als Nächstes“"],
+    ["Escolha \"Personalizada\" em \"Cor de destaque\" para usar esta opção", "Choose \"Custom\" in \"Accent color\" to use this option", "Elige \"Personalizado\" en \"Color de énfasis\" para usar esta opción", "Wähle „Eigene“ unter „Akzentfarbe“, um diese Option zu nutzen"],
+    ["No card e na barra: sempre (apagados quando o player não deixa mudar) ou só quando o player permite. No YouTube Music do navegador valem os botões da própria página", "In the card and on the taskbar: always (dimmed when the player doesn't allow changing them) or only when the player allows. In YouTube Music in the browser, the page's own buttons are used", "En la tarjeta y en la barra: siempre (atenuados cuando el reproductor no deja cambiarlos) o solo cuando el reproductor lo permite. En YouTube Music del navegador valen los botones de la propia página", "In der Karte und in der Taskleiste: immer (abgeblendet, wenn der Player keine Änderung zulässt) oder nur, wenn der Player es erlaubt. Bei YouTube Music im Browser gelten die Tasten der Seite selbst"],
+    ["Predefinições rápidas; ajuste fino em \"Avançado\"", "Quick presets; fine-tuning under \"Advanced\"", "Ajustes rápidos; ajuste fino en \"Avanzado\"", "Schnelle Voreinstellungen; Feinabstimmung unter „Erweitert“"],
+    ["Tocando", "Playing", "Reproduciendo", "Wiedergabe"],
+    ["Pausado", "Paused", "En pausa", "Pausiert"],
+    ["Sem música", "No music", "Sin música", "Keine Musik"],
+    ["Sem música, o widget some da barra", "With no music, the widget leaves the taskbar", "Sin música, el widget desaparece de la barra", "Ohne Musik verschwindet das Widget aus der Taskleiste"],
+    ["O widget está desligado", "The widget is off", "El widget está desactivado", "Das Widget ist aus"],
+    ["Exemplo: um player que não deixa mudar o aleatório e o repetir", "Example: a player that doesn't allow changing shuffle and repeat", "Ejemplo: un reproductor que no deja cambiar el aleatorio y el repetir", "Beispiel: ein Player, der Zufall und Wiederholen nicht ändern lässt"],
+    // ---- Linux
+    ["Este player não deixa mudar isso", "This player doesn't allow changing this", "Este reproductor no permite cambiar esto", "Dieser Player lässt das nicht ändern"],
+    ["Widget de música", "Music widget", "Widget de música", "Musik-Widget"],
+    ["Mostrar/esconder o card", "Show/hide the card", "Mostrar/ocultar la tarjeta", "Karte ein-/ausblenden"],
+    // ---- atualizações
+    ["Atualizações", "Updates", "Actualizaciones", "Updates"],
+    ["Procurar atualizações", "Check for updates", "Buscar actualizaciones", "Nach Updates suchen"],
+    ["Ao abrir e uma vez por dia, nas releases do Taskbeat no GitHub", "When it opens and once a day, in Taskbeat's releases on GitHub", "Al abrir y una vez al día, en las versiones de Taskbeat en GitHub", "Beim Start und einmal täglich, in den Taskbeat-Releases auf GitHub"],
+    ["Instalar sozinho, sem perguntar", "Install automatically, without asking", "Instalar solo, sin preguntar", "Automatisch installieren, ohne zu fragen"],
+    ["Baixa, confere a assinatura, instala e reabre o Taskbeat; desligado, pergunta antes", "Downloads, checks the signature, installs and reopens Taskbeat; when off, it asks first", "Descarga, comprueba la firma, instala y vuelve a abrir Taskbeat; desactivado, pregunta antes", "Lädt herunter, prüft die Signatur, installiert und startet Taskbeat neu; ausgeschaltet wird vorher gefragt"],
+    ["Receber versões de teste", "Get test versions", "Recibir versiones de prueba", "Testversionen erhalten"],
+    ["Também avisa dos betas, que podem ter defeitos", "Also tells you about betas, which may have bugs", "También avisa de las betas, que pueden tener fallos", "Informiert auch über Betas, die Fehler haben können"],
+    ["Procurar agora", "Check now", "Buscar ahora", "Jetzt suchen"],
+    ["O resultado aparece num aviso perto do relógio", "The result shows up in a notice near the clock", "El resultado aparece en un aviso junto al reloj", "Das Ergebnis erscheint als Hinweis neben der Uhr"],
+    ["Procurar", "Check", "Buscar", "Suchen"],
+    ["A consulta mostra o seu IP ao GitHub, como abrir qualquer site; nada mais é enviado", "The check shows your IP address to GitHub, like opening any website; nothing else is sent", "La consulta muestra tu IP a GitHub, como abrir cualquier sitio; no se envía nada más", "Die Abfrage zeigt GitHub deine IP-Adresse, wie beim Öffnen jeder Website; sonst wird nichts gesendet"],
+    ["Ligue \"Procurar atualizações\" para usar esta opção", "Turn on \"Check for updates\" to use this option", "Activa \"Buscar actualizaciones\" para usar esta opción", "Aktiviere \"Nach Updates suchen\", um diese Option zu nutzen"],
+    ["ATUALIZAÇÃO", "UPDATE", "ACTUALIZACIÓN", "UPDATE"],
+    ["ATUALIZADO", "UPDATED", "ACTUALIZADO", "AKTUALISIERT"],
+    ["Taskbeat {} disponível", "Taskbeat {} available", "Taskbeat {} disponible", "Taskbeat {} verfügbar"],
+    ["Você está na versão {}", "You have version {}", "Tienes la versión {}", "Du hast Version {}"],
+    ["Atualizar agora", "Update now", "Actualizar ahora", "Jetzt aktualisieren"],
+    ["Depois", "Later", "Más tarde", "Später"],
+    ["Pular esta versão", "Skip this version", "Omitir versión", "Überspringen"],
+    ["Abrir página", "Open page", "Abrir página", "Seite öffnen"],
+    ["Instalando o Taskbeat {}…", "Installing Taskbeat {}…", "Instalando Taskbeat {}…", "Taskbeat {} wird installiert…"],
+    ["O Taskbeat reabre sozinho em instantes", "Taskbeat will reopen in a moment", "Taskbeat se volverá a abrir en un momento", "Taskbeat startet gleich neu"],
+    ["Taskbeat atualizado para {}", "Taskbeat updated to {}", "Taskbeat actualizado a {}", "Taskbeat auf {} aktualisiert"],
+    ["O Taskbeat está atualizado", "Taskbeat is up to date", "Taskbeat está actualizado", "Taskbeat ist aktuell"],
+    ["A versão {} é a mais recente", "Version {} is the latest", "La versión {} es la más reciente", "Version {} ist die neueste"],
+    ["Não foi possível atualizar", "Couldn't update", "No se pudo actualizar", "Aktualisierung fehlgeschlagen"],
+    ["Não foi possível procurar atualizações", "Couldn't check for updates", "No se pudieron buscar actualizaciones", "Suche nach Updates fehlgeschlagen"],
+    ["Tente de novo mais tarde ou baixe pela página", "Try again later or download it from the page", "Inténtalo más tarde o descárgala desde la página", "Versuche es später erneut oder lade es über die Seite herunter"],
+    ["Tente de novo mais tarde", "Try again later", "Inténtalo más tarde", "Versuche es später erneut"],
 ];

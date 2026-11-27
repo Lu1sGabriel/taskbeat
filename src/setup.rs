@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, Interface, PCWSTR, w};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Taskbeat";
+pub(crate) const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Taskbeat";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const ID_EXIT: usize = 199;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -196,16 +196,16 @@ fn config_dir() -> Option<PathBuf> {
 
 // ---------------------------------------------------------------- registro
 
-fn reg_set_sz(key: &str, name: &str, value: &str) -> windows::core::Result<()> {
+pub(crate) fn reg_set_sz(key: &str, name: &str, value: &str) -> windows::core::Result<()> {
     let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(key), &HSTRING::from(name), REG_SZ.0, Some(wide.as_ptr() as _), (wide.len() * 2) as u32).ok() }
 }
 
-fn reg_set_dword(key: &str, name: &str, value: u32) -> windows::core::Result<()> {
+pub(crate) fn reg_set_dword(key: &str, name: &str, value: u32) -> windows::core::Result<()> {
     unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, &HSTRING::from(key), &HSTRING::from(name), REG_DWORD.0, Some(&value as *const u32 as _), 4).ok() }
 }
 
-fn reg_get_sz(key: &str, name: &str) -> Option<String> {
+pub(crate) fn reg_get_sz(key: &str, name: &str) -> Option<String> {
     unsafe {
         let mut buf = vec![0u16; 1024];
         let mut size = (buf.len() * 2) as u32;
@@ -307,7 +307,16 @@ fn install(dir: &Path, autostart: bool, desktop: bool) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|_| no_access())?;
     let exe = dir.join("Taskbeat.exe");
     if me.canonicalize().ok() != exe.canonicalize().ok() {
+        // O navegador pode abrir o Taskbeat.exe de novo (host da extensão)
+        // logo depois de ele ser fechado, travando o arquivo: o antigo sai do
+        // caminho com outro nome (renomear um .exe em uso é permitido).
+        let old = dir.join("Taskbeat.old");
+        let _ = std::fs::remove_file(&old);
+        if exe.exists() {
+            let _ = std::fs::rename(&exe, &old);
+        }
         write_retry(&exe, &bytes).map_err(|_| no_access())?;
+        let _ = std::fs::remove_file(&old);
     }
     // A licença MIT pede que os avisos acompanhem as cópias do programa.
     crate::licenses::write_to(dir).map_err(|_| no_access())?;
@@ -347,10 +356,53 @@ fn install(dir: &Path, autostart: bool, desktop: bool) -> Result<(), String> {
         }
         Ok(())
     })();
-    r.map_err(|e| e.to_string())
+    r.map_err(|e| e.to_string())?;
+    // A extensão do navegador é opcional: sem isto o resto funciona. A pasta
+    // dela vai junto (para carregar sem compactação até ela estar na loja).
+    if let Err(e) = register_browser_host(dir, &exe) {
+        crate::audio::log::warn(&format!("extensão do navegador: registro falhou ({e})"));
+    }
+    if let Err(e) = crate::webext::write_extension(&dir.join("extension")) {
+        crate::audio::log::warn(&format!("extensão do navegador: pasta não gravada ({e})"));
+    }
+    Ok(())
+}
+
+/// Arquivo com o manifesto do host da extensão (na pasta do programa).
+const HOST_MANIFEST: &str = "browser-host.json";
+
+/// O registro da extensão já aponta para o manifesto desta pasta, em todos
+/// os navegadores?
+pub(crate) fn browser_host_ok(dir: &Path) -> bool {
+    let manifest = dir.join(HOST_MANIFEST);
+    let m = manifest.display().to_string();
+    manifest.exists() && crate::webext::registry_keys().iter().all(|k| reg_get_sz(k, "").as_deref() == Some(m.as_str()))
+}
+
+/// Registra o Taskbeat como host de Native Messaging (a extensão do
+/// navegador abre o `Taskbeat.exe` para falar com o app): o manifesto na
+/// pasta e a chave de cada navegador apontando para ele.
+pub(crate) fn register_browser_host(dir: &Path, exe: &Path) -> Result<(), String> {
+    let manifest = dir.join(HOST_MANIFEST);
+    write_retry(&manifest, crate::webext::host_manifest(exe).as_bytes()).map_err(|e| e.to_string())?;
+    let m = manifest.display().to_string();
+    for key in crate::webext::registry_keys() {
+        reg_set_sz(&key, "", &m).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn unregister_browser_host() {
+    for key in crate::webext::registry_keys() {
+        unsafe {
+            let _ = RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(key));
+        }
+    }
 }
 
 fn uninstall(dir: &Path, wipe: bool) -> Result<(), String> {
+    // Antes de fechar o app: o navegador não abre mais o host da extensão.
+    unregister_browser_host();
     stop_running_app();
     reg_delete_value(RUN_KEY, "Taskbeat");
     unsafe {

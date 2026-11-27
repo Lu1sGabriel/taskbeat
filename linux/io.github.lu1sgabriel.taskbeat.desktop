@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Taskbeat
+GenericName=Music widget
+GenericName[pt_BR]=Widget de música
+GenericName[es]=Widget de música
+GenericName[de]=Musik-Widget
+Comment=Music at the top of the screen: cover, controls and audio bars
+Comment[pt_BR]=Música no topo da tela: capa, controles e barras de áudio
+Comment[es]=Música en la parte superior de la pantalla: portada, controles y barras de audio
+Comment[de]=Musik oben am Bildschirm: Cover, Steuerung und Audiobalken
+Exec=taskbeat
+Icon=taskbeat
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=music;player;spotify;mpris;widget;visualizer;
+StartupNotify=false
+SingleMainWindow=true
