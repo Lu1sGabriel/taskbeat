@@ -896,13 +896,24 @@ impl Config {
                         };
                         crate::files::warn(&format!("config: {} não abriu inteira: {why}", from.display()));
                         rep.bad = keep_bad(from, path);
-                        match text.and_then(|t| t.parse::<toml::Table>().ok()) {
+                        let mut c = match text.and_then(|t| t.parse::<toml::Table>().ok()) {
                             Some(table) => tolerant(table, &mut rep.dropped),
                             None => {
                                 crate::files::warn("config: erro de sintaxe; usando os padrões até a próxima mudança");
                                 Config::default()
                             }
+                        };
+                        // Quem já tinha um arquivo já passou pelo padrão do "abrir ao
+                        // iniciar a sessão". Sem isto, o `apply_login_default` de quem
+                        // chama veria `false`, gravaria os padrões por cima na mesma
+                        // abertura e, no Mac, religaria o item de login.
+                        c.login_default_applied = true;
+                        // A versão do arquivo vale mesmo quando ele não abre: nunca
+                        // rebaixar (um arquivo da 2.0 com erro continua 6).
+                        if let Some(v) = text.and_then(version_in) {
+                            c.version = c.version.max(v);
                         }
+                        c
                     }
                 }
             }
@@ -1031,6 +1042,24 @@ fn keep_bad(from: &Path, path: &Path) -> Option<PathBuf> {
             None
         }
     }
+}
+
+/// O `version = N` do topo de um texto que talvez nem seja TOML válido (antes
+/// da primeira tabela).
+fn version_in(text: &str) -> Option<u32> {
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('[') {
+            break;
+        }
+        let Some(r) = l.strip_prefix("version") else { continue };
+        let Some(r) = r.trim_start().strip_prefix('=') else { continue };
+        let digits: String = r.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(v) = digits.parse() {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// `valid` com `k = v` ainda vira um `Config`?
@@ -1307,7 +1336,8 @@ version = 5
         let (dir, p) = sandbox("sintaxe", Some(text));
         let (c, rep) = Config::load_from(&p, None);
         assert!(rep.tolerant && !rep.saved);
-        assert_eq!(c, Config::default());
+        // Os padrões, com o "abrir ao iniciar" já contado como aplicado.
+        assert_eq!(c, Config { login_default_applied: true, ..Config::default() });
         assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
         assert_eq!(rep.bad.as_deref(), Some(dir.join("config.toml.bad").as_path()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1388,7 +1418,9 @@ version = 5
         c.width = 62;
         c.save_to(&p);
         assert_eq!(Config::load_from(&p, None).0.width, 62);
-        assert!(!crate::files::tmp_path(&p).exists());
+        // Só sobra o `.tmp` velho: o desta gravação virou o `config.toml`.
+        let tmps = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".tmp")).count();
+        assert_eq!(tmps, 1);
         assert_eq!(std::fs::read_to_string(&velho).unwrap(), "width = = pela metade");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1407,6 +1439,28 @@ version = 5
         assert!(rep.saved);
         assert_eq!(c.width, 33);
         assert_eq!(Config::load_from(&p2, None).0.width, 33);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// Arquivo com erro: o "abrir ao iniciar" não conta como pendente (quem
+    /// chama não grava por cima nem religa no Mac), e a `version` do texto fica.
+    #[test]
+    fn arquivo_com_erro_nao_e_regravado_pelo_padrao_de_login() {
+        let (dir, p) = sandbox("login", Some("version = 6\nlogin_default_applied = false\nwidth = = 3\n"));
+        let (mut c, rep) = Config::load_from(&p, None);
+        assert!(rep.tolerant && !rep.saved);
+        assert_eq!(c.version, 6);
+        assert!(c.login_default_applied);
+        let mut ligou = false;
+        assert!(!c.apply_login_default(false, true, || false, || ligou = true));
+        assert!(!ligou);
+        // Carga tolerante com a chave de login caída: o mesmo.
+        let (dir2, p2) = sandbox("login2", Some("version = 5\nlogin_default_applied = \"x\"\ncard_style = \"animated\"\n"));
+        let (c, _) = Config::load_from(&p2, None);
+        assert!(c.login_default_applied);
+        assert_eq!(super::version_in("# c\nversion = 7 # x\n[lyrics]\nversion = 9\n"), Some(7));
+        assert_eq!(super::version_in("[lyrics]\nversion = 9\n"), None);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
     }
