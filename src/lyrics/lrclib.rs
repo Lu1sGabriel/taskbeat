@@ -108,8 +108,9 @@ pub fn clean_title(t: &str) -> String {
             s.truncate(i);
         }
     }
-    // "Música feat. Fulano" sem parênteses.
-    let low = s.to_lowercase();
+    // "Música feat. Fulano" sem parênteses. Só ASCII: o índice achado em `low`
+    // corta `s`, e o `to_lowercase` muda o tamanho de letras como 'İ' e 'K'.
+    let low = s.to_ascii_lowercase();
     for w in [" feat. ", " feat ", " ft. ", " featuring "] {
         if let Some(i) = low.find(w) {
             s.truncate(i);
@@ -132,7 +133,8 @@ pub fn clean_artist(a: &str) -> String {
 
 /// Primeiro artista de "A, B", "A & B", "A feat. B", "A x B".
 pub fn first_artist(a: &str) -> String {
-    let low = a.to_lowercase();
+    // Só ASCII, pelo mesmo motivo do `clean_title`: o índice corta `a`.
+    let low = a.to_ascii_lowercase();
     let mut end = a.len();
     for sep in [", ", " & ", " feat. ", " feat ", " ft. ", " featuring ", " x ", "; ", " / "] {
         if let Some(i) = low.find(sep) {
@@ -344,5 +346,44 @@ mod tests {
         // Instrumental e vazio.
         assert_eq!(Record { instrumental: true, ..Default::default() }.lyrics(), Lyrics::Instrumental);
         assert_eq!(Record { synced_lyrics: Some("[00:01.00]".into()), ..Default::default() }.lyrics(), Lyrics::NotFound);
+    }
+
+    /// Letras que mudam de tamanho em bytes no `to_lowercase` ('İ' 2→3,
+    /// 'K' Kelvin 3→1, 'ẞ' 3→2). O índice achado no texto em minúsculas não
+    /// pode cortar o original no meio de um caractere.
+    #[test]
+    fn letras_que_mudam_de_tamanho_nao_dao_panic() {
+        assert_eq!(first_artist("BİRİCİK, ŞEBNEM"), "BİRİCİK");
+        assert_eq!(first_artist("İİİİ, x"), "İİİİ");
+        assert_eq!(first_artist("\u{212A}\u{212A}\u{212A} & Y"), "\u{212A}\u{212A}\u{212A}");
+        assert_eq!(first_artist("A FEAT. B"), "A");
+        assert_eq!(clean_title("\u{1E9E}\u{1E9E}\u{1E9E} feat. X"), "\u{1E9E}\u{1E9E}\u{1E9E}");
+        assert_eq!(clean_title("İİİİİİ feat. X"), "İİİİİİ");
+        assert_eq!(clean_title("\u{212A}\u{212A} FT. Z"), "\u{212A}\u{212A}");
+        // O ruído com acento continua casando ("VÍDEO" → "vídeo" no `is_noise`).
+        assert_eq!(clean_title("Música (VÍDEO OFICIAL)"), "Música");
+    }
+
+    /// Propriedade: nenhum texto montado com as letras que mudam de tamanho e
+    /// os separadores dá panic. Gerador determinístico, sem crate nova.
+    #[test]
+    fn propriedade_sem_panic_com_letras_especiais() {
+        const PECAS: &[&str] = &[
+            "İ", "\u{212A}", "\u{1E9E}", "Ş", "ß", "Σ", "a", "Z", " ", ", ", " & ", " feat. ", " FEAT ", " ft. ", " x ", "; ", " / ", " featuring ", "(", ")", "[",
+            "]", "【", "】", " - ", " | ", " – ", "video", "VÍDEO",
+        ];
+        let mut k: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..20_000 {
+            k = k.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            let n = (k >> 60) as usize;
+            let mut s = String::new();
+            for _ in 0..n {
+                k = k.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                s.push_str(PECAS[(k >> 33) as usize % PECAS.len()]);
+            }
+            let _ = first_artist(&s);
+            let _ = clean_title(&s);
+            let _ = clean_artist(&s);
+        }
     }
 }
