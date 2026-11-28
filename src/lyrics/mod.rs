@@ -118,6 +118,9 @@ fn strip_word_times(s: &str) -> String {
 /// Lê um arquivo LRC. Linhas com vários tempos (`[00:10.00][01:20.00]refrão`)
 /// viram várias linhas; `[offset:+250]` adianta a letra 250 ms; marcas sem
 /// tempo (`[ar:…]`, `[ti:…]`) são ignoradas. Devolve as linhas em ordem de tempo.
+/// Maior `[offset:]` aceito, em ms (10 min).
+const MAX_OFFSET_MS: f64 = 600_000.0;
+
 pub fn parse_lrc(text: &str) -> Vec<Line> {
     let mut lines = Vec::new();
     let mut offset = 0.0f64;
@@ -130,7 +133,10 @@ pub fn parse_lrc(text: &str) -> Vec<Line> {
             if let Some(t) = parse_time(tag) {
                 times.push(t);
             } else if let Some(v) = tag.strip_prefix("offset:") {
-                offset = v.trim().trim_start_matches('+').parse::<f64>().unwrap_or(0.0) / 1000.0;
+                // Em ms. NaN e infinito são TOML/LRC "válidos" e jogariam todas as
+                // linhas para 0 ou +inf (B7); limite de ±10 min, já em ms.
+                let ms = v.trim().trim_start_matches('+').parse::<f64>().ok().filter(|x| x.is_finite()).unwrap_or(0.0);
+                offset = ms.clamp(-MAX_OFFSET_MS, MAX_OFFSET_MS) / 1000.0;
             }
             rest = rest[end + 1..].trim_start();
         }
@@ -246,6 +252,21 @@ mod tests {
     fn offset_negativo_atrasa() {
         let l = parse_lrc("[offset:-250]\n[00:01.00]x");
         assert_eq!(l[0].t, 1.25);
+    }
+
+    /// `[offset:NaN]`, `inf` e gigantes não estragam os tempos (B7).
+    #[test]
+    fn offset_invalido_ou_enorme() {
+        for o in ["NaN", "nan", "inf", "-inf", "+infinity"] {
+            let l = parse_lrc(&format!("[offset:{o}]\n[00:01.00]x\n[00:02.00]y"));
+            assert_eq!((l[0].t, l[1].t), (1.0, 2.0), "{o}");
+        }
+        // Limitado a ±10 min.
+        let l = parse_lrc("[offset:-1e300]\n[00:01.00]x");
+        assert_eq!(l[0].t, 601.0);
+        let l = parse_lrc("[offset:+99999999]\n[00:01.00]x");
+        assert_eq!(l[0].t, 0.0);
+        assert!(l.iter().all(|x| x.t.is_finite()));
     }
 
     #[test]

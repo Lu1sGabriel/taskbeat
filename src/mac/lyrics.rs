@@ -193,7 +193,9 @@ struct Overlay {
     last_vol_poll: Option<Instant>,
     icons: IconAnims,
     play_override: Option<(bool, Instant)>,
-    bg_clock: f32,
+    /// Relógio do fundo animado. `f64`: em `f32` passa a andar aos trancos depois
+    /// de ~36 h em tela cheia (B15).
+    bg_clock: f64,
     last_sig: Option<u64>,
     ignoring: bool,
 }
@@ -773,7 +775,7 @@ impl Overlay {
             self.change = None;
         }
         if self.bg_anim() {
-            self.bg_clock += dt;
+            self.bg_clock += dt as f64;
         }
         let lyr_alpha = self.lyr_at.map(|t| (t.elapsed().as_secs_f32() / LYRIC_FADE).min(1.0)).unwrap_or(1.0);
         let pb = self.playback();

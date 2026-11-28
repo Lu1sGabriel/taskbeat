@@ -405,7 +405,7 @@ pub(super) fn draw_fullscreen_preview(cv: &mut Canvas, tr: &mut TextRenderer, r:
             it: Interact::default(),
             hover: None,
             tools: 0.0,
-            bg_time: lc.animated_bg.then_some(t),
+            bg_time: lc.animated_bg.then_some(t as f64),
             hires: None,
             change: None,
             mixer: None,

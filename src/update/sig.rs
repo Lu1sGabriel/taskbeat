@@ -9,12 +9,12 @@ fn ok(s: NTSTATUS) -> bool {
     s.0 >= 0
 }
 
-/// SHA-256 dos bytes.
-pub fn sha256(data: &[u8]) -> [u8; 32] {
+/// SHA-256 dos bytes. Uma falha da CNG vira erro (antes era um `assert!`, e
+/// com `panic = "abort"` fechava o app; B16).
+pub fn sha256(data: &[u8]) -> Result<[u8; 32], String> {
     let mut out = [0u8; 32];
     let st = unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut out) };
-    assert!(ok(st), "BCryptHash falhou: {:#x}", st.0);
-    out
+    if ok(st) { Ok(out) } else { Err(format!("BCryptHash falhou: {:#x}", st.0)) }
 }
 
 /// Chave pública no formato da CNG (cabeçalho + X‖Y).
@@ -31,7 +31,7 @@ pub fn verify_p256(xy: &[u8; 64], msg: &[u8], sig: &[u8]) -> bool {
     if sig.len() != 64 {
         return false;
     }
-    let hash = sha256(msg);
+    let Ok(hash) = sha256(msg) else { return false };
     unsafe {
         let mut key = BCRYPT_KEY_HANDLE::default();
         if !ok(BCryptImportKeyPair(BCRYPT_ECDSA_P256_ALG_HANDLE, None, BCRYPT_ECCPUBLIC_BLOB, &mut key, &public_blob(xy), 0)) {
@@ -47,7 +47,9 @@ pub fn verify_p256(xy: &[u8; 64], msg: &[u8], sig: &[u8]) -> bool {
 /// conteúdo do `.sig` (r‖s em hexadecimal) e a chave pública embutida.
 pub fn check(key: &[u8; 64], file: &str, version: &Version, exe: &[u8], sig_text: &[u8]) -> Result<(), String> {
     let sig = std::str::from_utf8(sig_text).ok().and_then(unhex).filter(|s| s.len() == 64).ok_or("assinatura mal formada (.sig)")?;
-    let msg = signed_message(file, version, &hex(&sha256(exe)));
+    // Sem o hash não há como conferir: conta como assinatura inválida.
+    let digest = sha256(exe).map_err(|e| format!("assinatura inválida ({e})"))?;
+    let msg = signed_message(file, version, &hex(&digest));
     if verify_p256(key, msg.as_bytes(), &sig) { Ok(()) } else { Err("assinatura inválida".into()) }
 }
 
@@ -75,7 +77,7 @@ impl TestKey {
     }
 
     pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
-        let hash = sha256(msg);
+        let hash = sha256(msg).unwrap();
         let mut sig = [0u8; 64];
         let mut len = 0u32;
         let st = unsafe { BCryptSignHash(self.0, None, &hash, Some(&mut sig), &mut len, BCRYPT_FLAGS(0)) };
@@ -85,7 +87,7 @@ impl TestKey {
 
     /// O `.sig` de um instalador, como o `build-installer.ps1` gera.
     pub fn sig_file(&self, file: &str, version: &Version, exe: &[u8]) -> String {
-        hex(&self.sign(signed_message(file, version, &hex(&sha256(exe))).as_bytes())) + "\n"
+        hex(&self.sign(signed_message(file, version, &hex(&sha256(exe).unwrap())).as_bytes())) + "\n"
     }
 }
 
@@ -105,8 +107,8 @@ mod tests {
     #[test]
     fn sha256_conhecido() {
         // Vetores do FIPS 180-2.
-        assert_eq!(hex(&sha256(b"")), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-        assert_eq!(hex(&sha256(b"abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(hex(&sha256(b"").unwrap()), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(hex(&sha256(b"abc").unwrap()), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 
     #[test]
@@ -128,7 +130,7 @@ mod tests {
         let sig = "b2c56b57cf0cab7fd45c0ab837398fb7ad80bee6a246b2193f627b9b3a7bc522269de760421b3eeed9c9529dabd38d819a96ed247602a1205dcfd63decf92c2e\n";
         let v = Version::parse("1.4.0").unwrap();
         let exe = b"MZ fake installer bytes";
-        assert_eq!(hex(&sha256(exe)), "706ac79a1c87727e3f48df89fc37b494f1172bba1278ef1b00c852fdacfc8245");
+        assert_eq!(hex(&sha256(exe).unwrap()), "706ac79a1c87727e3f48df89fc37b494f1172bba1278ef1b00c852fdacfc8245");
         assert_eq!(check(&key, "Taskbeat-Setup-1.4.0.exe", &v, exe, sig.as_bytes()), Ok(()));
         assert!(check(&key, "Taskbeat-Setup-1.4.0.exe", &v, b"MZ fake installer byteZ", sig.as_bytes()).is_err());
     }

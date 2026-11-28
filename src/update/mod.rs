@@ -430,6 +430,13 @@ impl State {
     }
 }
 
+/// Já passou um dia desde a última procura? Um `last` no futuro (o relógio
+/// esteve adiantado uma vez) conta como vencido, senão o app só voltaria a
+/// procurar quando chegasse aquela data (B14).
+fn check_due(last: u64, now: u64) -> bool {
+    last > now || now - last >= DAY
+}
+
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -562,7 +569,7 @@ fn run(shared: Arc<Shared>) {
             (c.update_check, c.update_beta)
         };
         let mut state = State::load();
-        let due = first || now_secs().saturating_sub(state.last_check) >= DAY;
+        let due = first || check_due(state.last_check, now_secs());
         if manual || enabled && due {
             first = false;
             state.last_check = now_secs();
@@ -768,4 +775,17 @@ mod tests {
         assert_eq!(toml::from_str::<State>(&t).unwrap(), s);
         assert_eq!(toml::from_str::<State>("").unwrap(), State::default());
     }
+
+    /// `last_check` no futuro conta como vencido (B14).
+    #[test]
+    fn procura_vencida_inclusive_com_relogio_adiantado() {
+        let now = 1_000_000;
+        assert!(!check_due(now, now));
+        assert!(!check_due(now - DAY + 1, now));
+        assert!(check_due(now - DAY, now));
+        assert!(check_due(0, now));
+        assert!(check_due(now + 1, now));
+        assert!(check_due(u64::MAX, now));
+    }
+
 }

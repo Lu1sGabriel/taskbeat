@@ -57,7 +57,7 @@ pub struct View<'a> {
     pub tools: f32,
     /// Tela cheia: segundos da animação do fundo (`None`: fundo parado) e a
     /// capa em alta resolução, se já chegou.
-    pub bg_time: Option<f32>,
+    pub bg_time: Option<f64>,
     pub hires: Option<&'a crate::render::Image>,
     /// Troca de música em andamento: (música anterior, 0..1).
     pub change: Option<(&'a MediaInfo, f32)>,

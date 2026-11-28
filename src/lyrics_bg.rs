@@ -128,17 +128,25 @@ fn layer(field: &mut [[f32; 3]], lw: usize, lh: usize, src: &[[f32; 3]], cx: f32
     }
 }
 
+/// Ângulo `t·k` reduzido a uma volta em `f64` antes de virar `f32`: o tempo
+/// em tela cheia passa de dias, e um `f32` de 2^17 s (≈ 36 h) já anda em passos
+/// de 15,6 ms (B15).
+fn turn(t: f64, k: f64) -> f32 {
+    (t * k).rem_euclid(std::f64::consts::TAU) as f32
+}
+
 /// Monta a grade do quadro no tempo `t` (s).
-fn field(src: &[[f32; 3]], lw: usize, lh: usize, t: f32) -> Vec<u32> {
-    use std::f32::consts::TAU;
+fn field(src: &[[f32; 3]], lw: usize, lh: usize, t: f64) -> Vec<u32> {
+    use std::f64::consts::TAU;
     let (w, h) = (lw as f32, lh as f32);
     let big = w.max(h);
     let mut f = vec![[0.0f32; 3]; lw * lh];
     // Fundo: a capa inteira cobrindo tudo, girando bem devagar.
-    let a0 = t * 0.035;
+    let a0 = turn(t, 0.035);
     let diag = (w * w + h * h).sqrt();
     let (sn, cs) = a0.sin_cos();
-    let (cx, cy) = (w / 2.0 + w * 0.05 * (t * TAU / 47.0).cos(), h / 2.0 + h * 0.06 * (t * TAU / 47.0).sin());
+    let wob = turn(t, TAU / 47.0);
+    let (cx, cy) = (w / 2.0 + w * 0.05 * wob.cos(), h / 2.0 + h * 0.06 * wob.sin());
     for y in 0..lh {
         for x in 0..lw {
             let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
@@ -148,16 +156,16 @@ fn field(src: &[[f32; 3]], lw: usize, lh: usize, t: f32) -> Vec<u32> {
         }
     }
     // Três manchas da capa andando em círculos (períodos diferentes, um sentido cada).
-    let orbit = |period: f32, phase: f32, rx: f32, ry: f32| {
-        let a = t * TAU / period + phase;
+    let orbit = |period: f64, phase: f32, rx: f32, ry: f32| {
+        let a = turn(t, TAU / period) + phase;
         (w / 2.0 + rx * a.cos(), h / 2.0 + ry * a.sin())
     };
     let (x1, y1) = orbit(26.0, 0.0, w * 0.30, h * 0.30);
-    layer(&mut f, lw, lh, src, x1, y1, big * 0.95, -t * 0.08, 0.85, false);
+    layer(&mut f, lw, lh, src, x1, y1, big * 0.95, -turn(t, 0.08), 0.85, false);
     let (x2, y2) = orbit(-34.0, 2.1, w * 0.34, h * 0.26);
-    layer(&mut f, lw, lh, src, x2, y2, big * 0.80, t * 0.06 + 1.3, 0.75, true);
+    layer(&mut f, lw, lh, src, x2, y2, big * 0.80, turn(t, 0.06) + 1.3, 0.75, true);
     let (x3, y3) = orbit(41.0, 4.2, w * 0.22, h * 0.34);
-    layer(&mut f, lw, lh, src, x3, y3, big * 0.70, t * 0.11 + 2.6, 0.65, false);
+    layer(&mut f, lw, lh, src, x3, y3, big * 0.70, turn(t, 0.11) + 2.6, 0.65, false);
     smooth(&mut f, lw, lh);
     // Película: escurece (mais embaixo e nas bordas) e satura um pouco.
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
@@ -236,7 +244,7 @@ fn lerp(a: u32, b: u32, f: u32) -> u32 {
 /// Pinta o fundo na tela toda (opaco). `t`: tempo da animação (`None`:
 /// parado no começo). `mix` (0..1): troca de música em andamento, da capa
 /// anterior para a atual.
-pub fn fill(cv: &mut Canvas, art: Option<&Image>, t: Option<f32>, mix: f32) {
+pub fn fill(cv: &mut Canvas, art: Option<&Image>, t: Option<f64>, mix: f32) {
     let (w, h) = (cv.w, cv.h);
     if w == 0 || h == 0 {
         return;
@@ -359,14 +367,14 @@ mod tests {
         let n = 30;
         let t0 = std::time::Instant::now();
         for i in 0..n {
-            fill(&mut cv, Some(&art), Some(i as f32 / 24.0), 1.0);
+            fill(&mut cv, Some(&art), Some(i as f64 / 24.0), 1.0);
         }
         let ms = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
         println!("fundo animado 2560x1440: {ms:.2} ms por quadro");
         let src = source(Some(&art));
         let t1 = std::time::Instant::now();
         for i in 0..n {
-            std::hint::black_box(field(&src, w.div_ceil(DOWN), h.div_ceil(DOWN), i as f32 / 24.0));
+            std::hint::black_box(field(&src, w.div_ceil(DOWN), h.div_ceil(DOWN), i as f64 / 24.0));
         }
         println!("  só a grade: {:.2} ms", t1.elapsed().as_secs_f64() * 1000.0 / n as f64);
         let t2 = std::time::Instant::now();
@@ -375,4 +383,16 @@ mod tests {
         }
         println!("  só a ampliação: {:.2} ms", t2.elapsed().as_secs_f64() * 1000.0 / n as f64);
     }
+
+    /// O ângulo de um tempo de dias continua andando em passos finos (B15).
+    #[test]
+    fn angulo_de_tempo_longo_nao_engasga() {
+        let dias = 5.0 * 86_400.0;
+        let a = turn(dias, 0.11);
+        let b = turn(dias + 1.0 / 60.0, 0.11);
+        let passo = (b - a).rem_euclid(std::f32::consts::TAU);
+        assert!((passo - 0.11 / 60.0).abs() < 1e-5, "{passo}");
+        assert!((0.0..std::f32::consts::TAU).contains(&turn(-3.0, 0.5)));
+    }
+
 }

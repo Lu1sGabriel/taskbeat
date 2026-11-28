@@ -111,7 +111,8 @@ pub fn decode(text: &str, now: u64) -> Option<Lyrics> {
         "synced" => Some(Lyrics::Synced(parse_lrc(&body))),
         "plain" => Some(Lyrics::Plain(parse_plain(&body))),
         "instrumental" => Some(Lyrics::Instrumental),
-        "none" => (now.saturating_sub(time) < NOT_FOUND_TTL.as_secs()).then_some(Lyrics::NotFound),
+        // Uma marca no futuro (relógio adiantado uma vez) conta como vencida (B14).
+        "none" => (time <= now && now - time < NOT_FOUND_TTL.as_secs()).then_some(Lyrics::NotFound),
         _ => None,
     }
 }
@@ -223,6 +224,8 @@ mod tests {
         let none = encode(&Lyrics::NotFound, key, 100).unwrap();
         assert_eq!(decode(&none, 100 + 3600), Some(Lyrics::NotFound));
         assert_eq!(decode(&none, 100 + 8 * 24 * 3600), None);
+        // Gravado "no futuro": vencido, para procurar de novo.
+        assert_eq!(decode(&none, 50), None);
         assert!(encode(&Lyrics::Failed, key, 100).is_none());
         assert!(decode("outra coisa", 0).is_none());
     }

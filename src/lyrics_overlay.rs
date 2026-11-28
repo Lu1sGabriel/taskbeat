@@ -488,7 +488,9 @@ struct St {
     mon: Option<Mon>,
     fullscreen: bool,
     /// Tela cheia: relógio do fundo animado (só anda tocando) e o último quadro dele.
-    bg_clock: f32,
+    /// Relógio do fundo animado. `f64`: em `f32` passa a andar aos trancos depois
+    /// de ~36 h em tela cheia (B15).
+    bg_clock: f64,
     bg_frame: Instant,
     /// Capa em alta resolução (tela cheia), da música com este título.
     hires: Option<(String, Arc<Image>)>,
@@ -1930,7 +1932,7 @@ impl St {
         // Fundo animado da tela cheia: o relógio só anda tocando.
         let bg_anim = self.fullscreen && self.lc().animated_bg && pb.playing;
         if bg_anim {
-            self.bg_clock += dt;
+            self.bg_clock += dt as f64;
         }
         let busy = self.anim.is_some()
             || self.tools != tools_target
