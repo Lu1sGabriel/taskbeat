@@ -54,10 +54,19 @@ echo "soak do Taskbeat ($OS)" >"$RESUMO"
 TMP=$(mktemp -d)
 APP=
 PLAYER=
+# Mata um processo e todos os descendentes (o ci-mpris.py não trata SIGTERM, e
+# o laço `while true; do paplay …; done` que ele abre ficaria órfão tocando).
+# Só a árvore do player: um paplay da própria pessoa não é tocado.
+kill_tree() {
+    local kids kid
+    kids=$(pgrep -P "$1" 2>/dev/null)
+    # O pai primeiro: o laço para de abrir outro paplay antes dos filhos morrerem.
+    kill "$1" 2>/dev/null
+    for kid in $kids; do kill_tree "$kid"; done
+}
 cleanup() {
     [ -n "$APP" ] && [ "$ATTACH" = 0 ] && kill "$APP" 2>/dev/null
-    [ -n "$PLAYER" ] && kill "$PLAYER" 2>/dev/null
-    pkill -x paplay 2>/dev/null
+    [ -n "$PLAYER" ] && kill_tree "$PLAYER"
     rm -rf "$TMP"
 }
 trap cleanup EXIT
