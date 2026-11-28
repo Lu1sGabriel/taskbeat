@@ -21,3 +21,6 @@
 
 # Peças do card/widget para as imagens da loja (geradas por make-images.ps1)
 /extension/store/images/parts/
+
+# Grafo do graphify (gerado)
+graphify-out/
