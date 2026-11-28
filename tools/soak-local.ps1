@@ -133,6 +133,11 @@ try {
     Say "ok"
 } finally {
     if ($app -and $AttachPid -eq 0 -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
-    if ($player -and -not $player.HasExited) { Stop-Process -Id $player.Id -Force -ErrorAction SilentlyContinue }
+    if ($player) {
+        if (-not $player.HasExited) { Stop-Process -Id $player.Id -Force -ErrorAction SilentlyContinue }
+        # Morto à força, o player não apaga o WAV dele.
+        Start-Sleep -Milliseconds 500
+        Remove-Item (Join-Path ([IO.Path]::GetTempPath()) "taskbeat-ci-$($player.Id).wav") -ErrorAction SilentlyContinue
+    }
     if ($appData) { Remove-Item -Recurse -Force $appData -ErrorAction SilentlyContinue }
 }
