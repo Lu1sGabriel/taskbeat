@@ -176,6 +176,7 @@ fn run(inner: &Inner) {
                 WaitForSingleObject(inner.wake, 15);
             }
         }
+        crate::stats::wake("vsync");
         let now = Instant::now();
         let dt = (now - last).as_secs_f32().clamp(0.002, 0.05);
         last = now;

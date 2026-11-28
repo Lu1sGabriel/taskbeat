@@ -1136,11 +1136,16 @@ impl Overlay {
     fn redraw_card_bars(&mut self, x: i32, y: f32, alpha: f32, s: f32) -> bool {
         let Some(mut surf) = self.flyout.surface.take() else { return false };
         let th = ui::card_theme(&self.cfg, &self.colors, &self.media);
+        let t_draw = crate::stats::enabled().then(Instant::now);
         let part = ui::card_bars_update(&mut surf.canvas(), &self.analyzer.values, &th, s);
         if let Some(r) = part {
             // Parado, o card está em y inteiro (sem o meio pixel da animação).
             let dirty = RECT { left: r.x.max(0.0) as i32, top: r.y.max(0.0) as i32, right: r.right().ceil() as i32, bottom: r.bottom().ceil() as i32 };
+            let t_present = t_draw.map(|_| Instant::now());
             surf.present_part(self.flyout.hwnd, x, y.round() as i32, alpha, dirty);
+            if let (Some(a), Some(b)) = (t_draw, t_present) {
+                crate::stats::frame("card-barras", b - a, b.elapsed());
+            }
         }
         self.flyout.surface = Some(surf);
         part.is_some()
@@ -1226,6 +1231,7 @@ impl Overlay {
     }
 
     fn frame(&mut self) {
+        crate::stats::wake("overlay");
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().clamp(0.001, 0.1);
         self.last_frame = now;
@@ -1486,6 +1492,7 @@ impl Overlay {
         Surface::ensure(&mut self.surface, p.w, p.h);
         let Some(mut surface) = self.surface.take() else { return };
         let layout = WLayout::build_for(p.scale, p.h as f32, &self.cfg, panel, viz, self.bar_launchers(), self.bar_toggles());
+        let t_draw = crate::stats::enabled().then(Instant::now);
         {
             let mut cv = surface.canvas();
             cv.fill_raw(0x0100_0000); // alfa 1/255: invisível, mas recebe cliques
@@ -1509,7 +1516,11 @@ impl Overlay {
             ui::draw_widget(&mut cv, &mut self.text, &layout, &f);
         }
         let fade = self.fade.clamp(0.0, 1.0);
+        let t_present = t_draw.map(|_| Instant::now());
         surface.present(self.hwnd, p.x, p.y, fade * fade * (3.0 - 2.0 * fade));
+        if let (Some(a), Some(b)) = (t_draw, t_present) {
+            crate::stats::frame("widget", b - a, b.elapsed());
+        }
         self.surface = Some(surface);
 
         if !self.shown {
@@ -2188,6 +2199,7 @@ impl Overlay {
         };
 
         self.text.set_scale(s);
+        let t_draw = crate::stats::enabled().then(Instant::now);
         Surface::ensure(&mut self.flyout.surface, l.w.round() as i32, l.h.round() as i32);
         let Some(mut surf) = self.flyout.surface.take() else { return true };
         let theme = ui::card_theme(&self.cfg, &self.colors, &self.media);
@@ -2229,7 +2241,11 @@ impl Overlay {
             self.flyout_tmp = Vec::new();
         }
         let clip = pose.clip.then_some((edge, p.taskbar_bottom_edge));
+        let t_present = t_draw.map(|_| Instant::now());
         self.flyout_src_y = surf.present_clipped(self.flyout.hwnd, x, wy, pose.alpha, clip);
+        if let (Some(a), Some(b)) = (t_draw, t_present) {
+            crate::stats::frame("card", b - a, b.elapsed());
+        }
         self.flyout.surface = Some(surf);
         self.flyout.show(true);
         moving

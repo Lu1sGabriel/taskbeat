@@ -55,6 +55,7 @@ pub fn spawn(shared: Arc<Shared>) {
         while shared.is_running() {
             // Aberto: confere a cada 10 s (os avisos cobrem o resto); fechado,
             // só espera um pedido.
+            crate::stats::wake("mixer");
             let wait = if m.open.is_some() { Duration::from_secs(10) } else { Duration::from_secs(1) };
             let cmd = match rx.recv_timeout(wait) {
                 Ok(c) => Some(c),

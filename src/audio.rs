@@ -217,6 +217,7 @@ fn process_capture(shared: &Shared, app: &str, pid: u32, st: Started) -> Result<
                 }
                 // Sem som o Windows não manda pacotes: o tempo limite mantém as checagens.
                 let _ = WaitForSingleObject(st.event, 100);
+                crate::stats::wake("audio-player");
                 if last_check.elapsed() > Duration::from_millis(1000) {
                     last_check = Instant::now();
                     let cfg_on = shared.wants_audio() && shared.player_only();
@@ -298,6 +299,7 @@ fn capture(shared: &Shared, player: Option<&str>) -> Result<()> {
                 break Ok(());
             }
             std::thread::sleep(Duration::from_millis(10));
+            crate::stats::wake("audio-loopback");
 
             if last_device_check.elapsed() > Duration::from_millis(1500) {
                 last_device_check = Instant::now();

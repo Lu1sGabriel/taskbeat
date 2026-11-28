@@ -33,6 +33,7 @@ mod notch;
 mod png;
 mod render;
 mod shared;
+mod stats;
 mod ui;
 mod update;
 // Mesma interface nos três sistemas; DirectWrite no Windows, CoreText no Mac,

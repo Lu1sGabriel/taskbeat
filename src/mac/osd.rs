@@ -162,6 +162,7 @@ pub fn test() {
 
 /// Temporizador: o Caps Lock mudou?
 pub fn tick() {
+    crate::stats::wake("teclas-tick");
     with(|o| {
         o.pull_config();
         if !o.cfg.caps_lock_osd {

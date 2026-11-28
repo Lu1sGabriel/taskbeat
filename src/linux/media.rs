@@ -441,6 +441,7 @@ impl State {
         self.publish_current();
         let fd = self.conn.channel().watch().fd;
         while self.shared.is_running() {
+            crate::stats::wake("media");
             // Tudo que já chegou.
             loop {
                 let _ = self.conn.channel().read_write(Some(Duration::ZERO));

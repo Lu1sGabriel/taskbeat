@@ -93,6 +93,7 @@ pub fn spawn(shared: Arc<Shared>) {
 
             let mut st = State { tx: Some(tx), ..State::default() };
             while shared.is_running() {
+                crate::stats::wake("media");
                 match rx.recv_timeout(POLL) {
                     Ok(MediaCmd::Refresh) => {
                         // Junta rajadas de eventos (o player costuma mandar vários

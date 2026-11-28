@@ -120,6 +120,7 @@ pub fn sync(mtm: MainThreadMarker) {
 
 /// Temporizador lento (10 Hz).
 pub fn tick() {
+    crate::stats::wake("letra-tick");
     with(|o| o.tick());
 }
 

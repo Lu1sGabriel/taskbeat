@@ -427,6 +427,7 @@ pub fn frame() {
 
 /// Temporizador lento.
 pub fn tick() {
+    crate::stats::wake("ilha-tick");
     with(|n| {
         n.pull_media();
         n.pull_config();
@@ -779,12 +780,14 @@ impl Notch {
             launchers: &self.apps,
             wing_app: self.wing.as_ref(),
         };
+        let t_draw = crate::stats::enabled().then(Instant::now);
         {
             let mut cv = Canvas::new(sw, sh_, &mut self.buf);
             cv.set_clip(RectF::new(rx0 as f32, ry0 as f32, (rx1 - rx0) as f32, (ry1 - ry0) as f32));
             cv.fill_clip(0);
             nd::draw(&mut cv, &mut self.tr, l, &f);
         }
+        let t_present = t_draw.map(|_| Instant::now());
         // Copia só a região para a camada.
         let (rw, rh) = (rx1 - rx0, ry1 - ry0);
         let mut px = Vec::with_capacity(rw * rh);
@@ -799,6 +802,9 @@ impl Notch {
         let obj: &AnyObject = unsafe { &*((&*img as *const objc2_core_graphics::CGImage).cast::<AnyObject>()) };
         unsafe { self.content.setContents(Some(obj)) };
         CATransaction::commit();
+        if let (Some(a), Some(b)) = (t_draw, t_present) {
+            crate::stats::frame("ilha", b - a, b.elapsed());
+        }
     }
 
     // ------------------------------------------------------------ mouse

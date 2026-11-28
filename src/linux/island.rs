@@ -627,7 +627,13 @@ impl Island {
             p.1 += 1;
             p.3 += now.elapsed();
         }
-        if self.win.present(&self.buf, sw, sh_, (rx0, ry0, rx1, ry1)) {
+        let draw = crate::stats::enabled().then(|| now.elapsed());
+        let t_present = draw.map(|_| Instant::now());
+        let shown = self.win.present(&self.buf, sw, sh_, (rx0, ry0, rx1, ry1));
+        if let (Some(d), Some(t)) = (draw, t_present) {
+            crate::stats::frame("ilha", d, t.elapsed());
+        }
+        if shown {
             self.last_sig = Some(sig);
             self.last_still = Some(still);
             self.last_pos_sec = pos_sec;
@@ -818,6 +824,7 @@ pub fn run(shared: Arc<Shared>, rx: Receiver<App>) {
     n.schedule();
     let wake = system::wake_fd();
     while shared.is_running() {
+        crate::stats::wake("ilha");
         n.win.before_poll();
         let mut fds = [libc::pollfd { fd: n.win.fd(), events: libc::POLLIN, revents: 0 }, libc::pollfd { fd: wake, events: libc::POLLIN, revents: 0 }];
         let timeout = n.timeout();
