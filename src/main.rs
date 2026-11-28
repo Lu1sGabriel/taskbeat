@@ -14,8 +14,12 @@
 // de teclas…) não é usada.
 #![cfg_attr(any(target_os = "macos", target_os = "linux"), allow(dead_code))]
 
+// Subtrair `Duration` de `Instant` pode dar panic (veja `clock.rs`).
+#![warn(clippy::unchecked_time_subtraction)]
+
 // Comuns aos dois sistemas: configurações, análise do áudio, traduções e desenho.
 mod anim;
+mod clock;
 mod config;
 mod dsp;
 mod http;

@@ -203,7 +203,7 @@ pub fn spawn(shared: Arc<Shared>, notify: fn()) {
             let mut st = State::new(shared.clone(), notify, tx.clone());
             let mut live = adapter.as_ref().is_some_and(|a| a.stream(tx.clone()));
             let mut restarts = 0u32;
-            let mut last_script = Instant::now() - SCRIPT_POLL;
+            let mut last_script = crate::clock::back(Instant::now(), SCRIPT_POLL);
             let started = Instant::now();
             while shared.is_running() {
                 match rx.recv_timeout(SCRIPT_POLL) {

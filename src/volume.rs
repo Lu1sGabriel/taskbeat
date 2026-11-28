@@ -2,6 +2,7 @@
 //! o mesmo que o botão de volume da bandeja controla.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use crate::clock::elapsed_or_max;
 use std::time::{Duration, Instant};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender};
@@ -19,16 +20,16 @@ pub struct Volume {
     ep: Option<IAudioEndpointVolume>,
     /// `OUTPUT_VERSION` de quando `ep` foi aberto.
     version: u64,
-    last_endpoint: Instant,
-    last_read: Instant,
+    /// `None` = nunca (abre e lê já no primeiro uso).
+    last_endpoint: Option<Instant>,
+    last_read: Option<Instant>,
     pub level: f32,
     pub muted: bool,
 }
 
 impl Volume {
     pub fn new() -> Self {
-        let long_ago = Instant::now() - Duration::from_secs(60);
-        let mut v = Self { ep: None, version: 0, last_endpoint: long_ago, last_read: long_ago, level: 0.0, muted: false };
+        let mut v = Self { ep: None, version: 0, last_endpoint: None, last_read: None, level: 0.0, muted: false };
         v.poll();
         v
     }
@@ -37,8 +38,8 @@ impl Volume {
         // Reabre quando o Windows avisa que a saída padrão mudou (fone, HDMI,
         // a escolha no mixer do card) e, por garantia, a cada 30 s.
         let version = OUTPUT_VERSION.load(Ordering::Relaxed);
-        if self.ep.is_none() || self.version != version || self.last_endpoint.elapsed() > Duration::from_secs(30) {
-            self.last_endpoint = Instant::now();
+        if self.ep.is_none() || self.version != version || elapsed_or_max(self.last_endpoint) > Duration::from_secs(30) {
+            self.last_endpoint = Some(Instant::now());
             self.version = version;
             self.ep = unsafe {
                 CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
@@ -52,10 +53,10 @@ impl Volume {
 
     /// Lê nível e mudo (no máximo ~7x por segundo).
     pub fn poll(&mut self) {
-        if self.last_read.elapsed() < Duration::from_millis(150) {
+        if elapsed_or_max(self.last_read) < Duration::from_millis(150) {
             return;
         }
-        self.last_read = Instant::now();
+        self.last_read = Some(Instant::now());
         if let Some(ep) = self.endpoint() {
             unsafe {
                 if let Ok(l) = ep.GetMasterVolumeLevelScalar() {
@@ -79,7 +80,7 @@ impl Volume {
                 }
             }
             self.level = level;
-            self.last_read = Instant::now();
+            self.last_read = Some(Instant::now());
         }
     }
 
@@ -94,7 +95,7 @@ impl Volume {
                 let _ = ep.SetMute(!self.muted, std::ptr::null());
             }
             self.muted = !self.muted;
-            self.last_read = Instant::now();
+            self.last_read = Some(Instant::now());
         }
     }
 }

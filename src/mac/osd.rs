@@ -208,7 +208,7 @@ impl Osd {
         }
         // Já estava na tela: troca o estado sem entrar de novo.
         let shown = self.start.is_some_and(|t| t.elapsed().as_secs_f32() > 0.3);
-        self.start = Some(if shown { Instant::now() - Duration::from_millis(350) } else { Instant::now() });
+        self.start = Some(if shown { crate::clock::back(Instant::now(), Duration::from_millis(350)) } else { Instant::now() });
         self.on = on;
 
         let (w, h) = ui::osd_size(s, &self.cfg);

@@ -2363,7 +2363,7 @@ impl Ui {
     fn wake_preview(&mut self) {
         self.awake_until = Instant::now() + PREVIEW_AWAKE;
         if let Some(t) = self.frozen_t.take() {
-            self.t0 = Instant::now() - std::time::Duration::from_secs_f32(t.max(0.0));
+            self.t0 = crate::clock::back(Instant::now(), crate::clock::secs_f32(t));
         }
     }
 

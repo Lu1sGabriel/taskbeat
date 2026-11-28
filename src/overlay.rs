@@ -10,6 +10,7 @@
 //! clicou fora (WM_ACTIVATE). Thread própria com timer de alta resolução.
 
 use crate::anim::{self, Ctx, Pose, Stage, Which};
+use crate::clock;
 use crate::i18n::tr;
 use crate::audio::log;
 use crate::config::{Config, OsdAnim, OsdPosition};
@@ -622,7 +623,8 @@ struct Overlay {
     pressed: Option<(Win, Hit)>,
     drag: Option<Hit>,
     seek_preview: Option<f32>,
-    last_input: Instant,
+    /// `None` = nunca.
+    last_input: Option<Instant>,
     play_pending: Pending<bool>,
     shuffle_pending: Pending<bool>,
     repeat_pending: Pending<u8>,
@@ -630,8 +632,10 @@ struct Overlay {
     // áudio / visibilidade
     last_written: u64,
     last_audio: Instant,
-    last_sound: Instant,
-    last_layout: Instant,
+    /// `None` = nunca (ou forçar o silêncio).
+    last_sound: Option<Instant>,
+    /// `None` = refazer o layout no próximo tick.
+    last_layout: Option<Instant>,
     last_colors: Instant,
     last_frame: Instant,
     fade: f32,
@@ -846,15 +850,15 @@ fn run(shared: Arc<Shared>) -> windows::core::Result<()> {
         pressed: None,
         drag: None,
         seek_preview: None,
-        last_input: now - Duration::from_secs(10),
+        last_input: None,
         play_pending: Pending::new(),
         shuffle_pending: Pending::new(),
         repeat_pending: Pending::new(),
         seek_pending: None,
         last_written: 0,
         last_audio: now,
-        last_sound: now - SILENCE_HIDE_AFTER,
-        last_layout: now - Duration::from_secs(10),
+        last_sound: None,
+        last_layout: None,
         last_colors: now,
         last_frame: now,
         fade: 0.0,
@@ -1231,7 +1235,7 @@ impl Overlay {
             self.cfg_version = ver;
             self.cfg = self.shared.config();
             self.colors = system::colors(self.cfg.palette);
-            self.last_layout = now - Duration::from_secs(10);
+            self.last_layout = None;
             self.update_hook();
             self.refresh_launchers();
         }
@@ -1319,7 +1323,7 @@ impl Overlay {
             // reiniciar a animação de entrada.
             let shown = self.osd_start.is_some_and(|t| (now - t).as_secs_f32() > 0.3);
             self.osd_key = (tr("Caps Lock"), false, self.lock_state[0]);
-            self.osd_start = Some(if shown { now - Duration::from_millis(350) } else { now });
+            self.osd_start = Some(if shown { clock::back(now, Duration::from_millis(350)) } else { now });
         }
 
         // Quais partes aparecem e onde.
@@ -1327,10 +1331,10 @@ impl Overlay {
         let panel = self.cfg.show_media && horizontal && (self.media.present() || self.cfg.always_show_widget);
         let viz = self.cfg.show_visualizer;
         let layout_every = Duration::from_millis(if self.period == IDLE_PERIOD_MS { 500 } else { 250 });
-        if panel != self.panel || viz != self.viz || now - self.last_layout > layout_every {
+        if panel != self.panel || viz != self.viz || clock::since(now, self.last_layout) > layout_every {
             self.panel = panel;
             self.viz = viz;
-            self.last_layout = now;
+            self.last_layout = Some(now);
             let logical = WLayout::build_for(1.0, 40.0, &self.cfg, panel, viz, self.bar_launchers(), self.bar_toggles()).width.ceil() as i32;
             self.placement = taskbar::compute(&self.cfg, logical.max(1));
             self.attach_to_taskbar();
@@ -1384,10 +1388,10 @@ impl Overlay {
             }
             self.analyzer.update(&self.samples, dt, self.cfg.sensitivity_db);
             if self.analyzer.energy() > 0.03 {
-                self.last_sound = now;
+                self.last_sound = Some(now);
             }
         }
-        let sound = now - self.last_sound < SILENCE_HIDE_AFTER;
+        let sound = clock::since(now, self.last_sound) < SILENCE_HIDE_AFTER;
 
         if self.flyout_open {
             self.volume.poll();
@@ -1438,7 +1442,7 @@ impl Overlay {
             || had_input
             || icons_active
             || (self.fade > 0.0 && self.fade < 1.0)
-            || now - self.last_input < Duration::from_millis(500);
+            || clock::since(now, self.last_input) < Duration::from_millis(500);
         let changing = self.change_progress(now).is_some();
         let busy = busy || changing;
         let decorative = (panel && pb.playing && (self.cfg.playing_indicator || self.cfg.marquee || self.cfg.taskbar_progress)) || self.flyout_decorative;
@@ -1687,12 +1691,12 @@ impl Overlay {
         if events.is_empty() {
             return false;
         }
-        self.last_input = now;
+        self.last_input = Some(now);
         let s = self.scale();
         let wl = self.widget_layout().unwrap_or_default();
         let cl = self.card_layout();
         for (win, ev) in events {
-            if win == Win::Widget && self.widget_drag_event(ev, s, now) {
+            if win == Win::Widget && self.widget_drag_event(ev, s) {
                 continue;
             }
             // Card deslizando por trás da barra do topo: a janela começa
@@ -1950,7 +1954,7 @@ impl Overlay {
 
     /// Arrastar o widget pela barra. Devolve `true` quando o evento foi do
     /// arrasto (não vira clique nem mexe no "mouse em cima").
-    fn widget_drag_event(&mut self, ev: Ev, s: f32, now: Instant) -> bool {
+    fn widget_drag_event(&mut self, ev: Ev, s: f32) -> bool {
         match ev {
             Ev::Down(_, _, sx) => {
                 // Só com a barra na horizontal: na vertical (Windows 10) não há
@@ -1983,7 +1987,7 @@ impl Overlay {
                     let off = (((x - p.base_x) as f32) / p.scale).round() as i32;
                     log::info(&format!("widget arrastado para x={x} (deslocamento {off})"));
                     self.shared.update_config(|c| c.offset = off.clamp(-4000, 4000));
-                    self.last_layout = now - Duration::from_secs(10);
+                    self.last_layout = None;
                 }
                 true
             }
@@ -1993,7 +1997,7 @@ impl Overlay {
                 let was = self.wdrag.take().is_some_and(|d| d.active);
                 if was {
                     self.pressed = None;
-                    self.last_layout = now - Duration::from_secs(10);
+                    self.last_layout = None;
                 }
                 was
             }
