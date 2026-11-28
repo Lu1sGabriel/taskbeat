@@ -40,6 +40,10 @@ ele abre ficava órfão, tocando. O `pkill -x paplay` também matava qualquer
 `paplay` da pessoa. Agora o script mata a árvore do player (o pai primeiro) e
 mais nada.
 
+**Correção da revisão do M0:** o `soak-local.ps1` mata o `ci_player` à força, e
+o player não chegava a apagar o WAV dele (~1,9 MB em `%TEMP%` por soak). Agora o
+script apaga o arquivo.
+
 **Não verificado:**
 - o soak hospedado (precisa do arquivo na `main` para o `workflow_dispatch`);
 - se o runner do Windows, sem placa de som, deixa o `MediaPlayer` tocar. Se
