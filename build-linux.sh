@@ -10,9 +10,15 @@ cd "$(dirname "$0")"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1 | tr -d '\r')
 DEB_VERSION=${VERSION//-/\~}
 ID=io.github.lu1sgabriel.taskbeat
-APPIMAGETOOL_URL=https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+# appimagetool e runtime type2 em versão fixa, conferidos pelo sha256 (o
+# projeto não publica checksum: os valores foram tirados baixando uma vez). Sem
+# o `--runtime-file`, o appimagetool baixaria o runtime "continuous" a cada build.
+APPIMAGETOOL_URL=https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+RUNTIME_URL=https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
 
-cargo build --release
+cargo build --release --locked
 BIN=target/release/taskbeat
 
 # Ícones em vários tamanhos (o tema hicolor escolhe o certo).
@@ -74,13 +80,24 @@ cp linux/$ID.desktop "$APPDIR/$ID.desktop"
 cp assets/taskbeat-256.png "$APPDIR/taskbeat.png"
 cp LICENSE THIRD-PARTY-NOTICES.md "$APPDIR/"
 ln -sf usr/bin/taskbeat "$APPDIR/AppRun"
-TOOL=build/appimagetool-x86_64.AppImage
-if [ ! -x "$TOOL" ]; then
-    curl -sSfL -o "$TOOL" "$APPIMAGETOOL_URL"
-    chmod +x "$TOOL"
-fi
+# Baixa (se faltar) e confere o hash; um arquivo que não confere é apagado.
+fetch() { # url sha256 destino
+    if [ ! -f "$3" ] || ! echo "$2  $3" | sha256sum -c --status; then
+        curl -sSfL -o "$3" "$1"
+    fi
+    if ! echo "$2  $3" | sha256sum -c --status; then
+        echo "sha256 não confere: $3 ($1)" >&2
+        rm -f "$3"
+        exit 1
+    fi
+}
+TOOL=build/appimagetool-1.9.1-x86_64.AppImage
+RUNTIME=build/runtime-20251108-x86_64
+fetch "$APPIMAGETOOL_URL" "$APPIMAGETOOL_SHA256" "$TOOL"
+fetch "$RUNTIME_URL" "$RUNTIME_SHA256" "$RUNTIME"
+chmod +x "$TOOL"
 # --appimage-extract-and-run: funciona sem FUSE (CI, contêineres).
-ARCH=x86_64 "$TOOL" --appimage-extract-and-run --no-appstream "$APPDIR" "dist/Taskbeat-$VERSION-x86_64.AppImage" >/dev/null
+ARCH=x86_64 "$TOOL" --appimage-extract-and-run --no-appstream --runtime-file "$RUNTIME" "$APPDIR" "dist/Taskbeat-$VERSION-x86_64.AppImage" >/dev/null
 
 echo "Pronto:"
 ls -lh dist/taskbeat_*"$DEB_VERSION"*.deb "dist/Taskbeat-$VERSION-x86_64.AppImage"

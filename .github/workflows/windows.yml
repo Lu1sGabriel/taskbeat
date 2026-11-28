@@ -1,13 +1,19 @@
 name: Windows
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+# Só leitura: este workflow não publica nada.
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 40
+    timeout-minutes: 60
     defaults:
       run:
         # bash para cada comando que falhar parar o passo (o pwsh do Actions
@@ -16,16 +22,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A versão vem do rust-toolchain.toml (o rustup instala o que ele pede).
       - name: Rust
         run: |
-          rustup update stable
-          rustup default stable
-          rustc --version
+          rustup toolchain install
+          rustc -V
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Testes
-        run: cargo test --release
+      # Debug primeiro: `debug_assert`, as checagens de overflow e o código
+      # `cfg(debug_assertions)` só rodam aqui.
+      - name: Testes (debug)
+        run: cargo test --locked
+
+      - name: Testes (release)
+        run: cargo test --locked --release
+
+      # Só reporta (sem -D warnings) até os avisos do M2 serem zerados.
+      - name: Clippy
+        run: cargo clippy --all-targets --locked
 
       - name: Capturas e GIFs desenhados pelo código (DirectWrite)
         env:

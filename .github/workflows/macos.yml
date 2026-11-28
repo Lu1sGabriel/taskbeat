@@ -17,21 +17,30 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
+      # A versão vem do rust-toolchain.toml (o rustup instala o que ele pede).
       - name: Rust
         run: |
-          rustup update stable
-          rustup default stable
+          rustup toolchain install
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          rustc --version
+          rustc -V
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Testes
-        run: cargo test --release
+      # Debug primeiro: `debug_assert`, as checagens de overflow e o código
+      # `cfg(debug_assertions)` só rodam aqui.
+      - name: Testes (debug)
+        run: cargo test --locked
+
+      - name: Testes (release)
+        run: cargo test --locked --release
+
+      # Só reporta (sem -D warnings) até os avisos do M2 serem zerados.
+      - name: Clippy
+        run: cargo clippy --all-targets --locked
 
       - name: Capturas desenhadas pelo código (CoreText + SF Symbols)
         env:

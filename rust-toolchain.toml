@@ -1,0 +1,7 @@
+# Toolchain fixo: a atualização do Rust vira um PR que dá para revisar.
+# Os workflows instalam este arquivo (`rustup toolchain install`); não defina
+# `RUSTUP_TOOLCHAIN`, que passa por cima dele.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

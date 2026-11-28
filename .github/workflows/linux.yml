@@ -6,12 +6,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Só leitura: este workflow não publica nada.
+permissions:
+  contents: read
+
 jobs:
   build:
     # O mais antigo com suporte: o binário roda em distros com glibc 2.35+
     # (Ubuntu 22.04, Debian 12, Fedora 36…).
     runs-on: ubuntu-22.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -20,16 +24,25 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q pkg-config libdbus-1-dev libpulse-dev libfreetype-dev libfontconfig1-dev libharfbuzz-dev fonts-noto-core imagemagick
 
+      # A versão vem do rust-toolchain.toml (o rustup instala o que ele pede).
       - name: Rust
         run: |
-          rustup update stable
-          rustup default stable
-          rustc --version
+          rustup toolchain install
+          rustc -V
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Testes
-        run: cargo test --release
+      # Debug primeiro: `debug_assert`, as checagens de overflow e o código
+      # `cfg(debug_assertions)` só rodam aqui.
+      - name: Testes (debug)
+        run: cargo test --locked
+
+      - name: Testes (release)
+        run: cargo test --locked --release
+
+      # Só reporta (sem -D warnings) até os avisos do M2 serem zerados.
+      - name: Clippy
+        run: cargo clippy --all-targets --locked
 
       - name: Capturas desenhadas pelo código (FreeType + HarfBuzz)
         env:
@@ -65,6 +78,24 @@ jobs:
         with:
           name: linux-code-shots
           path: shots/
+
+  # Licenças, fontes e advisories das dependências (deny.toml). Só aqui: a
+  # action é um contêiner Docker, que não roda nos runners de Windows e Mac.
+  # Um advisory novo não quebra o PR (continue-on-error só nesse).
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        checks: [advisories, "bans licenses sources"]
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
 
   shots:
     # O app de verdade numa distro atual: Sway sem tela (Wayland com

@@ -1,0 +1,31 @@
+# cargo-deny (job `deny` do linux.yml). Sem `targets` no [graph]: confere as
+# dependências dos três sistemas.
+
+[graph]
+all-features = true
+
+[advisories]
+# Um advisory novo não quebra o PR (o job de advisories tem continue-on-error);
+# fica visível no CI.
+
+[licenses]
+# Os SPDX exatos do Cargo.lock (os mesmos do THIRD-PARTY-NOTICES).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Zlib",
+    "Unlicense",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# O padrão só avisa: aqui, qualquer fonte fora do crates.io é erro.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
