@@ -5,11 +5,16 @@
 
 use crate::render::{Image, RectF};
 use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// Maior lado aceito ao decodificar (protege a memória de imagens enormes).
 const MAX_SIDE: usize = 8192;
+/// Maior área aceita, conferida no cabeçalho antes de decodificar: uma capa
+/// de 8192² passava por cerca de 470 MB de pico (B9). O lado continua até
+/// `MAX_SIDE`, para uma capa larga não ser recusada à toa.
+const MAX_AREA: usize = 4096 * 4096;
 /// Maior arquivo de capa aceito.
 const MAX_BYTES: u64 = 16 << 20;
 
@@ -32,6 +37,11 @@ fn from_rgba(w: usize, h: usize, rgba: &[u8], channels: usize) -> Option<Image> 
     Some(Image::plain(w, h, px))
 }
 
+/// As dimensões do cabeçalho cabem nos limites de lado e de área?
+fn fits(w: usize, h: usize) -> bool {
+    w <= MAX_SIDE && h <= MAX_SIDE && w.checked_mul(h).is_some_and(|a| a <= MAX_AREA)
+}
+
 /// Decodifica JPEG, PNG ou WebP.
 pub fn decode(bytes: &[u8]) -> Option<Image> {
     use zune_core::colorspace::ColorSpace;
@@ -41,6 +51,9 @@ pub fn decode(bytes: &[u8]) -> Option<Image> {
         let mut d = zune_png::PngDecoder::new_with_options(bytes, opts.png_set_strip_to_8bit(true).png_set_add_alpha_channel(true));
         d.decode_headers().ok()?;
         let (w, h) = d.get_dimensions()?;
+        if !fits(w, h) {
+            return None;
+        }
         let px = d.decode().ok()?.u8()?;
         let ch = px.len() / (w * h).max(1);
         return from_rgba(w, h, &px, ch);
@@ -48,15 +61,20 @@ pub fn decode(bytes: &[u8]) -> Option<Image> {
     if bytes.starts_with(b"\xFF\xD8") {
         let mut d = zune_jpeg::JpegDecoder::new_with_options(bytes, opts.jpeg_set_out_colorspace(ColorSpace::RGB));
         d.decode_headers().ok()?;
-        let px = d.decode().ok()?;
+        // As dimensões antes do `decode()`, que é onde a memória vai.
         let (w, h) = d.dimensions()?;
+        if !fits(w, h) {
+            return None;
+        }
+        let px = d.decode().ok()?;
         return from_rgba(w, h, &px, 3);
     }
     if bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         let mut d = image_webp::WebPDecoder::new(std::io::Cursor::new(bytes)).ok()?;
         let (w, h) = d.dimensions();
         let (w, h) = (w as usize, h as usize);
-        if w > MAX_SIDE || h > MAX_SIDE {
+        // O `set_memory_limit` do image-webp não limita os pixels.
+        if !fits(w, h) {
             return None;
         }
         let ch = if d.has_alpha() { 4 } else { 3 };
@@ -138,13 +156,10 @@ pub fn fetch(url: &str) -> Option<Vec<u8>> {
         let path = rest.strip_prefix("localhost").unwrap_or(rest);
         use std::os::unix::ffi::OsStrExt;
         let p = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&percent_decode(path)));
-        let f = std::fs::File::open(p).ok()?;
-        let mut v = Vec::new();
-        f.take(MAX_BYTES).read_to_end(&mut v).ok()?;
-        return Some(v);
+        return read_capped(&p);
     }
     if url.starts_with('/') {
-        return std::fs::read(url).ok();
+        return read_capped(Path::new(url));
     }
     if let Some(rest) = url.strip_prefix("data:") {
         let (meta, data) = rest.split_once(',')?;
@@ -154,6 +169,21 @@ pub fn fetch(url: &str) -> Option<Vec<u8>> {
         return curl(url);
     }
     None
+}
+
+/// Lê no máximo `MAX_BYTES` de um **arquivo comum** (B8). O `O_NONBLOCK` faz o
+/// `open` de um FIFO voltar na hora em vez de prender a thread, e o `is_file`
+/// é conferido no arquivo já aberto (um `metadata` antes do `open` daria uma
+/// janela para trocar o arquivo). `/dev/zero`, pastas e FIFOs ficam de fora.
+fn read_capped(path: &Path) -> Option<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path).ok()?;
+    if !f.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut v = Vec::new();
+    f.take(MAX_BYTES).read_to_end(&mut v).ok()?;
+    Some(v)
 }
 
 fn curl(url: &str) -> Option<Vec<u8>> {
@@ -204,4 +234,38 @@ mod tests {
         assert_eq!((img.w, img.h), (64, 64));
         assert!(img.px.iter().any(|&p| p >> 24 == 255));
     }
+
+    #[test]
+    fn limite_de_area_sem_recusar_capa_larga() {
+        assert!(fits(4096, 4096));
+        assert!(fits(8192, 2048));
+        assert!(!fits(4097, 4096));
+        assert!(!fits(8192, 8192));
+        assert!(!fits(8193, 1));
+        assert!(!fits(usize::MAX, 2));
+    }
+
+    #[test]
+    fn so_le_arquivo_comum_e_com_limite() {
+        let dir = std::env::temp_dir().join(format!("taskbeat-gfx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("capa b.png");
+        std::fs::write(&f, b"abc").unwrap();
+        assert_eq!(read_capped(&f).as_deref(), Some(&b"abc"[..]));
+        assert_eq!(fetch(&format!("file://{}", dir.join("capa%20b.png").display())).as_deref(), Some(&b"abc"[..]));
+        assert_eq!(fetch(f.to_str().unwrap()).as_deref(), Some(&b"abc"[..]));
+        // Dispositivo e pasta: recusados sem ler.
+        assert!(fetch("/dev/zero").is_none());
+        assert!(read_capped(&dir).is_none());
+        // FIFO sem ninguém escrevendo: volta na hora.
+        let fifo = dir.join("fila");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let t = Instant::now();
+        assert!(read_capped(&fifo).is_none());
+        assert!(t.elapsed() < Duration::from_secs(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

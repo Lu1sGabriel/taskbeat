@@ -23,8 +23,8 @@ use dbus::blocking::LocalConnection;
 use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
 use dbus::message::MessageType;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Condvar, Mutex};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -166,7 +166,9 @@ struct State {
     auto_seq: u64,
     /// Capa da URL `art.0` (carregada ou carregando).
     art: (String, Option<Arc<Image>>),
+    /// A última URL pedida à thread de capas (carregando ou na fila).
     loading: Option<String>,
+    covers: Covers,
     art_cache: HashMap<String, Option<Arc<Image>>>,
     changed_at: Option<Instant>,
     art_at_change: String,
@@ -202,6 +204,7 @@ pub fn spawn(shared: Arc<Shared>) {
             };
             ch.set_watch_enabled(true);
             let conn = LocalConnection::from(ch);
+            let covers = Covers::spawn(tx.clone(), wake_w);
             let mut st = State {
                 shared: shared.clone(),
                 conn,
@@ -213,6 +216,7 @@ pub fn spawn(shared: Arc<Shared>) {
                 auto_seq: 0,
                 art: (String::new(), None),
                 loading: None,
+                covers,
                 art_cache: HashMap::new(),
                 changed_at: None,
                 art_at_change: String::new(),
@@ -223,6 +227,66 @@ pub fn spawn(shared: Arc<Shared>) {
             st.run(rx, wake_r);
         })
         .expect("thread de mídia");
+}
+
+/// Uma thread só para as capas, com fila de 1: a URL nova substitui a que
+/// ainda esperava (B9). Antes era uma thread por URL, sem limite de quantas
+/// decodificando ao mesmo tempo. A que já está carregando termina e vai para o
+/// cache.
+struct Covers {
+    /// (URL na fila, fechar).
+    slot: Arc<(Mutex<(Option<String>, bool)>, Condvar)>,
+}
+
+impl Covers {
+    fn spawn(tx: Sender<Ev>, wake: i32) -> Self {
+        let slot = Arc::new((Mutex::new((None::<String>, false)), Condvar::new()));
+        let s = slot.clone();
+        let started = std::thread::Builder::new().name("media-covers".into()).spawn(move || {
+            system::background_thread();
+            while let Some(url) = Self::next(&s) {
+                let img = gfx::fetch(&url).and_then(|b| gfx::decode_square(&b, ART_SIZE)).map(Arc::new);
+                if tx.send(Ev::Art(url, img)).is_err() {
+                    break;
+                }
+                poke(wake);
+            }
+        });
+        if let Err(e) = started {
+            log::warn(&format!("mídia: thread de capas não abriu ({e})"));
+        }
+        Self { slot }
+    }
+
+    /// Espera a próxima URL; `None` quando a fila fecha.
+    fn next(s: &(Mutex<(Option<String>, bool)>, Condvar)) -> Option<String> {
+        let (m, cv) = s;
+        let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if g.1 {
+                return None;
+            }
+            if let Some(u) = g.0.take() {
+                return Some(u);
+            }
+            g = cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Pede a capa de `url`, no lugar da que esperava na fila.
+    fn request(&self, url: String) {
+        let (m, cv) = &*self.slot;
+        m.lock().unwrap_or_else(|e| e.into_inner()).0 = Some(url);
+        cv.notify_one();
+    }
+}
+
+impl Drop for Covers {
+    fn drop(&mut self) {
+        let (m, cv) = &*self.slot;
+        m.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+        cv.notify_one();
+    }
 }
 
 fn pipe() -> (i32, i32) {
@@ -569,13 +633,7 @@ impl State {
                     self.art.1 = img.clone();
                 } else if self.loading.as_deref() != Some(&p.art_url) {
                     self.loading = Some(p.art_url.clone());
-                    let (tx, url, wake) = (self.tx.clone(), p.art_url.clone(), self.wake_w);
-                    std::thread::spawn(move || {
-                        system::background_thread();
-                        let img = gfx::fetch(&url).and_then(|b| gfx::decode_square(&b, ART_SIZE)).map(Arc::new);
-                        let _ = tx.send(Ev::Art(url, img));
-                        poke(wake);
-                    });
+                    self.covers.request(p.art_url.clone());
                 }
             }
         }
@@ -697,5 +755,23 @@ impl State {
         if let Err(e) = r {
             log::warn(&format!("mídia: comando {c:?} falhou em {}: {e}", p.bus));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fila de capas guarda só a última URL e fecha sem travar.
+    #[test]
+    fn fila_de_capas_fica_com_a_ultima() {
+        let slot = (Mutex::new((None::<String>, false)), Condvar::new());
+        let c = Covers { slot: Arc::new(slot) };
+        c.request("a".into());
+        c.request("b".into());
+        assert_eq!(Covers::next(&c.slot).as_deref(), Some("b"));
+        let s = c.slot.clone();
+        drop(c);
+        assert_eq!(Covers::next(&s), None);
     }
 }
