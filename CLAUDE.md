@@ -70,3 +70,13 @@ feito, por área, em `docs/historico/`.
   com `--target aarch64-apple-darwin` (sem aviso novo); `cargo test` no
   Linux pelo WSL (`CARGO_TARGET_DIR` no ext4); o CI do Mac no branch.
 - `graphify-out/` é gerado e não vai para o git.
+- Toolchain fixo em `rust-toolchain.toml` (a partir da `release/2.0`): trocar
+  de versão é um PR próprio. Nada de `RUSTUP_TOOLCHAIN` nos workflows.
+
+## Medição
+
+- PR `perf`, ou mudança que roda por quadro: medir antes e depois com
+  `tools/measure.ps1`/`tools/measure.sh` e `TASKBEAT_FRAMESTATS=1`, contra a
+  base em `docs/medicoes/`.
+- Ponto de medição novo: `crate::stats::frame`/`wake`, lendo o relógio só
+  dentro de `stats::enabled()`, para desligado custar um `if`.

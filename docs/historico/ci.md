@@ -48,3 +48,29 @@ script apaga o arquivo.
 - o soak hospedado (precisa do arquivo na `main` para o `workflow_dispatch`);
 - se o runner do Windows, sem placa de som, deixa o `MediaPlayer` tocar. Se
   não deixar, o script registra e o soak mede o app parado.
+
+## 2.0 (branch `release/2.0`, etapa 1, M0)
+
+**PR-01 `ci: toolchain fixo, permissões, testes em debug e cargo-deny`**
+- `rust-toolchain.toml`: `1.100.0`, perfil `minimal`, com `clippy` e
+  `rustfmt`. Os três workflows trocam `rustup update stable`/`rustup default
+  stable` por `rustup toolchain install` e `rustc -V`, antes do cache. Nada de
+  `RUSTUP_TOOLCHAIN`, que passaria por cima do arquivo.
+- `permissions: contents: read` no topo do `windows.yml` e do `linux.yml` (o
+  `macos.yml` já tinha; o job `release` dele continua pedindo escrita só para
+  anexar o .dmg). `windows.yml` também em `push: main`.
+- `cargo test --locked` em debug antes do `--release`, e
+  `cargo clippy --all-targets --locked` só reportando (sem `-D warnings`). O
+  `timeout-minutes` dos jobs de build subiu de 40 para 60, por causa da
+  segunda compilação.
+- `cargo-deny` só no `linux.yml`, num job próprio (a action é Docker e não
+  roda no Windows nem no Mac), com a matriz `advisories` (com
+  `continue-on-error`) e `bans licenses sources`. `deny.toml`: as licenças
+  exatas do lock (MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, Zlib,
+  Unlicense, Unicode-3.0), `unknown-registry`/`unknown-git = "deny"` e o
+  `[graph]` sem `targets`.
+- `build-linux.sh`: `cargo build --release --locked`; o appimagetool 1.9.1 e o
+  runtime type2 `20251108` em URL fixa, conferidos pelo sha256 (tirados
+  baixando uma vez; o do runtime bate com o do plano), e `--runtime-file`
+  para o appimagetool não baixar o runtime "continuous".
+- `.github/pull_request_template.md` com o checklist da seção 0.3 do plano.
