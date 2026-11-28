@@ -136,8 +136,8 @@ impl Cache {
 
     pub fn put(&self, key: &str, l: &Lyrics) {
         let Some(text) = encode(l, key, unix_now()) else { return };
-        let _ = std::fs::create_dir_all(&self.dir);
-        let _ = std::fs::write(self.file(key), text);
+        // Atômico: uma gravação interrompida não deixa um `.lrc` pela metade.
+        let _ = crate::files::write_atomic(&self.file(key), text.as_bytes());
     }
 
     /// Apaga tudo; devolve quantos arquivos saíram.

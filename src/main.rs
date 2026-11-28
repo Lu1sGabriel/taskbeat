@@ -22,6 +22,7 @@ mod anim;
 mod clock;
 mod config;
 mod dsp;
+mod files;
 mod http;
 mod i18n;
 mod licenses;

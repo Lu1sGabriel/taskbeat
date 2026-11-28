@@ -2,7 +2,7 @@
 //! ~/Library/Application Support/Taskbeat/config.toml (Mac).
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -864,11 +864,53 @@ impl Config {
 
     pub fn load() -> Self {
         let Some(path) = Self::path() else { return Self::default() };
-        let mut cfg: Config = std::fs::read_to_string(&path)
-            .or_else(|_| std::fs::read_to_string(Self::legacy_path().unwrap_or_default()))
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default();
+        Self::load_from(&path, Self::legacy_path().as_deref()).0
+    }
+
+    /// Carga **tolerante**: um arquivo que não abre inteiro (erro de digitação,
+    /// ou um valor que só uma versão mais nova conhece, como quem volta da 2.0)
+    /// não vira os padrões calado. O arquivo lido é copiado para
+    /// `config.toml.bad`, e ficam as chaves que ainda servem, uma a uma.
+    ///
+    /// Depois disso **não grava**: a próxima gravação é a da próxima mudança
+    /// feita pela pessoa. E a `version` nunca é rebaixada: um arquivo de uma
+    /// versão mais nova continua com o número dela.
+    fn load_from(path: &Path, legacy: Option<&Path>) -> (Self, LoadReport) {
+        let mut rep = LoadReport::default();
+        let read = std::fs::read(path).map(|b| (b, path)).or_else(|e| match legacy {
+            Some(l) => std::fs::read(l).map(|b| (b, l)),
+            None => Err(e),
+        });
+        let mut cfg = match read {
+            // Nada salvo ainda: os padrões (gravados logo abaixo).
+            Err(_) => Config::default(),
+            Ok((bytes, from)) => {
+                let text = std::str::from_utf8(&bytes).ok();
+                match text.map(toml::from_str::<Config>) {
+                    Some(Ok(c)) => c,
+                    other => {
+                        rep.tolerant = true;
+                        let why = match other {
+                            Some(Err(e)) => e.to_string(),
+                            _ => "não é UTF-8".to_string(),
+                        };
+                        crate::files::warn(&format!("config: {} não abriu inteira: {why}", from.display()));
+                        rep.bad = keep_bad(from, path);
+                        match text.and_then(|t| t.parse::<toml::Table>().ok()) {
+                            Some(table) => tolerant(table, &mut rep.dropped),
+                            None => {
+                                crate::files::warn("config: erro de sintaxe; usando os padrões até a próxima mudança");
+                                Config::default()
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        if !rep.dropped.is_empty() {
+            crate::files::warn(&format!("config: chaves que caíram para o padrão: {}", rep.dropped.join(", ")));
+        }
+        // Só migra para a frente: `version` maior que a nossa fica como está.
         let migrate = cfg.version < CONFIG_VERSION;
         if migrate {
             if cfg.version < 2 {
@@ -891,24 +933,38 @@ impl Config {
             }
             cfg.version = CONFIG_VERSION;
         }
-        if migrate || !path.exists() {
-            cfg.save();
-        }
+        // Antes de gravar: a migração não grava valor fora da faixa (B5).
         cfg.sanitize();
-        cfg
+        if (migrate || !path.exists()) && !rep.tolerant {
+            cfg.save_to(path);
+            rep.saved = true;
+        }
+        (cfg, rep)
     }
 
     pub fn save(&self) {
         let Some(path) = Self::path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Ok(text) = toml::to_string_pretty(self) {
-            let _ = std::fs::write(path, text);
+        self.save_to(&path);
+    }
+
+    /// Grava num `.tmp` ao lado e troca com `rename`: uma gravação
+    /// interrompida não deixa o `config.toml` pela metade.
+    fn save_to(&self, path: &Path) {
+        match toml::to_string_pretty(self) {
+            Ok(text) => {
+                if let Err(e) = crate::files::write_atomic(path, text.as_bytes()) {
+                    crate::files::warn(&format!("config: não gravou {} ({e}); o arquivo anterior continua", path.display()));
+                }
+            }
+            Err(e) => crate::files::warn(&format!("config: não serializou ({e})")),
         }
     }
 
     fn sanitize(&mut self) {
+        // NaN e infinito passam pelo `clamp` (B6): voltam para o padrão.
+        if !self.sensitivity_db.is_finite() {
+            self.sensitivity_db = 0.0;
+        }
         for c in [&mut self.widget_controls_rgb, &mut self.card_controls_rgb, &mut self.accent_rgb] {
             if parse_hex(c).is_none() {
                 *c = "#5EB1FF".into();
@@ -935,6 +991,91 @@ impl Config {
         self.artwork_dim = self.artwork_dim.clamp(50, 150);
         self.lyrics.sanitize();
     }
+}
+
+/// O que a carga fez (para os testes e o registro).
+#[derive(Debug, Default)]
+struct LoadReport {
+    /// O arquivo não abriu inteiro e passou pela carga tolerante.
+    tolerant: bool,
+    /// Chaves que caíram para o padrão (`lyrics.free_x` para as de tabela).
+    dropped: Vec<String>,
+    /// Onde ficou a cópia do arquivo que não abriu.
+    bad: Option<PathBuf>,
+    /// Gravou o arquivo (primeira execução ou migração).
+    saved: bool,
+}
+
+/// Quantas cópias `.bad` guardar além da primeira: `config.toml.bad`,
+/// `.bad.1` … `.bad.5`.
+const MAX_BAD: usize = 5;
+
+/// Copia o arquivo que não abriu (`from`, que pode ser o do nome antigo do
+/// app) para junto de `path`, sem sobrescrever uma cópia que já existe.
+fn keep_bad(from: &Path, path: &Path) -> Option<PathBuf> {
+    let base = path.file_name()?.to_string_lossy().into_owned();
+    let dir = path.parent()?;
+    let _ = std::fs::create_dir_all(dir);
+    let slot = (0..=MAX_BAD).map(|i| dir.join(if i == 0 { format!("{base}.bad") } else { format!("{base}.bad.{i}") })).find(|p| !p.exists());
+    let Some(dst) = slot else {
+        crate::files::warn(&format!("config: já há {} cópias .bad; esta não foi guardada", MAX_BAD + 1));
+        return None;
+    };
+    match std::fs::copy(from, &dst) {
+        Ok(_) => {
+            crate::files::warn(&format!("config: cópia do arquivo em {}", dst.display()));
+            Some(dst)
+        }
+        Err(e) => {
+            crate::files::warn(&format!("config: não copiou para {} ({e})", dst.display()));
+            None
+        }
+    }
+}
+
+/// `valid` com `k = v` ainda vira um `Config`?
+fn accepts(valid: &toml::Table, k: &str, v: &toml::Value) -> bool {
+    let mut t = valid.clone();
+    t.insert(k.to_string(), v.clone());
+    toml::Value::Table(t).try_into::<Config>().is_ok()
+}
+
+/// Monta o `Config` com as chaves de `table` que, uma a uma, ainda servem. Uma
+/// tabela que não serve inteira (como `[lyrics]`) fica com as chaves dela que
+/// servem. O `try_into` consome o valor, daí os `clone()` por tentativa; a
+/// ordem da `Table` é alfabética, o que só muda a ordem do registro.
+fn tolerant(table: toml::Table, dropped: &mut Vec<String>) -> Config {
+    let mut valid = toml::Table::new();
+    for (k, v) in table {
+        if accepts(&valid, &k, &v) {
+            valid.insert(k, v);
+            continue;
+        }
+        let toml::Value::Table(sub) = v else {
+            dropped.push(k);
+            continue;
+        };
+        let mut part = toml::Table::new();
+        for (sk, sv) in sub {
+            let mut trial = part.clone();
+            trial.insert(sk.clone(), sv);
+            let trial = toml::Value::Table(trial);
+            if accepts(&valid, &k, &trial) {
+                if let toml::Value::Table(t) = trial {
+                    part = t;
+                }
+            } else {
+                dropped.push(format!("{k}.{sk}"));
+            }
+        }
+        let part = toml::Value::Table(part);
+        if accepts(&valid, &k, &part) {
+            valid.insert(k, part);
+        } else {
+            dropped.push(k);
+        }
+    }
+    toml::Value::Table(valid).try_into().unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1119,4 +1260,155 @@ version = 5
         run(&mut c, true, true, false);
         assert_eq!(run(&mut c, true, true, false), (false, false));
     }
+
+    // ---------------------------------------------------------- carga tolerante
+
+    /// Pasta temporária só deste teste, com um `config.toml` dentro.
+    fn sandbox(name: &str, text: Option<&str>) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("taskbeat-cfg-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("config.toml");
+        if let Some(t) = text {
+            std::fs::write(&p, t).unwrap();
+        }
+        (dir, p)
+    }
+
+    #[test]
+    fn variante_desconhecida_mantem_as_outras_chaves_e_nao_grava() {
+        let text = "card_style = \"animated\"\nwidth = 77\nshow_peaks = true\nversion = 5\n";
+        let (dir, p) = sandbox("variante", Some(text));
+        let (c, rep) = Config::load_from(&p, None);
+        assert!(rep.tolerant && !rep.saved);
+        assert_eq!(rep.dropped, vec!["card_style".to_string()]);
+        assert_eq!((c.width, c.show_peaks, c.version), (77, true, 5));
+        assert_eq!(c.card_style, Config::default().card_style);
+        // O arquivo fica como estava (sem `save()`), e a cópia vai para o `.bad`.
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
+        assert_eq!(std::fs::read_to_string(dir.join("config.toml.bad")).unwrap(), text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tabela_com_uma_chave_ruim_fica_com_as_outras() {
+        let text = "width = 90\nversion = 5\n[lyrics]\nfree_x = 0.25\nlayout = \"bogus\"\nzoom = 120\n";
+        let (dir, p) = sandbox("tabela", Some(text));
+        let (c, rep) = Config::load_from(&p, None);
+        assert_eq!(rep.dropped, vec!["lyrics.layout".to_string()]);
+        assert_eq!((c.width, c.lyrics.free_x, c.lyrics.zoom), (90, 0.25, 120));
+        assert_eq!(c.lyrics.layout, Config::default().lyrics.layout);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn erro_de_sintaxe_usa_os_padroes_e_guarda_o_bad() {
+        let text = "width = = 3\n[[[\n";
+        let (dir, p) = sandbox("sintaxe", Some(text));
+        let (c, rep) = Config::load_from(&p, None);
+        assert!(rep.tolerant && !rep.saved);
+        assert_eq!(c, Config::default());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), text);
+        assert_eq!(rep.bad.as_deref(), Some(dir.join("config.toml.bad").as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bad_que_ja_existe_nao_e_sobrescrito() {
+        let (dir, p) = sandbox("bad", Some("width = \"x\"\n"));
+        std::fs::write(dir.join("config.toml.bad"), "primeiro").unwrap();
+        let (_, rep) = Config::load_from(&p, None);
+        assert_eq!(std::fs::read_to_string(dir.join("config.toml.bad")).unwrap(), "primeiro");
+        assert_eq!(rep.bad.as_deref(), Some(dir.join("config.toml.bad.1").as_path()));
+        assert_eq!(std::fs::read_to_string(dir.join("config.toml.bad.1")).unwrap(), "width = \"x\"\n");
+        // Com todas as vagas ocupadas, não copia (e não apaga nenhuma).
+        for i in 2..=super::MAX_BAD {
+            std::fs::write(dir.join(format!("config.toml.bad.{i}")), "cheio").unwrap();
+        }
+        let (_, rep) = Config::load_from(&p, None);
+        assert!(rep.bad.is_none());
+        assert_eq!(std::fs::read_to_string(dir.join("config.toml.bad")).unwrap(), "primeiro");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nan_e_infinito_voltam_ao_padrao() {
+        let (dir, p) = sandbox("nan", Some("sensitivity_db = nan\nversion = 5\n[lyrics]\nfree_x = inf\nfree_y = -nan\n"));
+        let (c, rep) = Config::load_from(&p, None);
+        assert!(!rep.tolerant);
+        assert_eq!(c.sensitivity_db, 0.0);
+        assert_eq!((c.lyrics.free_x, c.lyrics.free_y), (0.5, 0.5));
+        let (dir2, p2) = sandbox("inf", Some("sensitivity_db = -inf\nversion = 5\n"));
+        assert_eq!(Config::load_from(&p2, None).0.sensitivity_db, 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// Volta da 2.0 (`version = 6`, com valores que a 1.4.3 não conhece): o
+    /// número é mantido, na carga e na próxima gravação.
+    #[test]
+    fn version_maior_nunca_e_rebaixada() {
+        let (dir, p) = sandbox("v6", Some("version = 6\nwidth = 50\ncard_style = \"animated\"\nchave_da_2_0 = true\n"));
+        let (c, rep) = Config::load_from(&p, None);
+        assert_eq!((c.version, c.width), (6, 50));
+        assert!(!rep.saved);
+        c.save_to(&p);
+        let (c, rep) = Config::load_from(&p, None);
+        assert_eq!(c.version, 6);
+        assert!(!rep.tolerant && !rep.saved);
+        // Uma config v6 válida também não é "migrada" nem regravada.
+        let (dir2, p2) = sandbox("v6ok", Some("version = 6\nwidth = 51\n"));
+        let (c, rep) = Config::load_from(&p2, None);
+        assert_eq!((c.version, c.width, rep.saved), (6, 51, false));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// A migração grava já com os valores na faixa (B5).
+    #[test]
+    fn migracao_grava_valores_sanitizados() {
+        let (dir, p) = sandbox("migra", Some("version = 4\ntitle_width = 9999\nsensitivity_db = 99.0\n"));
+        let (c, rep) = Config::load_from(&p, None);
+        assert!(rep.saved);
+        assert_eq!((c.version, c.title_width, c.sensitivity_db), (5, 400, 24.0));
+        let saved: Config = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!((saved.title_width, saved.sensitivity_db), (400, 24.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tmp_de_outra_execucao_e_ignorado() {
+        let (dir, p) = sandbox("tmp", Some("width = 61\nversion = 5\n"));
+        let velho = dir.join("config.toml.4242.tmp");
+        std::fs::write(&velho, "width = = pela metade").unwrap();
+        let (c, rep) = Config::load_from(&p, None);
+        assert_eq!(c.width, 61);
+        assert!(!rep.tolerant);
+        let mut c = c;
+        c.width = 62;
+        c.save_to(&p);
+        assert_eq!(Config::load_from(&p, None).0.width, 62);
+        assert!(!crate::files::tmp_path(&p).exists());
+        assert_eq!(std::fs::read_to_string(&velho).unwrap(), "width = = pela metade");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn primeira_execucao_grava_e_le_o_nome_antigo() {
+        let (dir, p) = sandbox("primeira", None);
+        let (c, rep) = Config::load_from(&p, None);
+        assert!(rep.saved && p.exists());
+        assert_eq!(c, Config::default());
+        // Nome antigo do app: lido e gravado no novo.
+        let (dir2, p2) = sandbox("legado", None);
+        let antigo = dir2.join("antigo.toml");
+        std::fs::write(&antigo, "width = 33\nversion = 5\n").unwrap();
+        let (c, rep) = Config::load_from(&p2, Some(&antigo));
+        assert!(rep.saved);
+        assert_eq!(c.width, 33);
+        assert_eq!(Config::load_from(&p2, None).0.width, 33);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
 }

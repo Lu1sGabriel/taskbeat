@@ -422,11 +422,10 @@ impl State {
 
     pub fn save(&self) {
         let Some(p) = Self::path() else { return };
-        if let Some(d) = p.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
-        if let Ok(s) = toml::to_string(self) {
-            let _ = std::fs::write(p, s);
+        if let Ok(s) = toml::to_string(self)
+            && let Err(e) = crate::files::write_atomic(&p, s.as_bytes())
+        {
+            log(&format!("não gravou {} ({e})", p.display()));
         }
     }
 }
