@@ -10,6 +10,7 @@
 //! - Região de entrada = a forma visível da ilha: fora dela os cliques vão
 //!   para as janelas de trás.
 
+use super::system::log;
 use super::window::{WinEv, Window, union};
 use crate::render::RectF;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -22,11 +23,39 @@ use wayland_protocols::wp::fractional_scale::v1::client::{wp_fractional_scale_ma
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+/// Quanto esperar pelo `configure` de um tamanho novo. O protocolo não
+/// promete resposta ao `set_size`, e um compositor que só responde quando o
+/// tamanho muda deixaria a ilha congelada (B11).
+const CONFIGURE_WAIT: Duration = Duration::from_millis(500);
+/// Recriações da superfície aceitas em `RECREATE_WINDOW` antes de desistir
+/// (um compositor que fecha toda superfície nova não vira um laço).
+const MAX_RECREATES: usize = 5;
+const RECREATE_WINDOW: Duration = Duration::from_secs(10);
+
+/// Uma tela (`wl_output`) anunciada pelo registro.
+struct Out {
+    /// Nome no registro (o que o `global_remove` traz).
+    name: u32,
+    /// Id do objeto (o que o `enter`/`leave` da superfície traz).
+    id: u32,
+    scale: i32,
+    proxy: wl_output::WlOutput,
+}
+
 /// Estado mexido pelos eventos do compositor.
 #[derive(Default)]
 struct St {
     events: Vec<WinEv>,
+    /// O compositor confirmou o último tamanho pedido.
     configured: bool,
+    /// A superfície atual já recebeu o primeiro `configure`. Antes disso
+    /// anexar um buffer é erro de protocolo, então aqui não há timeout.
+    first_configure: bool,
+    /// Quando o último tamanho novo foi pedido (para o `CONFIGURE_WAIT`).
+    size_sent: Option<Instant>,
+    /// Geração da superfície: eventos de uma superfície já destruída são
+    /// ignorados.
+    surface_gen: u32,
     closed: bool,
     /// Quadro enviado e ainda não mostrado (espera o vblank).
     frame_pending: Option<Instant>,
@@ -36,7 +65,7 @@ struct St {
     /// Escala fracionada (×120) ou inteira preferida.
     scale120: Option<u32>,
     int_scale: i32,
-    outputs: Vec<(u32, i32)>,
+    outputs: Vec<Out>,
     entered: Vec<u32>,
     pointer: Option<wl_pointer::WlPointer>,
     cursor_mgr: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
@@ -60,7 +89,7 @@ impl St {
     fn rescale(&mut self) {
         if self.scale120.is_none() {
             // Sem escala fracionada: a maior das telas em que a superfície está.
-            let s = self.outputs.iter().filter(|(id, _)| self.entered.contains(id)).map(|(_, s)| *s).max().unwrap_or(1);
+            let s = self.outputs.iter().filter(|o| self.entered.contains(&o.id)).map(|o| o.scale).max().unwrap_or(1);
             if s != self.int_scale {
                 self.int_scale = s;
             }
@@ -94,22 +123,80 @@ impl Drop for Pool {
     }
 }
 
+/// Os objetos de uma superfície da ilha (recriados juntos quando o
+/// compositor a fecha).
+struct Surf {
+    surface: wl_surface::WlSurface,
+    layer: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    viewport: Option<wp_viewport::WpViewport>,
+    fractional: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+}
+
+/// Os globais que criam uma superfície.
+struct Makers {
+    compositor: wl_compositor::WlCompositor,
+    layer_shell: zwlr_layer_shell_v1::ZwlrLayerShellV1,
+    fractional: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+    viewporter: Option<wp_viewporter::WpViewporter>,
+}
+
+impl Makers {
+    /// Superfície nova com os `set_*` iniciais, região de entrada vazia e um
+    /// commit **sem buffer**; o `configure` chega depois, pelo laço normal.
+    /// `size`: o tamanho lógico já em uso (`None` na primeira vez).
+    fn surface(&self, above: bool, size: Option<(u32, u32)>, int_scale: i32, generation: u32, qh: &QueueHandle<St>) -> Surf {
+        let surface = self.compositor.create_surface(qh, generation);
+        let (viewport, fractional) = match (&self.fractional, &self.viewporter) {
+            (Some(f), Some(v)) => (Some(v.get_viewport(&surface, qh, ())), Some(f.get_fractional_scale(&surface, qh, ()))),
+            _ => (None, None),
+        };
+        let layer = self.layer_shell.get_layer_surface(&surface, None, layer_of(above), "taskbeat".into(), qh, generation);
+        layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top);
+        layer.set_exclusive_zone(0);
+        layer.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
+        let (lw, lh) = size.unwrap_or((1, 1));
+        layer.set_size(lw, lh);
+        if size.is_some() {
+            match &viewport {
+                Some(v) => {
+                    surface.set_buffer_scale(1);
+                    v.set_destination(lw as i32, lh as i32);
+                }
+                None => surface.set_buffer_scale(int_scale.max(1)),
+            }
+        }
+        // Sem entrada até a ilha dizer onde fica.
+        let empty = self.compositor.create_region(qh, ());
+        surface.set_input_region(Some(&empty));
+        empty.destroy();
+        surface.commit();
+        Surf { surface, layer, viewport, fractional }
+    }
+}
+
 pub struct Wl {
     conn: Connection,
     queue: EventQueue<St>,
     qh: QueueHandle<St>,
     st: St,
+    makers: Makers,
     compositor: wl_compositor::WlCompositor,
     shm: wl_shm::WlShm,
     surface: wl_surface::WlSurface,
     layer: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
     layer_version: u32,
     viewport: Option<wp_viewport::WpViewport>,
-    _fractional: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    fractional: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
     guard: Option<wayland_client::backend::ReadEventsGuard>,
     pool: Option<Pool>,
     size: (usize, usize),
     logical: (u32, u32),
+    /// Acima de janelas em tela cheia (para recriar na mesma camada).
+    above: bool,
+    /// A superfície foi fechada e espera uma tela para ser recriada.
+    lost: bool,
+    /// Quando foram as últimas recriações (limite de `MAX_RECREATES`).
+    recreated: Vec<Instant>,
 }
 
 impl Wl {
@@ -124,11 +211,12 @@ impl Wl {
         let compositor: wl_compositor::WlCompositor = globals.bind(&qh, 1..=6, ()).map_err(|e| e.to_string())?;
         let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).map_err(|e| e.to_string())?;
         let mut st = St { int_scale: 1, scale: 1.0, ..Default::default() };
-        // Telas (escala inteira, quando não há escala fracionada).
+        // Telas (escala inteira, quando não há escala fracionada). As que
+        // entram e saem depois chegam pelo `Dispatch` do registro.
         for g in globals.contents().clone_list() {
             if g.interface == wl_output::WlOutput::interface().name {
-                let o: wl_output::WlOutput = globals.registry().bind(g.name, g.version.min(4), &qh, ());
-                st.outputs.push((o.id().protocol_id(), 1));
+                let proxy: wl_output::WlOutput = globals.registry().bind(g.name, g.version.min(4), &qh, g.name);
+                st.outputs.push(Out { name: g.name, id: proxy.id().protocol_id(), scale: 1, proxy });
             }
         }
         if let Ok(seat) = globals.bind::<wl_seat::WlSeat, _, _>(&qh, 1..=8, ()) {
@@ -138,51 +226,76 @@ impl Wl {
         let fractional_mgr: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
         let viewporter: Option<wp_viewporter::WpViewporter> = globals.bind(&qh, 1..=1, ()).ok();
 
-        let surface = compositor.create_surface(&qh, ());
-        let (viewport, fractional) = match (&fractional_mgr, &viewporter) {
-            (Some(f), Some(v)) => (Some(v.get_viewport(&surface, &qh, ())), Some(f.get_fractional_scale(&surface, &qh, ()))),
-            _ => (None, None),
-        };
         let layer_version = layer_shell.version();
-        let layer = layer_shell.get_layer_surface(&surface, None, layer_of(above_fullscreen), "taskbeat".into(), &qh, ());
-        layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top);
-        layer.set_exclusive_zone(0);
-        layer.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
-        layer.set_size(1, 1);
-        // Sem entrada até a ilha dizer onde fica.
-        let empty = compositor.create_region(&qh, ());
-        surface.set_input_region(Some(&empty));
-        empty.destroy();
-        surface.commit();
+        let makers = Makers { compositor: compositor.clone(), layer_shell, fractional: fractional_mgr, viewporter };
+        let Surf { surface, layer, viewport, fractional } = makers.surface(above_fullscreen, None, 1, st.surface_gen, &qh);
 
         let mut w = Self {
             conn,
             queue,
             qh,
             st,
+            makers,
             compositor,
             shm,
             surface,
             layer,
             layer_version,
             viewport,
-            _fractional: fractional,
+            fractional,
             guard: None,
             pool: None,
             size: (0, 0),
             logical: (1, 1),
+            above: above_fullscreen,
+            lost: false,
+            recreated: Vec::new(),
         };
-        // Primeira configuração e escala.
+        // Primeira configuração e escala (só aqui a espera é bloqueante).
         let t = Instant::now();
-        while !w.st.configured && t.elapsed() < Duration::from_secs(3) {
+        while !w.st.first_configure && t.elapsed() < Duration::from_secs(3) {
             w.queue.roundtrip(&mut w.st).map_err(|e| e.to_string())?;
         }
-        if !w.st.configured {
+        if !w.st.first_configure {
             return Err("o compositor não configurou a superfície".into());
         }
         w.st.scale = w.st.effective_scale();
         w.st.events.clear();
         Ok(w)
+    }
+
+    /// O compositor fechou a superfície (tela removida, laptop desencaixado):
+    /// em vez de fechar o app (B10), cria outra. Um `wl_surface` **novo**,
+    /// porque o antigo já teve buffer e o `get_layer_surface` daria
+    /// `already_constructed`; viewport e escala fracionada novos junto.
+    fn recreate(&mut self) {
+        // Ordem de destruição: layer, viewport, escala fracionada, superfície.
+        self.layer.destroy();
+        if let Some(v) = self.viewport.take() {
+            v.destroy();
+        }
+        if let Some(f) = self.fractional.take() {
+            f.destroy();
+        }
+        self.surface.destroy();
+        let st = &mut self.st;
+        st.surface_gen = st.surface_gen.wrapping_add(1);
+        st.configured = false;
+        st.first_configure = false;
+        st.size_sent = None;
+        st.frame_pending = None;
+        st.entered.clear();
+        // Pool novo: um `release` atrasado do pool antigo não marca nada.
+        st.pool_gen = st.pool_gen.wrapping_add(1);
+        st.busy = [false; 2];
+        self.pool = None;
+        let size = (self.size != (0, 0)).then_some(self.logical);
+        let s = self.makers.surface(self.above, size, st.int_scale, st.surface_gen, &self.qh);
+        self.surface = s.surface;
+        self.layer = s.layer;
+        self.viewport = s.viewport;
+        self.fractional = s.fractional;
+        let _ = self.conn.flush();
     }
 
     fn ensure_pool(&mut self, w: usize, h: usize) -> bool {
@@ -253,7 +366,21 @@ impl Window for Wl {
     fn take_events(&mut self) -> Vec<WinEv> {
         if self.st.closed {
             self.st.closed = false;
-            self.st.events.push(WinEv::Closed);
+            self.lost = true;
+            log::info("janela: superfície fechada pelo compositor; recriando quando houver uma tela");
+        }
+        // Só com alguma tela: sem nenhuma, espera o `global` de uma nova em vez
+        // de entrar num laço de criar e fechar.
+        if self.lost && !self.st.outputs.is_empty() {
+            self.lost = false;
+            self.recreated.retain(|t| t.elapsed() < RECREATE_WINDOW);
+            if self.recreated.len() >= MAX_RECREATES {
+                log::warn("janela: o compositor fecha toda superfície nova; desistindo");
+                self.st.events.push(WinEv::Closed);
+            } else {
+                self.recreated.push(Instant::now());
+                self.recreate();
+            }
         }
         std::mem::take(&mut self.st.events)
     }
@@ -275,6 +402,7 @@ impl Window for Wl {
         if (w, h) == self.size && logical == self.logical {
             return;
         }
+        let resized = logical != self.logical;
         self.size = (w, h);
         self.logical = logical;
         self.layer.set_size(logical.0, logical.1);
@@ -285,14 +413,20 @@ impl Window for Wl {
             }
             None => self.surface.set_buffer_scale(self.st.int_scale.max(1)),
         }
-        // Espera o compositor confirmar o tamanho novo.
-        self.st.configured = false;
+        // Espera o compositor confirmar o tamanho novo, só se o tamanho
+        // **lógico** mudou (uma troca de escala não muda o que foi pedido), e
+        // no máximo `CONFIGURE_WAIT`.
+        if resized {
+            self.st.configured = false;
+            self.st.size_sent = Some(Instant::now());
+        }
         self.surface.commit();
         let _ = self.conn.flush();
     }
 
     fn ready(&self) -> bool {
-        self.st.configured && self.st.frame_pending.is_none_or(|t| t.elapsed() > Duration::from_millis(500))
+        let confirmed = self.st.configured || self.st.size_sent.is_some_and(|t| t.elapsed() > CONFIGURE_WAIT);
+        self.st.first_configure && confirmed && self.st.frame_pending.is_none_or(|t| t.elapsed() > Duration::from_millis(500))
     }
 
     fn present(&mut self, frame: &[u32], w: usize, h: usize, region: (usize, usize, usize, usize)) -> bool {
@@ -335,6 +469,7 @@ impl Window for Wl {
     }
 
     fn set_above_fullscreen(&mut self, on: bool) {
+        self.above = on;
         if self.layer_version >= 2 {
             self.layer.set_layer(layer_of(on));
             self.surface.commit();
@@ -344,8 +479,30 @@ impl Window for Wl {
 
 // ---------------------------------------------------------------- eventos
 
+/// Telas que entram e saem depois do `open` (monitor ligado, desligado,
+/// laptop encaixado).
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for St {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(st: &mut Self, registry: &wl_registry::WlRegistry, ev: wl_registry::Event, _: &GlobalListContents, _: &Connection, qh: &QueueHandle<Self>) {
+        match ev {
+            wl_registry::Event::Global { name, interface, version } if interface == wl_output::WlOutput::interface().name => {
+                if !st.outputs.iter().any(|o| o.name == name) {
+                    let proxy: wl_output::WlOutput = registry.bind(name, version.min(4), qh, name);
+                    st.outputs.push(Out { name, id: proxy.id().protocol_id(), scale: 1, proxy });
+                }
+            }
+            wl_registry::Event::GlobalRemove { name } => {
+                if let Some(i) = st.outputs.iter().position(|o| o.name == name) {
+                    let o = st.outputs.remove(i);
+                    if o.proxy.version() >= 3 {
+                        o.proxy.release();
+                    }
+                    st.entered.retain(|&id| id != o.id);
+                    st.rescale();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 delegate_noop!(St: wl_compositor::WlCompositor);
@@ -359,8 +516,11 @@ delegate_noop!(St: wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
 delegate_noop!(St: wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
 delegate_noop!(St: wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 
-impl Dispatch<wl_surface::WlSurface, ()> for St {
-    fn event(st: &mut Self, _: &wl_surface::WlSurface, ev: wl_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+impl Dispatch<wl_surface::WlSurface, u32> for St {
+    fn event(st: &mut Self, _: &wl_surface::WlSurface, ev: wl_surface::Event, generation: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        if *generation != st.surface_gen {
+            return;
+        }
         match ev {
             wl_surface::Event::Enter { output } => {
                 st.entered.push(output.id().protocol_id());
@@ -384,14 +544,12 @@ impl Dispatch<wl_surface::WlSurface, ()> for St {
     }
 }
 
-impl Dispatch<wl_output::WlOutput, ()> for St {
-    fn event(st: &mut Self, o: &wl_output::WlOutput, ev: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_output::Event::Scale { factor } = ev {
-            let id = o.id().protocol_id();
-            match st.outputs.iter_mut().find(|(i, _)| *i == id) {
-                Some(e) => e.1 = factor,
-                None => st.outputs.push((id, factor)),
-            }
+impl Dispatch<wl_output::WlOutput, u32> for St {
+    fn event(st: &mut Self, _: &wl_output::WlOutput, ev: wl_output::Event, name: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        if let wl_output::Event::Scale { factor } = ev
+            && let Some(o) = st.outputs.iter_mut().find(|o| o.name == *name)
+        {
+            o.scale = factor;
             st.rescale();
         }
     }
@@ -416,15 +574,25 @@ impl Dispatch<wl_callback::WlCallback, ()> for St {
     }
 }
 
-impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for St {
-    fn event(st: &mut Self, l: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ev: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for St {
+    fn event(st: &mut Self, l: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ev: zwlr_layer_surface_v1::Event, generation: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        // Evento atrasado de uma superfície que já foi trocada.
+        if *generation != st.surface_gen {
+            return;
+        }
         match ev {
             zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
                 l.ack_configure(serial);
                 st.configured = true;
+                st.first_configure = true;
+                st.size_sent = None;
                 st.events.push(WinEv::Expose);
             }
-            zwlr_layer_surface_v1::Event::Closed => st.closed = true,
+            zwlr_layer_surface_v1::Event::Closed => {
+                st.closed = true;
+                // Nada mais é anexado à superfície fechada.
+                st.first_configure = false;
+            }
             _ => {}
         }
     }
