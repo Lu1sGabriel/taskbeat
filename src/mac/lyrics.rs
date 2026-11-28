@@ -233,8 +233,7 @@ impl Overlay {
         let area = unsafe { NSTrackingArea::initWithRect_options_owner_userInfo(NSTrackingArea::alloc(), rect, opts, Some(&view), None) };
         view.addTrackingArea(&area);
         window.setContentView(Some(&view));
-        let timer = unsafe { NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(TICK, &target(), sel!(lyricsTick:), None, true) };
-        timer.setTolerance(0.02);
+        let timer = super::compat::common_timer(TICK, &target(), sel!(lyricsTick:), 0.02);
         let cfg = shared().config();
         let now = Instant::now();
         let mut o = Overlay {

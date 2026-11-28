@@ -27,7 +27,7 @@ use crate::shared::Shared;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSMenu, NSMenuDelegate, NSRunningApplication};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSMenu, NSMenuDelegate, NSRunningApplication, NSWindowDelegate};
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
 use std::cell::OnceCell;
 use std::sync::Arc;
@@ -176,6 +176,14 @@ define_class!(
         }
     }
 
+    /// Só o aviso de versão nova usa o `Target` como delegate de janela.
+    unsafe impl NSWindowDelegate for Target {
+        #[unsafe(method(windowWillClose:))]
+        fn window_will_close(&self, n: &NSNotification) {
+            update::window_closed(n);
+        }
+    }
+
     impl Target {
         /// Quadro do vblank (CADisplayLink da ilha).
         #[unsafe(method(frame:))]
@@ -269,6 +277,22 @@ define_class!(
         #[unsafe(method(tick:))]
         fn tick(&self, _timer: &AnyObject) {
             notch::tick();
+        }
+
+        /// Botões do aviso de versão nova (`update.rs`).
+        #[unsafe(method(updateOpen:))]
+        fn update_open(&self, _sender: Option<&AnyObject>) {
+            update::choose(update::Choice::Open);
+        }
+
+        #[unsafe(method(updateLater:))]
+        fn update_later(&self, _sender: Option<&AnyObject>) {
+            update::choose(update::Choice::Later);
+        }
+
+        #[unsafe(method(updateSkip:))]
+        fn update_skip(&self, _sender: Option<&AnyObject>) {
+            update::choose(update::Choice::Skip);
         }
     }
 );

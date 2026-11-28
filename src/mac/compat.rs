@@ -15,6 +15,20 @@ use objc2_foundation::{NSRunLoop, NSRunLoopCommonModes, NSTimer};
 use objc2_quartz_core::{CADisplayLink, CAFrameRateRange};
 use std::ffi::{CStr, c_void};
 
+/// Temporizador repetido em `target`/`selector` no run loop principal em
+/// **common modes**: continua com o menu da barra aberto, durante um arrasto ou
+/// com outra janela em laço modal (o `scheduledTimer…` só roda no modo
+/// padrão). Os `with` da ilha, da letra e do aviso usam `try_borrow_mut`, então
+/// um tick que chegue no meio de outro é pulado, não reentra.
+pub fn common_timer(interval: f64, target: &AnyObject, selector: Sel, tolerance: f64) -> Retained<NSTimer> {
+    let t = unsafe { NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(interval, target, selector, None, true) };
+    if tolerance > 0.0 {
+        t.setTolerance(tolerance);
+    }
+    unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&t, NSRunLoopCommonModes) };
+    t
+}
+
 pub fn force_legacy() -> bool {
     std::env::var_os("TASKBEAT_FORCE_LEGACY").is_some()
 }

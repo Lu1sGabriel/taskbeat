@@ -110,8 +110,7 @@ pub fn start(mtm: MainThreadMarker) {
     root.addSubview(&holder);
     window.setContentView(Some(&root));
 
-    let timer = unsafe { NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(POLL, &target(), sel!(osdTick:), None, true) };
-    timer.setTolerance(0.04);
+    let timer = super::compat::common_timer(POLL, &target(), sel!(osdTick:), 0.04);
 
     let s = NSScreen::mainScreen(mtm).map(|sc| sc.backingScaleFactor() as f32).unwrap_or(2.0);
     let mut tr = TextRenderer::new();

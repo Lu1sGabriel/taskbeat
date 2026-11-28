@@ -129,6 +129,10 @@ use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetP
 #[cfg(windows)]
 use windows::core::w;
 
+/// Quanto a versão recém-instalada espera a anterior fechar.
+#[cfg(windows)]
+const AFTER_UPDATE_WAIT_MS: u32 = 60_000;
+
 #[cfg(windows)]
 fn main() {
     // Aberto pelo navegador (extensão do Taskbeat): só repassa mensagens ao
@@ -163,10 +167,14 @@ fn main() {
         let after_update = std::env::args().any(|a| a.starts_with("--after-update="));
         if existed && after_update {
             // Versão nova recém-instalada: a antiga está fechando; espera ela
-            // soltar a instância (até 15 s) em vez de chamar por ela.
+            // soltar a instância em vez de chamar por ela. 60 s (eram 15, e
+            // uma antiga lenta deixava o app fechado; B13). A antiga segura o
+            // mutex até morrer, e um mutex abandonado (até num abort) também
+            // libera a espera.
             let Ok(m) = &mutex else { return };
-            let r = WaitForSingleObject(*m, 15_000);
+            let r = WaitForSingleObject(*m, AFTER_UPDATE_WAIT_MS);
             if r != windows::Win32::Foundation::WAIT_OBJECT_0 && r != windows::Win32::Foundation::WAIT_ABANDONED {
+                update::log(&format!("a versão anterior não fechou em {} s; esta sai sem abrir", AFTER_UPDATE_WAIT_MS / 1000));
                 return;
             }
         } else if existed {

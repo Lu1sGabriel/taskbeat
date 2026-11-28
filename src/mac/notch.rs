@@ -264,7 +264,9 @@ pub fn start(mtm: MainThreadMarker) {
     let monitor = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(NSEventMask::MouseMoved | NSEventMask::LeftMouseDragged, &block);
 
     // Temporizador lento (2 Hz): volume com o card aberto, sessão, etc.
-    let timer = unsafe { NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(0.5, &target(), sel!(tick:), None, true) };
+    // Common modes (B12): segue com o menu aberto. A tolerância e o invalidate
+    // quando não precisa ficam para o PR-24 (D4), que mexe nestas linhas.
+    let timer = super::compat::common_timer(0.5, &target(), sel!(tick:), 0.0);
 
     let mut tr = TextRenderer::new();
     tr.set_scale(s);
