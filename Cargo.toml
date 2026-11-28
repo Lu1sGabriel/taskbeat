@@ -36,6 +36,11 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com"
     "Win32_Networking_WinHttp",
     "Win32_Security_Cryptography"] }
 
+# Player de teste do soak no Windows (`examples/ci_player.rs`). Só nos testes e
+# nos exemplos: o binário de `cargo build --release` não muda.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = ["Media_Core", "Media_Playback"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 objc2-foundation = "0.3.2"

@@ -1,0 +1,121 @@
+name: Soak
+
+# Teste de longa duração, disparado à mão: o app de verdade (binário de
+# release) aberto por 5 h 30, tocando o player de teste do CI, com uma amostra
+# de consumo a cada 5 min. Falha se o app fechar sozinho ou se a memória, os
+# handles/descritores ou as threads crescerem de forma contínua.
+#
+# - 5 h 30 porque um job hospedado do GitHub tem limite de 6 h, e quebrar em
+#   vários jobs zeraria o processo a cada um. As 8 h contínuas rodam numa
+#   máquina sua: tools/soak-local.ps1 (Windows) e tools/soak-local.sh.
+# - O `workflow_dispatch` só aparece com este arquivo na `main`. Ele compila o
+#   ref pedido em `alvo` (padrão: a 1.4.2 publicada, a base de comparação), e
+#   os scripts e players de teste vêm do ref deste workflow.
+# - Os testes ignoram o `panic = "abort"`: por isso o soak usa o binário de
+#   `cargo build --release`, e não `cargo test`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      alvo:
+        description: "Ref (tag, branch ou commit) a compilar e testar"
+        required: true
+        default: v1.4.2
+      minutos:
+        description: "Minutos de soak (o job para antes do limite de 6 h)"
+        required: true
+        default: "330"
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+          - os: macos-15
+          - os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 350
+    env:
+      # Os inputs entram por variável, nunca interpolados no script.
+      MINUTOS: ${{ inputs.minutos }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Prazo: para de medir 8 min antes do timeout do job, para a análise e o
+      # envio do log sempre caberem.
+      - name: Prazo
+        run: echo "SOAK_DEADLINE=$(( $(date +%s) + 342 * 60 ))" >> "$GITHUB_ENV"
+
+      - name: Scripts e players de teste (ref deste workflow)
+        uses: actions/checkout@v4
+        with:
+          path: ferramentas
+
+      - name: Código a testar (${{ inputs.alvo }})
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.alvo }}
+          path: alvo
+
+      - name: Dependências (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q pkg-config libdbus-1-dev libpulse-dev libfreetype-dev libfontconfig1-dev libharfbuzz-dev fonts-noto-core \
+            imagemagick xvfb dbus-x11 pulseaudio pulseaudio-utils python3-dbus python3-gi
+
+      - name: Rust
+        working-directory: alvo
+        run: |
+          # Um alvo com rust-toolchain.toml usa o dele; os antigos, o estável.
+          if [ ! -f rust-toolchain.toml ]; then rustup update stable && rustup default stable; fi
+          if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+          rustc -V
+
+      - name: Binário de release
+        working-directory: alvo
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            # O .app traz o adaptador do Tocando Agora (sem ele o macOS 15 não
+            # mostra o que toca); o build-macos.sh usa `cargo build --release`.
+            ./build-macos.sh
+          else
+            cargo build --release --locked
+          fi
+
+      - name: Player de teste (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ferramentas
+        run: cargo build --release --locked --example ci_player
+
+      - name: Soak (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ferramentas/tools/soak-local.ps1 -Exe alvo/target/release/taskbeat.exe -Minutes $env:MINUTOS -Out soak-out -Deadline $env:SOAK_DEADLINE
+
+      - name: Soak (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bash ferramentas/tools/soak-local.sh --bin alvo/dist/Taskbeat.app/Contents/MacOS/Taskbeat \
+            --minutos "$MINUTOS" --saida soak-out --prazo "$SOAK_DEADLINE"
+
+      - name: Soak (Linux, X11 sem tela)
+        if: runner.os == 'Linux'
+        run: |
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          xvfb-run -a -s "-screen 0 1600x900x24" dbus-run-session -- \
+            bash ferramentas/tools/soak-local.sh --bin alvo/target/release/taskbeat \
+            --minutos "$MINUTOS" --saida soak-out --prazo "$SOAK_DEADLINE"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soak-${{ runner.os }}
+          path: soak-out/
