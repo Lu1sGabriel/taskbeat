@@ -56,7 +56,8 @@ $header = @(
     "| cenário | CPU (% de 1 núcleo) | working set médio / máx. (MB) | privada média (MB) | handles máx. | GDI máx. | USER máx. | threads máx. |",
     "|---|---|---|---|---|---|---|---|"
 )
-Set-Content -Path $table -Value $header
+# Acrescenta: medir à mão (-AttachPid) depois dos automáticos não apaga nada.
+if (-not (Test-Path $table)) { Set-Content -Path $table -Value $header }
 
 if ($AttachPid -gt 0) {
     $line = Measure-Pid $AttachPid $Label
@@ -82,8 +83,15 @@ foreach ($sc in $Scenarios) {
                 Push-Location $root
                 try { cargo build --release --locked --example ci_player | Out-Host } finally { Pop-Location }
             }
-            $player = Start-Process -FilePath $playerExe -PassThru -WindowStyle Hidden
+            $player = Start-Process -FilePath $playerExe -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $Out "player-$sc.out") -RedirectStandardError (Join-Path $Out "player-$sc.err")
             Start-Sleep -Seconds 3
+            if ($player.HasExited) {
+                # Sem player no SMTC o cenário mediria o app parado com o rótulo errado.
+                $line = "| $sc | (pulado: o player de teste saiu com o código $($player.ExitCode); ver player-$sc.err) | | | | | | |"
+                Add-Content -Path $table -Value $line
+                Write-Host $line
+                continue
+            }
         }
         $psi = [System.Diagnostics.ProcessStartInfo]::new($exePath)
         $psi.UseShellExecute = $false
@@ -98,7 +106,12 @@ foreach ($sc in $Scenarios) {
         Write-Host $line
     } finally {
         if ($app -and -not $app.HasExited) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue }
-        if ($player -and -not $player.HasExited) { Stop-Process -Id $player.Id -Force -ErrorAction SilentlyContinue }
+        if ($player) {
+            if (-not $player.HasExited) { Stop-Process -Id $player.Id -Force -ErrorAction SilentlyContinue }
+            # Morto à força, o player não apaga o WAV dele.
+            Start-Sleep -Milliseconds 500
+            Remove-Item (Join-Path ([IO.Path]::GetTempPath()) "taskbeat-ci-$($player.Id).wav") -ErrorAction SilentlyContinue
+        }
         Start-Sleep -Seconds 1
         $log = Join-Path $appData 'Taskbeat\stats.log'
         if (Test-Path $log) { Copy-Item $log (Join-Path $Out "stats-$sc.log") }

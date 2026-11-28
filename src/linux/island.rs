@@ -580,6 +580,9 @@ impl Island {
             return;
         }
 
+        // Só o desenho no canvas, como no Mac e no Windows (o espectro e as
+        // assinaturas acima ficam de fora).
+        let t_draw = crate::stats::enabled().then(Instant::now);
         {
             let mut cv = Canvas::new(sw, sh_, &mut self.buf);
             cv.set_clip(RectF::new(rx0 as f32, ry0 as f32, (rx1 - rx0) as f32, (ry1 - ry0) as f32));
@@ -627,11 +630,10 @@ impl Island {
             p.1 += 1;
             p.3 += now.elapsed();
         }
-        let draw = crate::stats::enabled().then(|| now.elapsed());
-        let t_present = draw.map(|_| Instant::now());
+        let t_present = t_draw.map(|_| Instant::now());
         let shown = self.win.present(&self.buf, sw, sh_, (rx0, ry0, rx1, ry1));
-        if let (Some(d), Some(t)) = (draw, t_present) {
-            crate::stats::frame("ilha", d, t.elapsed());
+        if let (Some(a), Some(b)) = (t_draw, t_present) {
+            crate::stats::frame("ilha", b - a, b.elapsed());
         }
         if shown {
             self.last_sig = Some(sig);

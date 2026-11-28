@@ -42,6 +42,12 @@ trap cleanup EXIT
 
 if [ -z "$PID" ]; then
     [ -n "$BIN" ] || { echo "use --pid ou --bin"; exit 2; }
+    # A instância é única (nome no D-Bus no Linux, bundle id no Mac): com outro
+    # Taskbeat aberto, a cópia nova chamaria a dele e sairia.
+    if pgrep -xi taskbeat >/dev/null; then
+        echo "já há um Taskbeat aberto: feche-o ou use --pid"
+        exit 2
+    fi
     SEED="version = 5
 login_default_applied = true
 update_check = false
@@ -57,8 +63,10 @@ show_visualizer = true"
     fi
     PID=$!
     OWN=1
+    sleep 3
+    kill -0 "$PID" 2>/dev/null || { echo "$NOME: o app saiu logo ao abrir (ver $SAIDA/$NOME.out)"; exit 1; }
     # O primeiro minuto (caches enchendo) fica de fora.
-    sleep 60
+    sleep 57
 fi
 
 sample() { # → "t cpu_s rss_kb threads fds"
