@@ -296,6 +296,7 @@ impl Wl {
         self.viewport = s.viewport;
         self.fractional = s.fractional;
         let _ = self.conn.flush();
+        log::info("janela: superfície recriada; esperando o configure");
     }
 
     fn ensure_pool(&mut self, w: usize, h: usize) -> bool {
@@ -468,6 +469,10 @@ impl Window for Wl {
         let _ = self.conn.flush();
     }
 
+    fn suspended(&self) -> bool {
+        self.lost || !self.st.first_configure
+    }
+
     fn set_above_fullscreen(&mut self, on: bool) {
         self.above = on;
         if self.layer_version >= 2 {
@@ -583,6 +588,9 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for St {
         match ev {
             zwlr_layer_surface_v1::Event::Configure { serial, .. } => {
                 l.ack_configure(serial);
+                if !st.first_configure && st.surface_gen > 0 {
+                    log::info("janela: superfície nova configurada");
+                }
                 st.configured = true;
                 st.first_configure = true;
                 st.size_sent = None;

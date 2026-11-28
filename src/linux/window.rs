@@ -52,6 +52,12 @@ pub trait Window {
     fn set_input(&mut self, r: Option<RectF>);
     /// Ficar acima de janelas em tela cheia.
     fn set_above_fullscreen(&mut self, _on: bool) {}
+    /// Sem superfície para mostrar (fechada, esperando uma tela, ou recém-criada
+    /// esperando o primeiro `configure`). Não adianta pedir quadros: o próximo
+    /// evento chega pelo descritor da janela.
+    fn suspended(&self) -> bool {
+        false
+    }
 }
 
 pub fn open(above_fullscreen: bool) -> Option<Box<dyn Window>> {

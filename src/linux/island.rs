@@ -433,6 +433,12 @@ impl Island {
 
     /// Quanto o `poll` pode esperar (ms; -1 = até algo acontecer).
     fn timeout(&self) -> i32 {
+        // Sem superfície (monitor removido): nada de quadros nem do `dirty` de
+        // 100 ms; o `global` de uma tela nova, ou o `configure`, acorda o `poll`.
+        // Antes isso girava o laço a 100% (o `due` do quadro já tinha passado).
+        if self.win.suspended() {
+            return -1;
+        }
         let mut t: i64 = -1;
         if self.rate > 0 {
             let due = self.last_frame + Duration::from_secs_f32(1.0 / self.rate as f32);
